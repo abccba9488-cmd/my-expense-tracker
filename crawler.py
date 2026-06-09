@@ -372,7 +372,10 @@ def _crawl_twse_prices(date_str, trade_date):
         f'?response=json&date={date_str}&type=ALL'
     )
     resp = _get(url, headers={'Referer': 'https://www.twse.com.tw/'}, timeout=60)
-    data = resp.json()
+    try:
+        data = resp.json()
+    except Exception:
+        return []
     if data.get('stat') != 'OK':
         return []
     # 2025+ new format uses 'tables'; legacy uses numbered fields/data
@@ -390,7 +393,10 @@ def _crawl_tpex_prices(date_str, trade_date):
         f'?l=zh-tw&d={roc}&se=AL&_={int(time.time()*1000)}'
     )
     resp = _get(url, headers={'Referer': 'https://www.tpex.org.tw/'}, timeout=60)
-    data = resp.json()
+    try:
+        data = resp.json()
+    except Exception:
+        return []
 
     # 2025+ new format: {"tables":[{"fields":[...],"data":[...]}]}
     # Legacy format:    {"aaData":[...]}
