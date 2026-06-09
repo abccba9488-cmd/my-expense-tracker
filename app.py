@@ -351,7 +351,6 @@ def api_revenue(code):
             db.query(MonthlyRevenue)
             .filter_by(stock_code=code)
             .order_by(desc(MonthlyRevenue.year), desc(MonthlyRevenue.month))
-            .limit(36)
             .all()
         )
         return jsonify([{
@@ -373,7 +372,6 @@ def api_financials(code):
             db.query(QuarterlyFinancial)
             .filter_by(stock_code=code)
             .order_by(desc(QuarterlyFinancial.year), desc(QuarterlyFinancial.quarter))
-            .limit(12)
             .all()
         )
         return jsonify([{

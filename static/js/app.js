@@ -10,6 +10,7 @@ const state = {
   watchlists:      [],
   priceChart:      null,
   revenueChart:    null,
+  epsChart:        null,
   priceDt:         null,
   revenueDt:       null,
   quarterlyDt:     null,
@@ -241,6 +242,7 @@ async function loadStockDetail(code) {
   renderPriceTable(prices);
   renderRevenueChart(revenues);
   renderRevenueTable(revenues);
+  renderEpsChart(financials);
   renderQuarterlyTable(financials);
 }
 
@@ -326,9 +328,11 @@ function renderRevenueChart(revenues) {
   if (!revenues.length) return;
 
   const sorted = [...revenues].reverse();
+  const n      = sorted.length;
   const labels  = sorted.map(r => `${r.year}/${String(r.month).padStart(2, '0')}`);
   const values  = sorted.map(r => r.revenue);
   const yoys    = sorted.map(r => r.revenue_yoy);
+  const maxTicks = n > 60 ? 12 : n > 24 ? 18 : n;
 
   state.revenueChart = new Chart(canvas, {
     data: {
@@ -349,7 +353,7 @@ function renderRevenueChart(revenues) {
           data:   yoys,
           borderColor:  getCssVar('--pos'),
           borderWidth:  2,
-          pointRadius:  3,
+          pointRadius:  n > 60 ? 0 : 3,
           tension:      0.3,
           yAxisID: 'y2',
         },
@@ -360,7 +364,7 @@ function renderRevenueChart(revenues) {
       scales: {
         y:  { position: 'left',  grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
         y2: { position: 'right', grid: { drawOnChartArea: false },        ticks: { color: getCssVar('--pos'), callback: v => v + '%' } },
-        x:  { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), maxRotation: 45 } },
+        x:  { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), maxRotation: 45, maxTicksLimit: maxTicks } },
       },
     },
   });
@@ -377,8 +381,44 @@ function renderRevenueTable(revenues) {
       ? `<span class="${pctClass(r.revenue_yoy)}">${fmt.pct(r.revenue_yoy)}</span>` : '—',
   ]);
   state.revenueDt = $('#revenue-table').DataTable({
-    data: rows, pageLength: 12, order: [],
+    data: rows, pageLength: 24, order: [],
     language: dtLang(), destroy: true,
+  });
+}
+
+/* ── EPS chart ── */
+function renderEpsChart(financials) {
+  const canvas = document.getElementById('eps-chart');
+  if (state.epsChart) { state.epsChart.destroy(); state.epsChart = null; }
+  if (!financials.length) return;
+
+  const sorted = [...financials].reverse();
+  const n      = sorted.length;
+  const labels = sorted.map(f => `${f.year}/Q${f.quarter}`);
+  const eps    = sorted.map(f => f.eps);
+  const bgColors  = eps.map(v => v != null && v >= 0 ? getCssVar('--pos') + 'bb' : getCssVar('--neg') + 'bb');
+  const bdrColors = eps.map(v => v != null && v >= 0 ? getCssVar('--pos') : getCssVar('--neg'));
+  const maxTicks  = n > 30 ? 12 : n > 16 ? 16 : n;
+
+  state.epsChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'EPS (元)',
+        data:            eps,
+        backgroundColor: bgColors,
+        borderColor:     bdrColors,
+        borderWidth:     1,
+      }],
+    },
+    options: {
+      ...chartOptions('EPS (元)'),
+      scales: {
+        x: { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), maxRotation: 45, maxTicksLimit: maxTicks } },
+        y: { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') }, title: { display: true, text: 'EPS (元)', color: getCssVar('--text2') } },
+      },
+    },
   });
 }
 
@@ -394,7 +434,7 @@ function renderQuarterlyTable(financials) {
       ? `<span class="${pctClass(f.eps)}">${fmt.eps(f.eps)}</span>` : '—',
   ]);
   state.quarterlyDt = $('#quarterly-table').DataTable({
-    data: rows, pageLength: 8, order: [],
+    data: rows, pageLength: 20, order: [],
     language: dtLang(), destroy: true,
   });
 }
