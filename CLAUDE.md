@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-台灣上市櫃股票分析網站，本機執行，單一 Python Flask 後端 + 單頁 HTML 前端。無建置工具，無測試框架。
+**飆股網** — 台灣上市櫃股票分析網站，本機執行，單一 Python Flask 後端 + 單頁 HTML 前端。無建置工具，無測試框架。
 
 ## 啟動與停止
 
@@ -58,9 +58,15 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 ### 共用 SQL 查詢
 
-`_SUMMARY_SQL`（`app.py`）是核心查詢，JOIN `stocks` + 最新 `daily_prices` + 最新 `monthly_revenue` + 最新 `quarterly_financials`，並計算 `pe_ratio`（`close / (eps / quarter * 4.0)`）。欄位順序固定，`_row_to_dict()` 依索引轉換。
+`_SUMMARY_SQL`（`app.py`）是核心查詢，JOIN `stocks` + 最新 `daily_prices` + 最新 `monthly_revenue` + 最新 `quarterly_financials`，包含 `yeps` CTE（加總同年四季 EPS）用於 Q4 本益比計算。欄位順序固定，`_row_to_dict()` 依索引轉換。
 
 **新增欄位時需同步修改六處**：`_SUMMARY_SQL` → `_row_to_dict` → CSV 端點 → `index.html <th>` → `app.js rows` 陣列 → `app.js columnDefs`。
+
+### 效能快取
+
+- **Server side**：`_summary_cache`（`app.py`）快取 JSON 字串，TTL 5 分鐘。`_run_bg()` 在背景任務完成後自動呼叫 `_invalidate_summary_cache()`。
+- **Gzip**：`compress_response` after_request handler 自動壓縮 JSON / HTML / CSS / JS 回應。
+- **Client side**：`app.js` 以 `localStorage`（key `bao_sum_v1`，TTL 5 分鐘）做 stale-while-revalidate；頁面重載時先渲染快取，背景靜默更新。
 
 ## 資料庫 Schema
 
@@ -69,12 +75,17 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `stocks` | `code` | market: TWSE \| TPEX |
 | `daily_prices` | `(stock_code, date)` | volume 單位：股 |
 | `monthly_revenue` | `(stock_code, year, month)` | revenue 千元；`start_price` = 首次寫入當天收盤價，月份切換時才更新 |
-| `quarterly_financials` | `(stock_code, year, quarter)` | revenue/income 千元；eps 元/股；季報為**累計值**（Q4 = 全年） |
+| `quarterly_financials` | `(stock_code, year, quarter)` | revenue/income 千元；eps 元/股；**各季獨立值**（Q4 已非累計） |
+| `users` | `id` | 會員帳號，`password_hash` 用 werkzeug |
+| `watchlists` | `id` | 屬於某 `user_id`，可多個 |
+| `watchlist_stocks` | `(watchlist_id, stock_code)` | 自選股關聯表 |
 | `crawler_logs` | `id` | status: running \| success \| failed |
+| `schema_migrations` | `name` | 記錄已執行的 migration，防止重複執行 |
 
-`init_db()` 含兩段 migration：
+`init_db()` 目前執行的 migrations（均用 `schema_migrations` 防重複）：
 1. `ALTER TABLE monthly_revenue ADD COLUMN start_price REAL`
-2. `UPDATE monthly_revenue SET start_price = (latest close)` 補填歷史空值
+2. 補填歷史 `start_price` 空值
+3. `q4_annual_to_individual`：將 Q4 從年累計值減去 Q1+Q2+Q3，還原為個別季數值
 
 ## _SUMMARY_SQL 欄位索引（r[0]–r[16]）
 
@@ -105,6 +116,8 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 月營收爬蟲在新增記錄時，會查 `daily_prices` 最新收盤價寫入 `start_price`；更新既有記錄時不修改 `start_price`。
 
+季財報爬蟲：抓到 Q4 時，從 DB 取出同年 Q1/Q2/Q3 相減後再存入，確保存的是個別季數值。
+
 ## 排程（APScheduler）
 
 | 任務 | 觸發時間 |
@@ -119,14 +132,26 @@ data/stocks.db         SQLite 資料庫（自動建立）
 ## REST API
 
 ```
-GET  /api/market/summary        所有股票快照（_SUMMARY_SQL）
-GET  /api/market/summary.csv    CSV 下載（UTF-8 BOM）
-GET  /api/stocks/<code>/prices  個股歷史股價（?days=90）
-GET  /api/stocks/<code>/revenue 個股月營收
+GET  /api/market/summary           所有股票快照（_SUMMARY_SQL，有 5 分鐘 server cache）
+GET  /api/market/summary.csv       CSV 下載（UTF-8 BOM）
+GET  /api/stocks/<code>/prices     個股歷史股價（?days=90）
+GET  /api/stocks/<code>/revenue    個股月營收
 GET  /api/stocks/<code>/financials 個股季財報
-GET  /api/stats                 DB 統計（stocks/prices/revenues/quarterly 筆數）
-GET  /api/crawler/status        最近 30 筆爬蟲 log
-POST /api/crawler/run/<task>    手動觸發爬蟲（僅限 localhost）
+GET  /api/stats                    DB 統計（stocks/prices/revenues/quarterly 筆數）
+GET  /api/crawler/status           最近 30 筆爬蟲 log
+POST /api/crawler/run/<task>       手動觸發爬蟲（僅限 localhost）
+
+GET  /api/auth/me                  取得目前登入使用者
+POST /api/auth/register            註冊（自動通過，建立 session）
+POST /api/auth/login               登入
+POST /api/auth/logout              登出
+
+GET  /api/watchlists               取得目前使用者所有自選股清單（含 codes）
+POST /api/watchlists               新增清單
+PUT  /api/watchlists/<id>          重新命名
+DELETE /api/watchlists/<id>        刪除
+POST /api/watchlists/<id>/stocks   加入股票 {code}
+DELETE /api/watchlists/<id>/stocks/<code>  移除股票
 ```
 
 ## 歷史資料補齊（backfill）
@@ -145,8 +170,6 @@ python backfill.py --quarterly           # 季財報，~8.5 小時
 python backfill.py --from-year 2020 --prices   # 指定起始年
 ```
 
-**時間長的原因**：MOPS API 月營收與季財報是 per-company，每支股票各查一次（~1,700 支 × 0.25–0.3s）。每日股價是 per-date，一次取全部股票，速度快很多。
-
 **MOPS IFRS 資料可靠起點**：季財報從 2013 年起穩定；更早年份查詢可能回傳空值（自動略過）。
 
 ## DB 欄位：前端未呈現但已存入
@@ -164,12 +187,13 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 `state.allData` 存放 `/api/market/summary` 的完整資料，篩選（上市/上櫃、飆股）皆在前端計算，不重新呼叫 API。
 
-### 三個視圖
+### 四個視圖
 
 | 視圖 | 說明 |
 |------|------|
 | `#list-view` | 完整股票列表（DataTables，預設代號升冪） |
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
+| `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
 | `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表） |
 
 分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 依 `state.activeTab` 決定返回 list 或 star。
@@ -180,12 +204,12 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 **營收預估股價**公式：`(月營收 / 季營收) × EPS × 240`；紅色格 = 現價 2x+，黃色格 = 1.5x+。
 
-**本益比**計算：`close / (eps / quarter × 4)`（年化 EPS）。
+**本益比**計算：Q1–Q3 用 `close / (eps / quarter × 4)`（年化）；Q4 用 `close / year_eps`（`yeps` CTE 全年加總）。
 
-### 飆股視圖附加功能
+### 飆股 / 自選股附加功能
 
 - `downloadStarCsv()`：下載飆股清單為 CSV
-- `copyStarForAI()`：將飆股清單連同分析 prompt 複製到剪貼簿，供直接貼入 AI 對話
+- `copyStarForAI()` / `copyWlForAI()`：將清單連同分析 prompt 複製到剪貼簿，旁邊有 Gemini 連結（新分頁開啟）
 
 ### 通知系統
 
