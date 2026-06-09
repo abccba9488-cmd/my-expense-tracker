@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = 'tw-stock-local-2025'
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
 
 # ── summary cache ─────────────────────────────────────────────────────────────
 
@@ -614,18 +618,20 @@ def api_wl_remove_stock(wl_id, code):
         db.close()
 
 
+# ── startup (runs under both `python app.py` and gunicorn) ───────────────────
+
+init_db()
+sched.start()
+
+_db = SessionLocal()
+_needs_init = _db.query(Stock).count() == 0
+_db.close()
+if _needs_init:
+    logger.info('Empty database detected — starting initial crawl in background')
+    _run_bg(_initial_crawl)
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    init_db()
-    sched.start()
-
-    db = SessionLocal()
-    needs_init = db.query(Stock).count() == 0
-    db.close()
-
-    if needs_init:
-        logger.info('Empty database detected — starting initial crawl in background')
-        _run_bg(_initial_crawl)
-
     app.run(debug=False, host='0.0.0.0', port=5000)
