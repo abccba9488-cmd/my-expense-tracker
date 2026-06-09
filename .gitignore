@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Database
+data/
+
+# ngrok binary
+ngrok.exe
+
+# Claude Code local settings
+.claude/

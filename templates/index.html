@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- ── Primary SEO ── -->
+  <title>飆股網｜台股月營收、EPS、本益比分析平台</title>
+  <meta name="description" content="台灣上市、上櫃股票篩選工具，整合月營收年增率、季報 EPS、本益比與預估股價，快速找出營收高速成長飆股，支援自選股管理與 AI 輔助分析。">
+  <meta name="keywords" content="台股選股,月營收年增率,飆股,EPS分析,本益比,上市上櫃股票,台股分析,股票篩選工具,台灣股市,營收成長股">
+  <meta name="author" content="飆股網">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="{{ request.url_root }}">
+
+  <!-- ── Open Graph ── -->
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_TW">
+  <meta property="og:url" content="{{ request.url_root }}">
+  <meta property="og:title" content="飆股網｜台股月營收、EPS、本益比分析平台">
+  <meta property="og:description" content="台灣上市、上櫃股票篩選工具，整合月營收年增率、季報 EPS、本益比與預估股價，快速找出高成長飆股，支援自選股與 AI 分析。">
+  <meta property="og:site_name" content="飆股網">
+
+  <!-- ── Twitter Card ── -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="飆股網｜台股月營收、EPS、本益比分析平台">
+  <meta name="twitter:description" content="台灣上市、上櫃股票篩選工具，整合月營收年增率、季報 EPS、本益比，快速找出高成長飆股。">
+
+  <!-- ── Geo / Language ── -->
+  <meta name="geo.region" content="TW">
+  <meta name="geo.placename" content="Taiwan">
+  <meta http-equiv="Content-Language" content="zh-TW">
+  <meta name="theme-color" content="#4f7cff">
+
+  <!-- ── JSON-LD Structured Data (GEO) ── -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "飆股網",
+    "applicationCategory": "FinanceApplication",
+    "operatingSystem": "Web Browser",
+    "description": "台灣上市、上櫃股票篩選工具，整合月營收年增率、季報 EPS、本益比與預估股價，快速找出高成長飆股，支援自選股管理與 AI 輔助分析。資料來源：證交所、櫃買中心、公開資訊觀測站。",
+    "featureList": [
+      "台股月營收年增率篩選",
+      "季報 EPS 與本益比分析",
+      "飆股預估股價計算",
+      "自選股清單管理",
+      "AI 輔助分析匯出"
+    ],
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "TWD" },
+    "inLanguage": "zh-TW",
+    "url": "{{ request.url_root }}"
+  }
+  </script>
+
+  <!-- ── Performance: Preconnect ── -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="preconnect" href="https://cdn.datatables.net">
+  <link rel="preconnect" href="https://code.jquery.com">
+
+  <!-- Non-blocking font load: swap prevents invisible text, onload promotes to stylesheet -->
+  <link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'"
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Inter:wght@400;500;600&display=swap">
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Inter:wght@400;500;600&display=swap">
+  </noscript>
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<noscript>
+  <p>飆股網 — 整合台灣上市、上櫃股票月營收年增率、季報 EPS、本益比資料，快速篩選高成長飆股。請啟用 JavaScript 以使用完整功能。</p>
+</noscript>
+
+<!-- ── NAV ── -->
+<nav id="nav">
+  <div class="nav-inner">
+    <div class="logo">📈 飆股網</div>
+    <div class="nav-right">
+      <span id="db-stats" class="stats-badge"></span>
+      <div id="auth-area"></div>
+      <button class="icon-btn" id="theme-btn" title="切換主題">☀</button>
+      <button class="icon-btn" id="status-btn" title="爬蟲狀態">⚙</button>
+    </div>
+  </div>
+</nav>
+
+<!-- ── MAIN ── -->
+<main>
+
+  <!-- 初始化提示 -->
+  <div id="init-banner" class="init-banner hidden">
+    <div class="init-content">
+      <p>📂 資料庫是空的，需要先下載初始資料（約需 5~10 分鐘）</p>
+      <button class="btn btn-primary" onclick="runCrawler('init')">開始初始化</button>
+    </div>
+  </div>
+
+  <!-- 分頁列（detail view 時隱藏）-->
+  <div class="page-tabs-bar" id="page-tabs-bar">
+    <div class="page-tabs">
+      <button class="page-tab active" data-tab="list">股票總覽</button>
+      <button class="page-tab" data-tab="star">🔥 營收飆股</button>
+      <button class="page-tab" data-tab="watchlist">⭐ 自選股</button>
+    </div>
+  </div>
+
+  <!-- 股票列表 -->
+  <div id="list-view" class="view active">
+    <div class="container">
+      <div class="toolbar">
+        <div class="filter-group">
+          <button class="filter-btn active" data-market="all">全部</button>
+          <button class="filter-btn" data-market="TWSE">上市</button>
+          <button class="filter-btn" data-market="TPEX">上櫃</button>
+          <select id="industry-filter" class="industry-select">
+            <option value="all">所有產業</option>
+          </select>
+        </div>
+        <div class="toolbar-right">
+          <button class="btn btn-sm" onclick="runCrawler('daily_price')">更新今日股價</button>
+          <button class="btn btn-sm" onclick="runCrawler('monthly_revenue')">更新月營收</button>
+          <a class="btn btn-sm btn-csv" href="/api/market/summary.csv" download>⬇ 下載 CSV</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <table id="stocks-table" class="display nowrap" style="width:100%">
+          <thead>
+            <tr>
+              <th>代號</th>
+              <th>名稱</th>
+              <th>產業</th>
+              <th>起始股價</th>
+              <th>收盤價</th>
+              <th>漲跌幅%</th>
+              <th>營收預估股價</th>
+              <th>營收月份</th>
+              <th>月營收(千元)</th>
+              <th>月營收年增%</th>
+              <th>季營收(千元)</th>
+              <th>最新EPS</th>
+              <th>本益比</th>
+              <th>EPS期別</th>
+              <th>資料日期</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 營收飆股 -->
+  <div id="star-view" class="view">
+    <div class="container">
+      <div class="toolbar">
+        <div class="filter-group">
+          <button class="filter-btn active" data-star-market="all">全部</button>
+          <button class="filter-btn" data-star-market="TWSE">上市</button>
+          <button class="filter-btn" data-star-market="TPEX">上櫃</button>
+        </div>
+        <label id="star-month-filter-wrap" class="hidden star-month-chk">
+          <input type="checkbox" id="star-latest-month">
+          <span id="star-latest-month-label">只顯示最新月份</span>
+        </label>
+        <span class="stats-badge" id="star-count"></span>
+        <button class="btn btn-sm btn-csv" onclick="downloadStarCsv()">⬇ 下載 CSV</button>
+        <button class="btn btn-sm" onclick="copyStarForAI()" style="background:var(--accent);color:#fff;">🤖 複製給 AI</button>
+      </div>
+      <div class="card">
+        <table id="star-table" class="display nowrap" style="width:100%">
+          <thead>
+            <tr>
+              <th>代號</th>
+              <th>名稱</th>
+              <th>產業</th>
+              <th>起始股價</th>
+              <th>收盤價</th>
+              <th>漲跌幅%</th>
+              <th>營收預估股價</th>
+              <th>預估倍數</th>
+              <th>營收月份</th>
+              <th>月營收(千元)</th>
+              <th>月營收年增%</th>
+              <th>最新EPS</th>
+              <th>本益比</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自選股 -->
+  <div id="watchlist-view" class="view">
+    <div class="container">
+      <div id="wl-auth-prompt" class="wl-auth-prompt hidden">
+        <p>請先登入才能使用自選股功能</p>
+        <button class="btn btn-primary" id="wl-login-btn">登入 / 註冊</button>
+      </div>
+      <div id="wl-content" class="hidden">
+      <div class="wl-tabs-wrap">
+        <div class="wl-tabs" id="wl-tabs"></div>
+        <button class="wl-new-btn" id="wl-new-btn">＋ 新增清單</button>
+      </div>
+      <div id="wl-empty" class="wl-empty hidden">
+        <p>尚無自選股清單，點擊「＋ 新增清單」開始建立</p>
+      </div>
+      <div id="wl-table-wrap" class="hidden">
+        <div class="toolbar">
+          <div class="wl-search-wrap">
+            <input type="text" id="wl-search" placeholder="輸入代號或名稱新增個股…" class="wl-search-input" autocomplete="off">
+            <div id="wl-search-dropdown" class="wl-search-dropdown hidden"></div>
+          </div>
+          <span class="stats-badge" id="wl-count"></span>
+          <button class="btn btn-sm" onclick="copyWlForAI()" style="background:var(--accent);color:#fff;">🤖 複製給 AI</button>
+        </div>
+        <div class="card">
+          <table id="wl-table" class="display nowrap" style="width:100%">
+            <thead>
+              <tr>
+                <th></th>
+                <th>代號</th><th>名稱</th><th>產業</th>
+                <th>收盤價</th><th>漲跌幅%</th><th>營收預估股價</th><th>預估倍數</th>
+                <th>營收月份</th><th>月營收(千元)</th><th>月營收年增%</th>
+                <th>最新EPS</th><th>本益比</th><th>資料日期</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      </div><!-- /wl-content -->
+    </div>
+  </div>
+
+  <!-- 個股詳情 -->
+  <div id="detail-view" class="view">
+    <div class="container">
+      <button class="back-btn" onclick="showListView()">← 返回列表</button>
+
+      <div class="detail-header">
+        <h2 id="d-name"></h2>
+        <div class="badges">
+          <span class="badge badge-code" id="d-code"></span>
+          <span class="badge badge-market" id="d-market"></span>
+          <span class="badge badge-industry" id="d-industry"></span>
+        </div>
+      </div>
+
+      <!-- 股價圖 -->
+      <div class="card">
+        <div class="card-header">
+          <h3>股價走勢</h3>
+          <div class="days-selector">
+            <button class="days-btn active" data-days="30">30天</button>
+            <button class="days-btn" data-days="90">90天</button>
+            <button class="days-btn" data-days="180">180天</button>
+            <button class="days-btn" data-days="365">1年</button>
+            <button class="days-btn" data-days="1095">3年</button>
+            <button class="days-btn" data-days="1825">5年</button>
+            <button class="days-btn" data-days="9999">全部</button>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="price-chart"></canvas></div>
+      </div>
+
+      <!-- 每日股價表 -->
+      <div class="card">
+        <h3>每日股價明細</h3>
+        <div class="table-scroll">
+          <table id="price-table" class="display compact" style="width:100%">
+            <thead>
+              <tr>
+                <th>日期</th><th>開盤</th><th>最高</th><th>最低</th>
+                <th>收盤</th><th>漲跌</th><th>漲跌幅%</th><th>成交量</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 月營收圖 -->
+      <div class="card">
+        <h3>月營收趨勢</h3>
+        <div class="chart-wrap"><canvas id="revenue-chart"></canvas></div>
+      </div>
+
+      <!-- 月營收表 -->
+      <div class="card">
+        <h3>月營收明細</h3>
+        <div class="table-scroll">
+          <table id="revenue-table" class="display compact" style="width:100%">
+            <thead>
+              <tr>
+                <th>年</th><th>月</th><th>月營收(千元)</th>
+                <th>月增率%</th><th>年增率%</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 季財報表 -->
+      <div class="card">
+        <h3>季財報 (EPS)</h3>
+        <div class="table-scroll">
+          <table id="quarterly-table" class="display compact" style="width:100%">
+            <thead>
+              <tr>
+                <th>年份</th><th>季別</th><th>營收(千元)</th>
+                <th>營業利益</th><th>稅後淨利</th><th>EPS</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<!-- ── 爬蟲狀態面板 ── -->
+<div id="status-panel" class="status-panel hidden">
+  <div class="status-panel-header">
+    <span>爬蟲執行紀錄</span>
+    <button class="icon-btn" onclick="closeStatus()">✕</button>
+  </div>
+  <div class="status-actions">
+    <button class="btn btn-sm" onclick="runCrawler('stock_list')">更新股票清單</button>
+    <button class="btn btn-sm" id="quarterly-btn" onclick="runCrawler('quarterly')">更新季財報</button>
+  </div>
+  <div id="status-logs" class="status-logs"></div>
+</div>
+
+<!-- ── TOAST ── -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- Auth Modal -->
+<div id="auth-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-auth-tab="login">登入</button>
+        <button class="modal-tab" data-auth-tab="register">註冊</button>
+      </div>
+      <button class="modal-close" id="auth-modal-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="auth-error" class="auth-error hidden"></div>
+      <div class="form-group">
+        <label>帳號</label>
+        <input type="text" id="auth-username" class="form-input" placeholder="輸入帳號" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>密碼</label>
+        <input type="password" id="auth-password" class="form-input" placeholder="至少 6 個字元" autocomplete="current-password">
+      </div>
+      <button id="auth-submit" class="btn btn-primary" style="width:100%;margin-top:4px">登入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SCRIPTS ── -->
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
