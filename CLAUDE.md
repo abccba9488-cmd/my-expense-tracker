@@ -154,6 +154,22 @@ POST /api/watchlists/<id>/stocks   加入股票 {code}
 DELETE /api/watchlists/<id>/stocks/<code>  移除股票
 ```
 
+## 部署（Zeabur）
+
+正式網址：`https://stock-market.zeabur.app/`
+
+**關鍵設定：**
+- Zeabur 使用 gunicorn 啟動，`__main__` 區塊不執行。`init_db()`、`sched.start()`、自動爬蟲偵測已移至模組層級，匯入時即執行。
+- 需在 Zeabur 控制台設定 **Persistent Volume** 掛載至 `/app/data`，否則重啟後 SQLite 資料消失。
+- `SESSION_COOKIE_SAMESITE='Lax'` 確保 HTTPS 環境下 session cookie 正常運作。
+
+**雲端初始化 DB（跑 backfill 的替代方案）：**
+`fetch_db.py` 從 GitHub Release `db-v1` 下載 DB 快照（800 MB，含 15 年資料）：
+```bash
+python fetch_db.py   # 在 Zeabur 終端機執行
+```
+快照來源：`github.com/abccba9488-cmd/my-expense-tracker/releases/tag/db-v1`
+
 ## 歷史資料補齊（backfill）
 
 `backfill.py` 是獨立腳本，不需要 Flask 執行中。已有資料的日期/月份/季度自動跳過，可中斷後續跑。
@@ -170,7 +186,18 @@ python backfill.py --quarterly           # 季財報，~8.5 小時
 python backfill.py --from-year 2020 --prices   # 指定起始年
 ```
 
+雲端環境建議用 `nohup python backfill.py --prices > /app/backfill.log 2>&1 &` 背景執行，避免終端機斷線中止。
+
 **MOPS IFRS 資料可靠起點**：季財報從 2013 年起穩定；更早年份查詢可能回傳空值（自動略過）。
+
+**TWSE Big5 編碼**：2015 年以前的 TWSE 資料欄位名稱為 Big5 編碼，crawler 解析到 0 筆但 tables 有資料時，會自動以 Big5 重新解碼後再解析。
+
+## 分析與驗證
+
+| 服務 | ID / 設定 | 位置 |
+|------|----------|------|
+| Google Analytics GA4 | `G-27TS0SERCE` | `<head>` 最前方 gtag.js |
+| Google Search Console | `ZtZskJdvuKex_hNe5sE4xQIpCNHKOn-0OPXDKTtizRs` | `<meta name="google-site-verification">` |
 
 ## DB 欄位：前端未呈現但已存入
 

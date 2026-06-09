@@ -13,8 +13,8 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 engine = create_engine(
     f'sqlite:///{DB_PATH}',
     connect_args={'check_same_thread': False},
-    pool_size=5,
-    max_overflow=10,
+    pool_size=2,
+    max_overflow=2,
 )
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
