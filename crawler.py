@@ -1,3 +1,4 @@
+import json as _json
 import re
 import time
 import random
@@ -380,7 +381,19 @@ def _crawl_twse_prices(date_str, trade_date):
         return []
     # 2025+ new format uses 'tables'; legacy uses numbered fields/data
     if 'tables' in data:
-        return _parse_twse_tables(data['tables'], trade_date)
+        records = _parse_twse_tables(data['tables'], trade_date)
+        # Old data (pre-2015) has Big5-encoded field names; if 0 records but rows exist,
+        # re-decode the raw bytes as Big5 so field lookup works correctly.
+        if not records:
+            total_rows = sum(len(t.get('data', [])) for t in data['tables'])
+            if total_rows > 0:
+                try:
+                    data2 = _json.loads(resp.content.decode('big5', errors='ignore'))
+                    if data2.get('stat') == 'OK' and 'tables' in data2:
+                        records = _parse_twse_tables(data2['tables'], trade_date)
+                except Exception:
+                    pass
+        return records
     return _parse_twse_mi_index(data, trade_date)
 
 
