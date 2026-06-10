@@ -807,7 +807,7 @@ function renderWlTable() {
   const rows = wl.codes.map(code => {
     const s = state.allData.find(d => d.code === code);
     const rmBtn = `<button class="wl-remove-btn" data-rm-code="${code}" title="移除">✕</button>`;
-    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
+    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
     const est = calcEst(s);
     const ratio = (est != null && s.close) ? est / s.close : null;
     let estCell = '—';
@@ -824,6 +824,7 @@ function renderWlTable() {
       `<span class="stock-link" data-code="${code}">${code}</span>`,
       `<span class="stock-link" data-code="${code}">${s.name}</span>`,
       s.industry || '—',
+      s.start_price != null ? fmt.price(s.start_price) : '—',
       s.close != null ? fmt.price(s.close) : '—',
       s.change_pct != null ? `<span class="${pctClass(s.change_pct)}">${fmt.pct(s.change_pct)}</span>` : '—',
       estCell,
@@ -844,8 +845,8 @@ function renderWlTable() {
       data: rows, pageLength: 25, order: [], language: dtLang(), destroy: true,
       columnDefs: [
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
-        { targets: [4,5,6,7,9,10,11,12], className: 'dt-right' },
-        { targets: [1,2,3,8,13],          className: 'dt-left' },
+        { targets: [4,5,6,7,8,10,11,12,13], className: 'dt-right' },
+        { targets: [1,2,3,9,14],            className: 'dt-left' },
       ],
     });
     $('#wl-table tbody').on('click', '.wl-remove-btn', function(e) {

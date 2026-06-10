@@ -162,6 +162,12 @@ DELETE /api/watchlists/<id>/stocks/<code>  移除股票
 - Zeabur 使用 gunicorn 啟動，`__main__` 區塊不執行。`init_db()`、`sched.start()`、自動爬蟲偵測已移至模組層級，匯入時即執行。
 - 需在 Zeabur 控制台設定 **Persistent Volume** 掛載至 `/app/data`，否則重啟後 SQLite 資料消失。
 - `SESSION_COOKIE_SAMESITE='Lax'` 確保 HTTPS 環境下 session cookie 正常運作。
+- `Procfile`：`gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300`
+  - **必須帶 `--bind 0.0.0.0:$PORT`**，否則 gunicorn 預設綁定 `127.0.0.1:8000`，Zeabur 偵測不到 port 會回 502
+  - **單一 worker**：避免每個 worker 各自啟動一份 APScheduler（重複觸發排程爬蟲）與 SQLite 連線池
+  - `--timeout 300`：`/api/market/summary` 在大型 DB 上冷啟動查詢耗時較長，避免被 gunicorn 逾時 SIGKILL
+- `database.py` 連線時設定 SQLite PRAGMA（`mmap_size=0`、`cache_size=-2000`、`temp_store=FILE`），避免大型 DB 的 mmap 把記憶體推爆容器限制
+- 服務記憶體限制設定在 Zeabur「設定 → 資源限制」（Mi），與帳號方案的總額度是兩回事
 
 **雲端初始化 DB（跑 backfill 的替代方案）：**
 `fetch_db.py` 從 GitHub Release `db-v1` 下載 DB 快照（800 MB，含 15 年資料）：
@@ -169,6 +175,12 @@ DELETE /api/watchlists/<id>/stocks/<code>  移除股票
 python fetch_db.py   # 在 Zeabur 終端機執行
 ```
 快照來源：`github.com/abccba9488-cmd/my-expense-tracker/releases/tag/db-v1`
+
+**縮減 DB 大小（解決大型 DB 在低記憶體環境的 OOM/逾時）：**
+`trim_db.py` 刪除 `daily_prices` 中 5 年前的資料並執行 `VACUUM` 壓縮檔案：
+```bash
+python trim_db.py   # 在 Zeabur 終端機執行；VACUUM 需要獨佔存取，必要時先暫停服務
+```
 
 ## 歷史資料補齊（backfill）
 
@@ -232,6 +244,8 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 **營收預估股價**公式：`(月營收 / 季營收) × EPS × 240`；紅色格 = 現價 2x+，黃色格 = 1.5x+。
 
 **本益比**計算：Q1–Q3 用 `close / (eps / quarter × 4)`（年化）；Q4 用 `close / year_eps`（`yeps` CTE 全年加總）。
+
+自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。
 
 ### 飆股 / 自選股附加功能
 
