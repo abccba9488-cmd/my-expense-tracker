@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Float, BigInteger,
+    create_engine, event, Column, String, Integer, Float, BigInteger,
     Date, DateTime, Text, UniqueConstraint, Index, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -16,6 +16,20 @@ engine = create_engine(
     pool_size=2,
     max_overflow=2,
 )
+
+
+@event.listens_for(engine, 'connect')
+def _set_sqlite_pragma(dbapi_conn, _):
+    """Cap SQLite's per-connection memory use (mmap/page cache) so large
+    queries against the multi-year DB don't blow past the container's
+    memory limit."""
+    cur = dbapi_conn.cursor()
+    cur.execute('PRAGMA mmap_size=0')
+    cur.execute('PRAGMA cache_size=-2000')   # ~2MB page cache
+    cur.execute('PRAGMA temp_store=FILE')
+    cur.close()
+
+
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
