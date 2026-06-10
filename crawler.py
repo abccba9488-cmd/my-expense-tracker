@@ -52,7 +52,7 @@ def _get(url, *, headers=None, timeout=60, retries=3):
         'User-Agent': _get_ua(),
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Encoding': 'gzip, deflate',
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',
         'Sec-Fetch-Dest': 'document',
@@ -93,7 +93,7 @@ def _post(url, *, json=None, headers=None, timeout=15, retries=3):
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Encoding': 'gzip, deflate',
         'Connection': 'keep-alive',
     }
     if headers:
