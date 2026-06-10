@@ -110,9 +110,11 @@ data/stocks.db         SQLite 資料庫（自動建立）
 **SSL 注意**：TWSE/TPEX/MOPS 憑證有問題，`crawler.py` 用 `_session.verify = False` 統一處理。所有請求必須走 `_get()` / `_post()` 包裝函式，不可直接呼叫 `_session.get/post` 或裸的 `requests`。
 
 **防爬蟲機制**（`crawler.py` 頂部）：
-- `_get()` / `_post()`：統一入口，每次請求隨機挑選 UA、帶完整瀏覽器 headers、429/5xx 自動重試最多 3 次（等待 8–15 秒）
+- `_get()` / `_post()`：統一入口，每次請求隨機挑選 UA、帶完整瀏覽器 headers、429/5xx 與連線層級例外（如 `Response ended prematurely`）自動重試最多 3 次（等待 8–15 秒）
 - `_jitter(base)`：`time.sleep(base × random(0.7, 1.6))`，消除固定間隔特徵
 - 每 80 次請求清除一次 session cookie，避免 session 指紋累積
+- **`Accept-Encoding` 不可加 `br`**：Zeabur 容器未安裝 `brotli`，若伺服器回傳 Brotli 壓縮內容會導致 `resp.json()` 解析失敗（`Expecting value: line 1 column 1`），整批資料變成 0 筆但 task 仍顯示 success。只用 `gzip, deflate`
+- TWSE/TPEX JSON 解析失敗或 `stat != 'OK'` 時會記錄 `logger.warning`（含狀態碼與回應大小），方便從 Zeabur Runtime Logs 排查
 
 月營收爬蟲在新增記錄時，會查 `daily_prices` 最新收盤價寫入 `start_price`；更新既有記錄時不修改 `start_price`。
 
@@ -120,12 +122,17 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 ## 排程（APScheduler）
 
-| 任務 | 觸發時間 |
+| 任務 | 觸發時間（Asia/Taipei） |
 |------|---------|
 | 股票清單 | 每週日 01:00 |
-| 每日股價 | 週一〜五 17:30 |
-| 月營收 | 每月 1〜10 日 02:00（爬上個月） |
-| Q1/Q2/Q3/Q4 | 5/15、8/14、11/14、4/30 00:01 |
+| 每日股價 | 週一〜五 14:00 與 15:00（各跑一次，避免單次失敗漏抓） |
+| 月營收 | 每月 1〜10 日 23:00（爬上個月） |
+| Q1 | 5/1〜5/15 23:00 |
+| Q2 | 8/1〜8/14 23:00 |
+| Q3 | 11/1〜11/14 23:00 |
+| Q4 | 隔年 3/1〜3/31 23:00 |
+
+**注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因 OOM/重新部署在 14:00 後重啟），當天該任務會被跳過、不會補跑，需手動觸發 `POST /api/crawler/run/daily_price` 補抓。
 
 手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋。
 
