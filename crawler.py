@@ -67,7 +67,15 @@ def _get(url, *, headers=None, timeout=60, retries=3):
         _session.cookies.clear()
 
     for attempt in range(retries):
-        resp = _session.get(url, headers=h, timeout=timeout)
+        try:
+            resp = _session.get(url, headers=h, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            if attempt == retries - 1:
+                raise
+            wait = (attempt + 1) * random.uniform(8, 15)
+            logger.warning('Connection error on %s: %s — retry in %.1fs', url, e, wait)
+            time.sleep(wait)
+            continue
         if resp.status_code == 429 or resp.status_code >= 500:
             wait = (attempt + 1) * random.uniform(8, 15)
             logger.warning('HTTP %d on %s — retry in %.1fs', resp.status_code, url, wait)
@@ -96,7 +104,15 @@ def _post(url, *, json=None, headers=None, timeout=15, retries=3):
         _session.cookies.clear()
 
     for attempt in range(retries):
-        resp = _session.post(url, json=json, headers=h, timeout=timeout)
+        try:
+            resp = _session.post(url, json=json, headers=h, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            if attempt == retries - 1:
+                raise
+            wait = (attempt + 1) * random.uniform(8, 15)
+            logger.warning('Connection error on POST %s: %s — retry in %.1fs', url, e, wait)
+            time.sleep(wait)
+            continue
         if resp.status_code == 429 or resp.status_code >= 500:
             wait = (attempt + 1) * random.uniform(8, 15)
             logger.warning('HTTP %d on POST %s — retry in %.1fs', resp.status_code, url, wait)
@@ -375,9 +391,12 @@ def _crawl_twse_prices(date_str, trade_date):
     resp = _get(url, headers={'Referer': 'https://www.twse.com.tw/'}, timeout=60)
     try:
         data = resp.json()
-    except Exception:
+    except Exception as e:
+        logger.warning('TWSE %s: failed to parse JSON (status=%d, %d bytes): %s',
+                        date_str, resp.status_code, len(resp.content), e)
         return []
     if data.get('stat') != 'OK':
+        logger.warning('TWSE %s: stat=%r', date_str, data.get('stat'))
         return []
     # 2025+ new format uses 'tables'; legacy uses numbered fields/data
     if 'tables' in data:
@@ -408,7 +427,9 @@ def _crawl_tpex_prices(date_str, trade_date):
     resp = _get(url, headers={'Referer': 'https://www.tpex.org.tw/'}, timeout=60)
     try:
         data = resp.json()
-    except Exception:
+    except Exception as e:
+        logger.warning('TPEX %s: failed to parse JSON (status=%d, %d bytes): %s',
+                        date_str, resp.status_code, len(resp.content), e)
         return []
 
     # 2025+ new format: {"tables":[{"fields":[...],"data":[...]}]}
