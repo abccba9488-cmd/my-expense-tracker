@@ -737,6 +737,27 @@ _db.close()
 if _needs_init:
     logger.info('Empty database detected — starting initial crawl in background')
     _run_bg(_initial_crawl)
+else:
+    # Catch-up: APScheduler computes "next fire time" at sched.start(). If the
+    # worker restarts (e.g. redeploy) after today's 14:00/15:00 cron time,
+    # today's daily_price run is skipped entirely (not deferred). Detect this
+    # and trigger it once at startup.
+    from zoneinfo import ZoneInfo
+    _now_tw = datetime.now(ZoneInfo('Asia/Taipei'))
+    if _now_tw.weekday() < 5 and _now_tw.hour >= 14:
+        _today_str = _now_tw.strftime('%Y%m%d')
+        _db = SessionLocal()
+        try:
+            _done = _db.query(CrawlerLog).filter(
+                CrawlerLog.task == 'daily_price',
+                CrawlerLog.status == 'success',
+                CrawlerLog.message.like(f'{_today_str}:%'),
+            ).first()
+        finally:
+            _db.close()
+        if not _done:
+            logger.info('Daily price not yet run today (%s) — triggering catch-up crawl', _today_str)
+            _run_bg(crawler.crawl_daily_prices, _today_str)
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
