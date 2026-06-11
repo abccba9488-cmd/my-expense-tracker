@@ -269,6 +269,19 @@ table.dataTable tbody td {
 .log-msg   { color: var(--text2); }
 .log-time  { color: var(--text2); margin-left: auto; flex-shrink: 0; }
 
+/* ── Today updates panel ── */
+.today-panel { left: 16px; right: auto; }
+.today-section { margin-bottom: 10px; }
+.today-section-title { font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.today-empty { color: var(--text2); padding: 4px 0; }
+.today-stock-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.today-stock-chip {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 8px; font-size: 12px;
+  color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.today-stock-chip:hover { border-color: var(--primary); color: var(--primary); }
+
 /* ── Toast ── */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);

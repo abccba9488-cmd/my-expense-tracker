@@ -93,6 +93,7 @@
       <span id="db-stats" class="stats-badge"></span>
       <div id="auth-area"></div>
       <button class="icon-btn" id="theme-btn" title="切換主題">☀</button>
+      <button class="icon-btn" id="today-btn" title="今日更新">🆕</button>
       <button class="icon-btn" id="status-btn" title="爬蟲狀態">⚙</button>
     </div>
   </div>
@@ -357,6 +358,15 @@
     <button class="btn btn-sm" id="quarterly-btn" onclick="runCrawler('quarterly')">更新季財報</button>
   </div>
   <div id="status-logs" class="status-logs"></div>
+</div>
+
+<!-- ── 今日更新面板 ── -->
+<div id="today-panel" class="status-panel today-panel hidden">
+  <div class="status-panel-header">
+    <span>今日更新</span>
+    <button class="icon-btn" onclick="closeTodayPanel()">✕</button>
+  </div>
+  <div id="today-logs" class="status-logs"></div>
 </div>
 
 <!-- ── TOAST ── -->

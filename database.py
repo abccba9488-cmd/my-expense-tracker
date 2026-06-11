@@ -75,6 +75,7 @@ class MonthlyRevenue(Base):
     revenue_yoy = Column(Float)        # 年增率 %
     revenue_mom = Column(Float)        # 月增率 %
     start_price = Column(Float)        # 首次寫入當天收盤價
+    updated_at  = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class QuarterlyFinancial(Base):
@@ -91,6 +92,7 @@ class QuarterlyFinancial(Base):
     operating_income = Column(BigInteger)   # 千元
     net_income       = Column(BigInteger)   # 千元
     eps              = Column(Float)        # 元/股
+    updated_at       = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class User(Base):
@@ -180,6 +182,20 @@ def init_db():
     with engine.connect() as conn:
         try:
             conn.execute(text('ALTER TABLE monthly_revenue ADD COLUMN start_price REAL'))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+    # Migration: add updated_at columns if not present
+    with engine.connect() as conn:
+        try:
+            conn.execute(text('ALTER TABLE monthly_revenue ADD COLUMN updated_at DATETIME'))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+    with engine.connect() as conn:
+        try:
+            conn.execute(text('ALTER TABLE quarterly_financials ADD COLUMN updated_at DATETIME'))
             conn.commit()
         except Exception:
             pass  # Column already exists

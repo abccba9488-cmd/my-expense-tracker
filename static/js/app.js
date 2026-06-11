@@ -1016,6 +1016,52 @@ async function loadCrawlerStatus() {
   } catch (_) {}
 }
 
+/* ── Today updates panel ── */
+document.getElementById('today-btn').addEventListener('click', () => {
+  const panel = document.getElementById('today-panel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) loadTodayUpdates();
+});
+
+function closeTodayPanel() {
+  document.getElementById('today-panel').classList.add('hidden');
+}
+
+function _todayChips(list) {
+  if (!list.length) return '<div class="today-empty">無</div>';
+  return `<div class="today-stock-list">${list.map(s =>
+    `<span class="today-stock-chip" data-code="${s.code}">${s.code} ${s.name}</span>`
+  ).join('')}</div>`;
+}
+
+async function loadTodayUpdates() {
+  try {
+    const r = await fetch('/api/updates/today');
+    const data = await r.json();
+    const el = document.getElementById('today-logs');
+    el.innerHTML = `
+      <div class="today-section">
+        <div class="today-section-title">📈 股價</div>
+        ${data.price_date ? `<div>${data.price_date} 股價已更新</div>` : '<div class="today-empty">尚未更新</div>'}
+      </div>
+      <div class="today-section">
+        <div class="today-section-title">💰 月營收（${data.monthly_revenue.length}）</div>
+        ${_todayChips(data.monthly_revenue)}
+      </div>
+      <div class="today-section">
+        <div class="today-section-title">📊 季財報（${data.quarterly.length}）</div>
+        ${_todayChips(data.quarterly)}
+      </div>
+    `;
+    el.querySelectorAll('.today-stock-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        closeTodayPanel();
+        loadStockDetail(chip.dataset.code);
+      });
+    });
+  } catch (_) {}
+}
+
 /* ── Notifications ── */
 const TASK_LABEL = {
   stock_list:      '股票清單更新',

@@ -1,6 +1,7 @@
 import gzip as _gzip
 import json as _json
 import logging
+import re
 import threading
 import time as _time
 from datetime import date, timedelta, datetime
@@ -164,6 +165,49 @@ def api_stats():
             'last_price_date': str(
                 db.execute(text('SELECT MAX(date) FROM daily_prices')).scalar() or ''
             ),
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/updates/today')
+def api_updates_today():
+    db = SessionLocal()
+    try:
+        today_str = date.today().isoformat()
+
+        # Latest successful daily_price log today → extract trade date from message
+        price_log = (
+            db.query(CrawlerLog)
+            .filter(CrawlerLog.task == 'daily_price', CrawlerLog.status == 'success')
+            .filter(text("date(created_at) = :today")).params(today=today_str)
+            .order_by(desc(CrawlerLog.created_at))
+            .first()
+        )
+        price_date = None
+        if price_log and price_log.message:
+            m = re.match(r'^(\d{4})(\d{2})(\d{2})', price_log.message)
+            if m:
+                price_date = f'{m.group(1)}-{m.group(2)}-{m.group(3)}'
+
+        revenue_rows = (
+            db.query(MonthlyRevenue.stock_code, Stock.name)
+            .join(Stock, Stock.code == MonthlyRevenue.stock_code)
+            .filter(text("date(monthly_revenue.updated_at) = :today")).params(today=today_str)
+            .all()
+        )
+
+        quarterly_rows = (
+            db.query(QuarterlyFinancial.stock_code, Stock.name)
+            .join(Stock, Stock.code == QuarterlyFinancial.stock_code)
+            .filter(text("date(quarterly_financials.updated_at) = :today")).params(today=today_str)
+            .all()
+        )
+
+        return jsonify({
+            'price_date': price_date,
+            'monthly_revenue': [{'code': c, 'name': n} for c, n in revenue_rows],
+            'quarterly':       [{'code': c, 'name': n} for c, n in quarterly_rows],
         })
     finally:
         db.close()

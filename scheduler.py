@@ -59,18 +59,18 @@ def start():
     _scheduler.add_job(_daily_price_job, CronTrigger(day_of_week='mon-fri', hour=14, minute=0))
     _scheduler.add_job(_daily_price_job, CronTrigger(day_of_week='mon-fri', hour=15, minute=0))
 
-    # Monthly revenue: days 1–10 of each month at 23:00
-    _scheduler.add_job(_monthly_revenue_job, CronTrigger(day='1-10', hour=23, minute=0))
+    # Monthly revenue: every day at 23:00 (some companies publish late, keep retrying)
+    _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))
 
-    # Quarterly financial reports — every day within the disclosure window at 23:00
-    # Q1 (Jan–Mar): May  1–15
-    _scheduler.add_job(lambda: _quarterly_job(1), CronTrigger(month=5,  day='1-15', hour=23, minute=0))
-    # Q2 (Apr–Jun): Aug  1–14
-    _scheduler.add_job(lambda: _quarterly_job(2), CronTrigger(month=8,  day='1-14', hour=23, minute=0))
-    # Q3 (Jul–Sep): Nov  1–14
-    _scheduler.add_job(lambda: _quarterly_job(3), CronTrigger(month=11, day='1-14', hour=23, minute=0))
-    # Q4 (Oct–Dec): Mar  1–31 of the following year (deadline: Mar 31)
-    _scheduler.add_job(lambda: _quarterly_job(4), CronTrigger(month=3,  day='1-31', hour=23, minute=0))
+    # Quarterly financial reports — every day of the disclosure month at 23:00
+    # Q1 (Jan–Mar): all of May (deadline May 15)
+    _scheduler.add_job(lambda: _quarterly_job(1), CronTrigger(month=5,  hour=23, minute=0))
+    # Q2 (Apr–Jun): all of August (deadline Aug 14)
+    _scheduler.add_job(lambda: _quarterly_job(2), CronTrigger(month=8,  hour=23, minute=0))
+    # Q3 (Jul–Sep): all of November (deadline Nov 14)
+    _scheduler.add_job(lambda: _quarterly_job(3), CronTrigger(month=11, hour=23, minute=0))
+    # Q4 (Oct–Dec): all of March of the following year (deadline Mar 31)
+    _scheduler.add_job(lambda: _quarterly_job(4), CronTrigger(month=3,  hour=23, minute=0))
 
     _scheduler.start()
     logger.info('Scheduler started')

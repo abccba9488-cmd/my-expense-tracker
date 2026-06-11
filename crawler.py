@@ -600,10 +600,15 @@ def crawl_monthly_revenue(year: int, month: int):
                     stock_code=stock.code, year=year, month=month
                 ).first()
                 if existing:
+                    changed = (existing.revenue != revenue
+                               or existing.revenue_yoy != revenue_yoy
+                               or existing.revenue_mom != revenue_mom)
                     existing.revenue     = revenue
                     existing.revenue_yoy = revenue_yoy
                     existing.revenue_mom = revenue_mom
                     # start_price intentionally unchanged (keep first-crawl price)
+                    if changed:
+                        existing.updated_at = datetime.now()
                 else:
                     latest_dp = db.query(DailyPrice.close).filter_by(
                         stock_code=stock.code
@@ -612,6 +617,7 @@ def crawl_monthly_revenue(year: int, month: int):
                         stock_code=stock.code, year=year, month=month,
                         revenue=revenue, revenue_yoy=revenue_yoy, revenue_mom=revenue_mom,
                         start_price=latest_dp[0] if latest_dp else None,
+                        updated_at=datetime.now(),
                     ))
                 total += 1
 
@@ -730,15 +736,22 @@ def crawl_quarterly_financials(year: int, quarter: int):
                     stock_code=stock.code, year=year, quarter=quarter
                 ).first()
                 if existing:
+                    changed = (existing.revenue != revenue
+                               or existing.operating_income != op_income
+                               or existing.net_income != net_income
+                               or existing.eps != eps)
                     existing.revenue          = revenue
                     existing.operating_income = op_income
                     existing.net_income       = net_income
                     existing.eps              = eps
+                    if changed:
+                        existing.updated_at = datetime.now()
                 else:
                     db.add(QuarterlyFinancial(
                         stock_code=stock.code, year=year, quarter=quarter,
                         revenue=revenue, operating_income=op_income,
                         net_income=net_income, eps=eps,
+                        updated_at=datetime.now(),
                     ))
                 total += 1
                 if total % 50 == 0:
