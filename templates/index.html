@@ -88,10 +88,14 @@
 <!-- ── NAV ── -->
 <nav id="nav">
   <div class="nav-inner">
-    <a class="logo" href="https://stock-market.zeabur.app/" style="text-decoration:none;color:inherit;">📈 飆股網</a>
+    <div class="logo-group">
+      <a class="logo" href="https://stock-market.zeabur.app/" style="text-decoration:none;color:inherit;">📈 飆股網</a>
+      <span class="slogan">營收為王 飆股有理</span>
+    </div>
     <div class="nav-right">
       <span id="db-stats" class="stats-badge"></span>
       <div id="auth-area"></div>
+      <button class="icon-btn" id="about-btn" title="網站說明">ℹ</button>
       <button class="icon-btn" id="theme-btn" title="切換主題">☀</button>
       <button class="icon-btn" id="today-btn" title="今日更新">🆕</button>
       <button class="icon-btn" id="msg-btn" title="留言板">💬</button>
@@ -133,8 +137,6 @@
           </select>
         </div>
         <div class="toolbar-right">
-          <button class="btn btn-sm" onclick="runCrawler('daily_price')">更新今日股價</button>
-          <button class="btn btn-sm" onclick="runCrawler('monthly_revenue')">更新月營收</button>
           <a class="btn btn-sm btn-csv" href="/api/market/summary.csv" download>⬇ 下載 CSV</a>
         </div>
       </div>
@@ -356,7 +358,9 @@
   </div>
   <div class="status-actions">
     <button class="btn btn-sm" onclick="runCrawler('stock_list')">更新股票清單</button>
-    <button class="btn btn-sm" id="quarterly-btn" onclick="runCrawler('quarterly')">更新季財報</button>
+    <button class="btn btn-sm admin-only hidden" id="quarterly-btn" onclick="runCrawler('quarterly')">更新季財報</button>
+    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('daily_price')">更新今日股價</button>
+    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('monthly_revenue')">更新月營收</button>
   </div>
   <div id="status-logs" class="status-logs"></div>
 </div>
@@ -410,6 +414,56 @@
         <input type="password" id="auth-password" class="form-input" placeholder="至少 6 個字元" autocomplete="current-password">
       </div>
       <button id="auth-submit" class="btn btn-primary" style="width:100%;margin-top:4px">登入</button>
+    </div>
+  </div>
+</div>
+
+<!-- About Modal -->
+<div id="about-modal" class="modal-overlay hidden">
+  <div class="modal-box about-modal-box">
+    <div class="modal-header">
+      <div class="modal-tabs">
+        <span class="modal-tab active about-tab">網站說明</span>
+      </div>
+      <button class="modal-close" id="about-modal-close">✕</button>
+    </div>
+    <div class="modal-body about-body">
+      <h4>📰 自結公告觀察邏輯</h4>
+      <p>
+        每月公告月營收 → 主力吃貨拉抬 → 股價大漲 → 公司發布「自結」公告。
+        自結內容＝之前已公告過的營收＋提前揭露的 EPS。
+        公告後若本益比小於 20 倍，股價極有可能持續上漲。
+      </p>
+
+      <h4>🎯 營收預估股價</h4>
+      <p>
+        本站用上一季營收估算營業成本；當本期月營收公布時，提前推算本期 EPS，
+        再以「本期 EPS × 12 個月 × 20 倍本益比」估出預估股價。
+        若預估股價遠大於目前收盤價，代表這個月可能大賺，該股有可能在主力手中的名單上，等待後續拉升。
+      </p>
+
+      <h4>🤖 複製給 AI</h4>
+      <p>
+        營收飆股清單上方有「複製給 AI」按鈕，會將清單連同分析提示一起複製到剪貼簿，
+        貼到習慣用的 AI（旁邊附 Gemini 連結）做進一步分析，協助剔除非主流股。
+      </p>
+
+      <h4>📊 預估倍數排序</h4>
+      <p>
+        表格的「預估倍數」欄位可點擊排序，找出倍數較大的標的優先觀察；
+        若該股本期為虧損，此欄會留空。
+      </p>
+
+      <h4>💰 起始股價</h4>
+      <p>
+        表格中的「起始股價」是該股月營收公告當天的收盤價，
+        可與旁邊的「收盤價」互相比較，觀察公告後股價的變化幅度。
+      </p>
+
+      <h4>⭐ 自選股</h4>
+      <p>
+        自選股功能需先註冊登入；帳號密碼可任意輸入，系統預設會直接通過。
+      </p>
     </div>
   </div>
 </div>

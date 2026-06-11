@@ -32,6 +32,8 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
 )
 
+ADMIN_USERNAME = 'tom6855'
+
 # ── summary cache ─────────────────────────────────────────────────────────────
 
 _SUMMARY_CACHE_TTL = 300  # seconds
@@ -458,7 +460,9 @@ def api_crawler_status():
 
 @app.route('/api/crawler/run/<task>', methods=['POST'])
 def api_run_crawler(task):
-    if request.remote_addr not in ('127.0.0.1', '::1'):
+    is_local = request.remote_addr in ('127.0.0.1', '::1')
+    is_admin = session.get('username') == ADMIN_USERNAME
+    if not (is_local or is_admin):
         return jsonify({'error': 'forbidden'}), 403
     today = datetime.today()
     date_str = today.strftime('%Y%m%d')
@@ -510,7 +514,11 @@ def api_run_crawler(task):
 def api_auth_me():
     if 'user_id' not in session:
         return jsonify({'user': None})
-    return jsonify({'user': {'id': session['user_id'], 'username': session['username']}})
+    return jsonify({'user': {
+        'id': session['user_id'],
+        'username': session['username'],
+        'is_admin': session['username'] == ADMIN_USERNAME,
+    }})
 
 
 @app.route('/api/auth/register', methods=['POST'])
@@ -562,9 +570,6 @@ def api_auth_logout():
 
 
 # ── message board ─────────────────────────────────────────────────────────────
-
-ADMIN_USERNAME = 'tom6855'
-
 
 def _msg_to_dict(m):
     is_owner = 'user_id' in session and m.user_id == session['user_id']

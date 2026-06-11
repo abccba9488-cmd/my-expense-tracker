@@ -1129,6 +1129,8 @@ async function initAuth() {
 
 function updateAuthUI() {
   const area = document.getElementById('auth-area');
+  const isAdmin = !!(state.user && state.user.is_admin);
+  document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !isAdmin));
   if (state.user) {
     area.innerHTML = `
       <span class="auth-user" title="${state.user.username}">${state.user.username}</span>
@@ -1163,13 +1165,22 @@ function openAuthModal(mode) {
 
 document.getElementById('auth-modal-close').addEventListener('click', () =>
   document.getElementById('auth-modal').classList.add('hidden'));
+
+/* ── About modal ── */
+document.getElementById('about-btn').addEventListener('click', () =>
+  document.getElementById('about-modal').classList.remove('hidden'));
+document.getElementById('about-modal-close').addEventListener('click', () =>
+  document.getElementById('about-modal').classList.add('hidden'));
+document.getElementById('about-modal').addEventListener('click', function(e) {
+  if (e.target === this) this.classList.add('hidden');
+});
 document.getElementById('auth-modal').addEventListener('click', function(e) {
   if (e.target === this) this.classList.add('hidden');
 });
-document.querySelectorAll('.modal-tab').forEach(btn => {
+document.querySelectorAll('#auth-modal .modal-tab').forEach(btn => {
   btn.addEventListener('click', function() {
     _authMode = this.dataset.authTab;
-    document.querySelectorAll('.modal-tab').forEach(t => t.classList.toggle('active', t === this));
+    document.querySelectorAll('#auth-modal .modal-tab').forEach(t => t.classList.toggle('active', t === this));
     document.getElementById('auth-submit').textContent = _authMode === 'login' ? '登入' : '註冊';
     document.getElementById('auth-error').classList.add('hidden');
   });
