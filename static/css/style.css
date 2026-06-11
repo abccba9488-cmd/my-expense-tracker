@@ -351,6 +351,37 @@ table.dataTable tbody td {
 }
 .wl-auth-prompt p { font-size: 15px; margin-bottom: 20px; }
 
+/* ── Message board ── */
+.msg-modal-box { width: 480px; max-width: calc(100vw - 32px); }
+.msg-modal-body {
+  display: flex; flex-direction: column; gap: 12px;
+  height: 60vh; max-height: 520px;
+}
+.msg-list {
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+}
+.msg-empty { text-align: center; color: var(--text2); padding: 40px 0; }
+.msg-item {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px;
+}
+.msg-item-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+  font-size: 12px; color: var(--text2);
+}
+.msg-item-user { font-weight: 600; color: var(--text); }
+.msg-item-time { margin-left: auto; }
+.msg-item-del {
+  background: none; border: none; color: var(--text2);
+  cursor: pointer; font-size: 12px; padding: 0 2px; line-height: 1;
+}
+.msg-item-del:hover { color: var(--neg); }
+.msg-item-content { font-size: 13px; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.msg-input-wrap { display: flex; gap: 8px; align-items: flex-end; }
+.msg-textarea { resize: none; height: 60px; }
+.msg-login-prompt { text-align: center; color: var(--text2); padding: 8px 0; }
+.msg-login-prompt a { color: var(--primary); }
+
 /* ── Star month filter ── */
 .star-month-chk {
   display: flex; align-items: center; gap: 6px;

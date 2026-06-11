@@ -1208,6 +1208,100 @@ document.getElementById('auth-submit').addEventListener('click', async () => {
 
 document.getElementById('wl-login-btn').addEventListener('click', () => openAuthModal('login'));
 
+/* ── Message board ── */
+function _escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function _renderMsgItem(m) {
+  return `
+    <div class="msg-item" data-id="${m.id}">
+      <div class="msg-item-head">
+        <span class="msg-item-user">${_escapeHtml(m.username)}</span>
+        <span class="msg-item-time">${m.created_at}</span>
+        ${m.mine ? '<button class="msg-item-del" title="刪除">✕</button>' : ''}
+      </div>
+      <div class="msg-item-content">${_escapeHtml(m.content)}</div>
+    </div>`;
+}
+
+async function loadMessages() {
+  const listEl = document.getElementById('msg-list');
+  try {
+    const msgs = await fetch('/api/messages').then(r => r.json());
+    listEl.innerHTML = msgs.length
+      ? msgs.map(_renderMsgItem).join('')
+      : '<div class="msg-empty">還沒有留言，搶頭香吧！</div>';
+    listEl.scrollTop = listEl.scrollHeight;
+  } catch {
+    listEl.innerHTML = '<div class="msg-empty">留言載入失敗</div>';
+  }
+}
+
+document.getElementById('msg-list').addEventListener('click', async function(e) {
+  const btn = e.target.closest('.msg-item-del');
+  if (!btn) return;
+  const item = btn.closest('.msg-item');
+  const id = item.dataset.id;
+  try {
+    const resp = await fetch(`/api/messages/${id}`, {method: 'DELETE'}).then(r => r.json());
+    if (resp.ok) item.remove();
+  } catch {}
+});
+
+document.getElementById('msg-btn').addEventListener('click', () => {
+  document.getElementById('msg-modal').classList.remove('hidden');
+  document.getElementById('msg-input-wrap').classList.toggle('hidden', !state.user);
+  document.getElementById('msg-login-prompt').classList.toggle('hidden', !!state.user);
+  loadMessages();
+});
+
+document.getElementById('msg-modal-close').addEventListener('click', () =>
+  document.getElementById('msg-modal').classList.add('hidden'));
+document.getElementById('msg-modal').addEventListener('click', function(e) {
+  if (e.target === this) this.classList.add('hidden');
+});
+
+document.getElementById('msg-login-link').addEventListener('click', () => {
+  document.getElementById('msg-modal').classList.add('hidden');
+  openAuthModal('login');
+});
+
+async function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const content = input.value.trim();
+  if (!content) return;
+  const sendBtn = document.getElementById('msg-send');
+  sendBtn.disabled = true;
+  try {
+    const resp = await fetch('/api/messages', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({content}),
+    }).then(r => r.json());
+    if (resp.error) { showToast(resp.error); return; }
+    const listEl = document.getElementById('msg-list');
+    const empty = listEl.querySelector('.msg-empty');
+    if (empty) empty.remove();
+    listEl.insertAdjacentHTML('beforeend', _renderMsgItem(resp));
+    listEl.scrollTop = listEl.scrollHeight;
+    input.value = '';
+  } catch {
+    showToast('送出失敗，請稍後再試');
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
+document.getElementById('msg-send').addEventListener('click', sendMessage);
+document.getElementById('msg-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
 /* ── Init ── */
 initTheme();
 initNotifications();

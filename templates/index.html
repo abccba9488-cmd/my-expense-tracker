@@ -94,6 +94,7 @@
       <div id="auth-area"></div>
       <button class="icon-btn" id="theme-btn" title="切換主題">☀</button>
       <button class="icon-btn" id="today-btn" title="今日更新">🆕</button>
+      <button class="icon-btn" id="msg-btn" title="留言板">💬</button>
       <button class="icon-btn" id="status-btn" title="爬蟲狀態">⚙</button>
     </div>
   </div>
@@ -371,6 +372,28 @@
 
 <!-- ── TOAST ── -->
 <div id="toast" class="toast hidden"></div>
+
+<!-- Message Board Modal -->
+<div id="msg-modal" class="modal-overlay hidden">
+  <div class="modal-box msg-modal-box">
+    <div class="modal-header">
+      <div class="modal-tabs">
+        <span class="modal-tab active" style="cursor:default">留言板</span>
+      </div>
+      <button class="modal-close" id="msg-modal-close">✕</button>
+    </div>
+    <div class="modal-body msg-modal-body">
+      <div id="msg-list" class="msg-list"></div>
+      <div id="msg-input-wrap" class="msg-input-wrap hidden">
+        <textarea id="msg-input" class="form-input msg-textarea" placeholder="輸入留言…" maxlength="500"></textarea>
+        <button id="msg-send" class="btn btn-primary">送出</button>
+      </div>
+      <div id="msg-login-prompt" class="msg-login-prompt hidden">
+        請先<a href="javascript:void(0)" id="msg-login-link">登入</a>後再留言
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Auth Modal -->
 <div id="auth-modal" class="modal-overlay hidden">

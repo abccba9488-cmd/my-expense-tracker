@@ -16,7 +16,7 @@ import crawler
 import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
-    QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, init_db
+    QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message, init_db
 )
 
 logging.basicConfig(
@@ -559,6 +559,61 @@ def api_auth_login():
 def api_auth_logout():
     session.clear()
     return jsonify({'ok': True})
+
+
+# ── message board ─────────────────────────────────────────────────────────────
+
+def _msg_to_dict(m):
+    return {
+        'id': m.id, 'username': m.username, 'content': m.content,
+        'created_at': m.created_at.strftime('%Y-%m-%d %H:%M'),
+        'mine': 'user_id' in session and m.user_id == session['user_id'],
+    }
+
+
+@app.route('/api/messages')
+def api_messages_get():
+    db = SessionLocal()
+    try:
+        msgs = db.query(Message).order_by(Message.id.desc()).limit(100).all()
+        return jsonify([_msg_to_dict(m) for m in reversed(msgs)])
+    finally:
+        db.close()
+
+
+@app.route('/api/messages', methods=['POST'])
+def api_messages_post():
+    if 'user_id' not in session:
+        return jsonify({'error': 'unauthorized'}), 401
+    content = (request.json or {}).get('content', '').strip()
+    if not content:
+        return jsonify({'error': '留言不得為空'}), 400
+    if len(content) > 500:
+        return jsonify({'error': '留言過長（上限 500 字）'}), 400
+    db = SessionLocal()
+    try:
+        msg = Message(user_id=session['user_id'], username=session['username'], content=content)
+        db.add(msg)
+        db.commit()
+        return jsonify(_msg_to_dict(msg))
+    finally:
+        db.close()
+
+
+@app.route('/api/messages/<int:msg_id>', methods=['DELETE'])
+def api_messages_delete(msg_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'unauthorized'}), 401
+    db = SessionLocal()
+    try:
+        msg = db.query(Message).filter_by(id=msg_id, user_id=session['user_id']).first()
+        if not msg:
+            return jsonify({'error': 'not found'}), 404
+        db.delete(msg)
+        db.commit()
+        return jsonify({'ok': True})
+    finally:
+        db.close()
 
 
 # ── user watchlists ───────────────────────────────────────────────────────────

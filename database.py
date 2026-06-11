@@ -123,6 +123,15 @@ class WatchlistStock(Base):
     stock_code   = Column(String(10), nullable=False)
 
 
+class Message(Base):
+    __tablename__ = 'messages'
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    user_id    = Column(Integer, nullable=False)
+    username   = Column(String(50), nullable=False)
+    content    = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class CrawlerLog(Base):
     __tablename__ = 'crawler_logs'
     id         = Column(Integer, primary_key=True, autoincrement=True)
