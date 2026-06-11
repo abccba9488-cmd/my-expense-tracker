@@ -79,13 +79,17 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `users` | `id` | 會員帳號，`password_hash` 用 werkzeug |
 | `watchlists` | `id` | 屬於某 `user_id`，可多個 |
 | `watchlist_stocks` | `(watchlist_id, stock_code)` | 自選股關聯表 |
+| `messages` | `id` | 全站留言板；`user_id`/`username`/`content`/`created_at` |
 | `crawler_logs` | `id` | status: running \| success \| failed |
 | `schema_migrations` | `name` | 記錄已執行的 migration，防止重複執行 |
 
-`init_db()` 目前執行的 migrations（均用 `schema_migrations` 防重複）：
+`monthly_revenue` / `quarterly_financials` 皆有 `updated_at`（`onupdate=datetime.now`），爬蟲在資料**實際變動**時才手動更新此欄位（用於 `/api/updates/today` 判斷「今日更新」清單）。
+
+`init_db()` 目前執行的 migrations（均用 `schema_migrations` 防重複，或用 try/except ALTER 防重複）：
 1. `ALTER TABLE monthly_revenue ADD COLUMN start_price REAL`
 2. 補填歷史 `start_price` 空值
 3. `q4_annual_to_individual`：將 Q4 從年累計值減去 Q1+Q2+Q3，還原為個別季數值
+4. `ALTER TABLE monthly_revenue / quarterly_financials ADD COLUMN updated_at DATETIME`
 
 ## _SUMMARY_SQL 欄位索引（r[0]–r[16]）
 
@@ -126,13 +130,13 @@ data/stocks.db         SQLite 資料庫（自動建立）
 |------|---------|
 | 股票清單 | 每週日 01:00 |
 | 每日股價 | 週一〜五 14:00 與 15:00（各跑一次，避免單次失敗漏抓） |
-| 月營收 | 每月 1〜10 日 23:00（爬上個月） |
-| Q1 | 5/1〜5/15 23:00 |
-| Q2 | 8/1〜8/14 23:00 |
-| Q3 | 11/1〜11/14 23:00 |
-| Q4 | 隔年 3/1〜3/31 23:00 |
+| 月營收 | 每天 23:00（爬上個月；部分公司公布較晚，每天重抓直到有資料） |
+| Q1 | 5 月每天 23:00（公告期限 5/15） |
+| Q2 | 8 月每天 23:00（公告期限 8/14） |
+| Q3 | 11 月每天 23:00（公告期限 11/14） |
+| Q4 | 隔年 3 月每天 23:00（公告期限 3/31） |
 
-**注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因 OOM/重新部署在 14:00 後重啟），當天該任務會被跳過、不會補跑，需手動觸發 `POST /api/crawler/run/daily_price` 補抓。
+**注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
 手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋。
 
@@ -147,6 +151,7 @@ GET  /api/stocks/<code>/financials 個股季財報
 GET  /api/stats                    DB 統計（stocks/prices/revenues/quarterly 筆數）
 GET  /api/crawler/status           最近 30 筆爬蟲 log
 POST /api/crawler/run/<task>       手動觸發爬蟲（僅限 localhost）
+GET  /api/updates/today            今日更新摘要（股價日期 + 今日有更新的月營收/季財報股票清單）
 
 GET  /api/auth/me                  取得目前登入使用者
 POST /api/auth/register            註冊（自動通過，建立 session）
@@ -159,7 +164,13 @@ PUT  /api/watchlists/<id>          重新命名
 DELETE /api/watchlists/<id>        刪除
 POST /api/watchlists/<id>/stocks   加入股票 {code}
 DELETE /api/watchlists/<id>/stocks/<code>  移除股票
+
+GET  /api/messages                 留言板列表（最新 100 筆，含 can_delete 旗標）
+POST /api/messages                 發表留言（需登入，內容上限 500 字）
+DELETE /api/messages/<id>          刪除留言（本人或 ADMIN_USERNAME）
 ```
+
+`ADMIN_USERNAME`（`app.py`）為留言板管理員帳號，可刪除任何人的留言。
 
 ## 部署（Zeabur）
 
@@ -262,3 +273,8 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 ### 通知系統
 
 每 15 秒 poll `/api/crawler/status`，偵測到新 `success` log 時用 `Notification` API 送桌面通知；若權限被拒則改用 Toast。
+
+### 固定面板 / 抽屜
+
+- `#status-panel`（⚙ 爬蟲狀態）、`#today-panel`（🆕 今日更新，呼叫 `/api/updates/today`）：右下／左下角浮動面板，`.hidden` 切換顯示。
+- `#msg-panel`（💬 留言板）：右側滑出抽屜（`.msg-drawer.open` 切換），`loadMessages()` 載入、`sendMessage()` 發表、依 `can_delete` 顯示刪除按鈕。
