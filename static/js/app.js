@@ -1221,7 +1221,7 @@ function _renderMsgItem(m) {
       <div class="msg-item-head">
         <span class="msg-item-user">${_escapeHtml(m.username)}</span>
         <span class="msg-item-time">${m.created_at}</span>
-        ${m.mine ? '<button class="msg-item-del" title="刪除">✕</button>' : ''}
+        ${m.can_delete ? '<button class="msg-item-del" title="刪除">✕</button>' : ''}
       </div>
       <div class="msg-item-content">${_escapeHtml(m.content)}</div>
     </div>`;
@@ -1252,20 +1252,17 @@ document.getElementById('msg-list').addEventListener('click', async function(e) 
 });
 
 document.getElementById('msg-btn').addEventListener('click', () => {
-  document.getElementById('msg-modal').classList.remove('hidden');
+  document.getElementById('msg-panel').classList.toggle('open');
   document.getElementById('msg-input-wrap').classList.toggle('hidden', !state.user);
   document.getElementById('msg-login-prompt').classList.toggle('hidden', !!state.user);
-  loadMessages();
+  if (document.getElementById('msg-panel').classList.contains('open')) loadMessages();
 });
 
-document.getElementById('msg-modal-close').addEventListener('click', () =>
-  document.getElementById('msg-modal').classList.add('hidden'));
-document.getElementById('msg-modal').addEventListener('click', function(e) {
-  if (e.target === this) this.classList.add('hidden');
-});
+document.getElementById('msg-panel-close').addEventListener('click', () =>
+  document.getElementById('msg-panel').classList.remove('open'));
 
 document.getElementById('msg-login-link').addEventListener('click', () => {
-  document.getElementById('msg-modal').classList.add('hidden');
+  document.getElementById('msg-panel').classList.remove('open');
   openAuthModal('login');
 });
 

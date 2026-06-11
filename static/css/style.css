@@ -351,14 +351,24 @@ table.dataTable tbody td {
 }
 .wl-auth-prompt p { font-size: 15px; margin-bottom: 20px; }
 
-/* ── Message board ── */
-.msg-modal-box { width: 480px; max-width: calc(100vw - 32px); }
-.msg-modal-body {
-  display: flex; flex-direction: column; gap: 12px;
-  height: 60vh; max-height: 520px;
+/* ── Message board (right-side drawer) ── */
+.msg-drawer {
+  position: fixed; top: 0; right: 0; height: 100vh; width: 360px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg2); border-left: 1px solid var(--border);
+  box-shadow: var(--card-shadow); z-index: 400;
+  display: flex; flex-direction: column;
+  transform: translateX(100%); transition: transform .25s ease;
+}
+.msg-drawer.open { transform: translateX(0); }
+.msg-drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  font-weight: 600; font-size: 14px; flex-shrink: 0;
 }
 .msg-list {
-  flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  flex: 1; overflow-y: auto; padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 10px;
 }
 .msg-empty { text-align: center; color: var(--text2); padding: 40px 0; }
 .msg-item {
@@ -377,10 +387,20 @@ table.dataTable tbody td {
 }
 .msg-item-del:hover { color: var(--neg); }
 .msg-item-content { font-size: 13px; color: var(--text); white-space: pre-wrap; word-break: break-word; }
-.msg-input-wrap { display: flex; gap: 8px; align-items: flex-end; }
+.msg-input-wrap {
+  display: flex; gap: 8px; align-items: flex-end; flex-shrink: 0;
+  padding: 12px 16px; border-top: 1px solid var(--border);
+}
 .msg-textarea { resize: none; height: 60px; }
-.msg-login-prompt { text-align: center; color: var(--text2); padding: 8px 0; }
+.msg-login-prompt {
+  text-align: center; color: var(--text2); padding: 12px 16px;
+  border-top: 1px solid var(--border); flex-shrink: 0;
+}
 .msg-login-prompt a { color: var(--primary); }
+
+@media (max-width: 480px) {
+  .msg-drawer { width: 100vw; max-width: 100vw; }
+}
 
 /* ── Star month filter ── */
 .star-month-chk {

@@ -563,11 +563,16 @@ def api_auth_logout():
 
 # ── message board ─────────────────────────────────────────────────────────────
 
+ADMIN_USERNAME = 'tom6855'
+
+
 def _msg_to_dict(m):
+    is_owner = 'user_id' in session and m.user_id == session['user_id']
+    is_admin = session.get('username') == ADMIN_USERNAME
     return {
         'id': m.id, 'username': m.username, 'content': m.content,
         'created_at': m.created_at.strftime('%Y-%m-%d %H:%M'),
-        'mine': 'user_id' in session and m.user_id == session['user_id'],
+        'can_delete': is_owner or is_admin,
     }
 
 
@@ -606,9 +611,13 @@ def api_messages_delete(msg_id):
         return jsonify({'error': 'unauthorized'}), 401
     db = SessionLocal()
     try:
-        msg = db.query(Message).filter_by(id=msg_id, user_id=session['user_id']).first()
+        msg = db.query(Message).filter_by(id=msg_id).first()
         if not msg:
             return jsonify({'error': 'not found'}), 404
+        is_owner = msg.user_id == session['user_id']
+        is_admin = session.get('username') == ADMIN_USERNAME
+        if not (is_owner or is_admin):
+            return jsonify({'error': 'unauthorized'}), 403
         db.delete(msg)
         db.commit()
         return jsonify({'ok': True})
