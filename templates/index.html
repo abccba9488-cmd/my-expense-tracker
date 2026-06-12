@@ -95,10 +95,11 @@
     <div class="nav-right">
       <span id="db-stats" class="stats-badge"></span>
       <div id="auth-area"></div>
-      <button class="icon-btn" id="about-btn" title="網站說明">ℹ</button>
+      <button class="icon-btn" id="about-btn" title="網站說明">ℹ<span class="unread-dot hidden" id="about-dot"></span></button>
       <button class="icon-btn" id="theme-btn" title="切換主題">☀</button>
       <button class="icon-btn" id="today-btn" title="今日更新">🆕</button>
-      <button class="icon-btn" id="msg-btn" title="留言板">💬</button>
+      <button class="icon-btn" id="msg-btn" title="留言板">💬<span class="unread-dot hidden" id="msg-dot"></span></button>
+      <button class="icon-btn admin-only hidden" id="admin-btn" title="會員管理">👥</button>
       <button class="icon-btn" id="status-btn" title="爬蟲狀態">⚙</button>
     </div>
   </div>
@@ -372,6 +373,15 @@
     <button class="icon-btn" onclick="closeTodayPanel()">✕</button>
   </div>
   <div id="today-logs" class="status-logs"></div>
+</div>
+
+<!-- ── 會員管理面板 ── -->
+<div id="admin-panel" class="status-panel admin-panel hidden">
+  <div class="status-panel-header">
+    <span>會員管理 <span id="admin-user-count" class="stats-badge"></span></span>
+    <button class="icon-btn" id="admin-panel-close">✕</button>
+  </div>
+  <div id="admin-user-list" class="admin-user-list"></div>
 </div>
 
 <!-- ── TOAST ── -->

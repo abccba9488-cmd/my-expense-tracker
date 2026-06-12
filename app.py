@@ -9,7 +9,7 @@ from datetime import date, timedelta, datetime
 import csv
 import io
 from flask import Flask, jsonify, render_template, request, Response, session
-from sqlalchemy import desc, text
+from sqlalchemy import desc, text, func as sa_func
 from werkzeug.security import generate_password_hash, check_password_hash
 
 import crawler
@@ -33,6 +33,10 @@ app.config.update(
 )
 
 ADMIN_USERNAME = 'tom6855'
+
+
+def _is_admin():
+    return session.get('username') == ADMIN_USERNAME
 
 # ── summary cache ─────────────────────────────────────────────────────────────
 
@@ -725,6 +729,55 @@ def api_wl_remove_stock(wl_id, code):
         if not db.query(Watchlist).filter_by(id=wl_id, user_id=session['user_id']).first():
             return jsonify({'error': 'not found'}), 404
         db.query(WatchlistStock).filter_by(watchlist_id=wl_id, stock_code=code).delete()
+        db.commit()
+        return jsonify({'ok': True})
+    finally:
+        db.close()
+
+
+# ── admin ──────────────────────────────────────────────────────────────────────
+
+@app.route('/api/admin/users')
+def api_admin_users():
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        users = db.query(User).order_by(User.id).all()
+        wl_counts = dict(
+            db.query(Watchlist.user_id, sa_func.count(Watchlist.id))
+            .group_by(Watchlist.user_id).all()
+        )
+        return jsonify({
+            'total': len(users),
+            'users': [{
+                'id': u.id,
+                'username': u.username,
+                'created_at': u.created_at.strftime('%Y-%m-%d %H:%M'),
+                'watchlist_count': wl_counts.get(u.id, 0),
+            } for u in users],
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
+def api_admin_delete_user(user_id):
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        if not user:
+            return jsonify({'error': 'not found'}), 404
+        if user.username == ADMIN_USERNAME:
+            return jsonify({'error': '無法刪除管理員帳號'}), 400
+        wl_ids = [w.id for w in db.query(Watchlist).filter_by(user_id=user_id).all()]
+        if wl_ids:
+            db.query(WatchlistStock).filter(WatchlistStock.watchlist_id.in_(wl_ids)).delete(synchronize_session=False)
+            db.query(Watchlist).filter_by(user_id=user_id).delete()
+        db.query(Message).filter_by(user_id=user_id).delete()
+        db.delete(user)
         db.commit()
         return jsonify({'ok': True})
     finally:

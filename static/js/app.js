@@ -1167,12 +1167,68 @@ document.getElementById('auth-modal-close').addEventListener('click', () =>
   document.getElementById('auth-modal').classList.add('hidden'));
 
 /* ── About modal ── */
-document.getElementById('about-btn').addEventListener('click', () =>
-  document.getElementById('about-modal').classList.remove('hidden'));
+function initAboutDot() {
+  if (!localStorage.getItem('about_seen')) {
+    document.getElementById('about-dot').classList.remove('hidden');
+  }
+}
+document.getElementById('about-btn').addEventListener('click', () => {
+  document.getElementById('about-modal').classList.remove('hidden');
+  localStorage.setItem('about_seen', '1');
+  document.getElementById('about-dot').classList.add('hidden');
+});
 document.getElementById('about-modal-close').addEventListener('click', () =>
   document.getElementById('about-modal').classList.add('hidden'));
 document.getElementById('about-modal').addEventListener('click', function(e) {
   if (e.target === this) this.classList.add('hidden');
+});
+
+/* ── Admin user panel ── */
+document.getElementById('admin-btn').addEventListener('click', () => {
+  const panel = document.getElementById('admin-panel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) loadAdminUsers();
+});
+
+document.getElementById('admin-panel-close').addEventListener('click', () =>
+  document.getElementById('admin-panel').classList.add('hidden'));
+
+async function loadAdminUsers() {
+  const listEl = document.getElementById('admin-user-list');
+  try {
+    const data = await fetch('/api/admin/users').then(r => r.json());
+    document.getElementById('admin-user-count').textContent = `共 ${data.total} 人`;
+    listEl.innerHTML = data.users.map(u => `
+      <div class="admin-user-item" data-id="${u.id}">
+        <span class="admin-user-name">${_escapeHtml(u.username)}</span>
+        <span class="admin-user-meta">自選股 ${u.watchlist_count} 組　註冊於 ${u.created_at}</span>
+        <button class="admin-user-del" title="刪除帳號">✕</button>
+      </div>
+    `).join('');
+  } catch {
+    listEl.innerHTML = '<div class="msg-empty">載入失敗</div>';
+  }
+}
+
+document.getElementById('admin-user-list').addEventListener('click', async function(e) {
+  const btn = e.target.closest('.admin-user-del');
+  if (!btn) return;
+  const item = btn.closest('.admin-user-item');
+  const name = item.querySelector('.admin-user-name').textContent;
+  if (!confirm(`確定要刪除帳號「${name}」？將同時移除其自選股清單。`)) return;
+  try {
+    const resp = await fetch(`/api/admin/users/${item.dataset.id}`, {method: 'DELETE'}).then(r => r.json());
+    if (resp.ok) {
+      item.remove();
+      const countEl = document.getElementById('admin-user-count');
+      const n = Number(countEl.textContent.match(/\d+/)?.[0] || 0);
+      countEl.textContent = `共 ${Math.max(0, n - 1)} 人`;
+    } else {
+      showToast(resp.error || '刪除失敗');
+    }
+  } catch {
+    showToast('刪除失敗');
+  }
 });
 document.getElementById('auth-modal').addEventListener('click', function(e) {
   if (e.target === this) this.classList.add('hidden');
@@ -1246,9 +1302,25 @@ async function loadMessages() {
       ? msgs.map(_renderMsgItem).join('')
       : '<div class="msg-empty">還沒有留言，搶頭香吧！</div>';
     listEl.scrollTop = listEl.scrollHeight;
+    _markMessagesSeen(msgs);
   } catch {
     listEl.innerHTML = '<div class="msg-empty">留言載入失敗</div>';
   }
+}
+
+function _markMessagesSeen(msgs) {
+  if (msgs.length) localStorage.setItem('msg_last_seen_id', String(msgs[msgs.length - 1].id));
+  document.getElementById('msg-dot').classList.add('hidden');
+}
+
+async function checkUnreadMessages() {
+  try {
+    const msgs = await fetch('/api/messages').then(r => r.json());
+    if (!msgs.length) return;
+    const lastSeen = Number(localStorage.getItem('msg_last_seen_id') || 0);
+    const latest = msgs[msgs.length - 1].id;
+    if (latest > lastSeen) document.getElementById('msg-dot').classList.remove('hidden');
+  } catch {}
 }
 
 document.getElementById('msg-list').addEventListener('click', async function(e) {
@@ -1294,6 +1366,7 @@ async function sendMessage() {
     if (empty) empty.remove();
     listEl.insertAdjacentHTML('beforeend', _renderMsgItem(resp));
     listEl.scrollTop = listEl.scrollHeight;
+    _markMessagesSeen([resp]);
     input.value = '';
   } catch {
     showToast('送出失敗，請稍後再試');
@@ -1313,7 +1386,10 @@ document.getElementById('msg-input').addEventListener('keydown', e => {
 /* ── Init ── */
 initTheme();
 initNotifications();
+initAboutDot();
 loadMarketSummary();
 initAuth();
 setInterval(loadStats, 60000);
 initNotifyPoller();
+checkUnreadMessages();
+setInterval(checkUnreadMessages, 15000);
