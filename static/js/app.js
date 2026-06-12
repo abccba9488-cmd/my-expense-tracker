@@ -180,7 +180,7 @@ function renderStockTable() {
       order:      [[0, 'asc']],
       language:   dtLang(),
       columnDefs: [
-        { targets: [3, 4, 5, 6, 8, 9, 10, 11, 12], className: 'dt-right' },
+        { targets: [3, 4, 5, 6, 8, 9, 10, 11, 12], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 7, 13, 14], className: 'dt-left' },
       ],
     });
@@ -192,6 +192,15 @@ function renderStockTable() {
     });
   }
 }
+
+// Custom numeric sort: strips HTML tags and formatting (%, x, commas) from
+// rendered cell content; '—' / empty sorts as -Infinity (always last when sorting desc).
+$.fn.dataTable.ext.type.order['num-cell-pre'] = function(data) {
+  const text = String(data).replace(/<[^>]*>/g, '').trim();
+  if (text === '' || text === '—') return -Infinity;
+  const num = parseFloat(text.replace(/[^0-9.\-]/g, ''));
+  return isNaN(num) ? -Infinity : num;
+};
 
 function dtLang() {
   return {
@@ -672,7 +681,7 @@ function renderStarTable() {
       order: [[6, 'desc']],
       language: dtLang(),
       columnDefs: [
-        { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12], className: 'dt-right' },
+        { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 8], className: 'dt-left' },
       ],
     });
@@ -845,7 +854,7 @@ function renderWlTable() {
       data: rows, pageLength: 25, order: [], language: dtLang(), destroy: true,
       columnDefs: [
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
-        { targets: [4,5,6,7,8,10,11,12,13], className: 'dt-right' },
+        { targets: [4,5,6,7,8,10,11,12,13], className: 'dt-right', type: 'num-cell' },
         { targets: [1,2,3,9,14],            className: 'dt-left' },
       ],
     });
