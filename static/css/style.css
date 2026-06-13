@@ -512,15 +512,41 @@ table.dataTable tbody td {
   table.dataTable thead th { font-size: 11px; padding: 8px 6px !important; }
   table.dataTable tbody td { font-size: 12px; padding: 8px 6px !important; }
 
-  #stocks-table th:first-child, #stocks-table td:first-child,
-  #star-table th:first-child,   #star-table td:first-child,
-  #wl-table th:first-child,     #wl-table td:first-child {
+  /* Pin 代號 + 名稱 columns so they stay visible while scrolling horizontally */
+  #stocks-table th:nth-child(1), #stocks-table td:nth-child(1),
+  #star-table th:nth-child(1),   #star-table td:nth-child(1) {
+    position: sticky; left: 0; z-index: 2;
+    width: 50px; max-width: 50px; overflow: hidden; text-overflow: ellipsis;
+  }
+  #stocks-table th:nth-child(2), #stocks-table td:nth-child(2),
+  #star-table th:nth-child(2),   #star-table td:nth-child(2) {
+    position: sticky; left: 50px; z-index: 2;
+    width: 64px; max-width: 64px; overflow: hidden; text-overflow: ellipsis;
+    border-right: 1px solid var(--border);
+  }
+
+  /* wl-table has an extra leading 移除 column before 代號/名稱 */
+  #wl-table th:nth-child(1), #wl-table td:nth-child(1) {
     position: sticky; left: 0; z-index: 2;
   }
-  #stocks-table th:first-child, #star-table th:first-child, #wl-table th:first-child {
+  #wl-table th:nth-child(2), #wl-table td:nth-child(2) {
+    position: sticky; left: 32px; z-index: 2;
+    width: 50px; max-width: 50px; overflow: hidden; text-overflow: ellipsis;
+  }
+  #wl-table th:nth-child(3), #wl-table td:nth-child(3) {
+    position: sticky; left: 82px; z-index: 2;
+    width: 64px; max-width: 64px; overflow: hidden; text-overflow: ellipsis;
+    border-right: 1px solid var(--border);
+  }
+
+  #stocks-table th:nth-child(1), #stocks-table th:nth-child(2),
+  #star-table th:nth-child(1),   #star-table th:nth-child(2),
+  #wl-table th:nth-child(1), #wl-table th:nth-child(2), #wl-table th:nth-child(3) {
     background: var(--bg3) !important;
   }
-  #stocks-table td:first-child, #star-table td:first-child, #wl-table td:first-child {
+  #stocks-table td:nth-child(1), #stocks-table td:nth-child(2),
+  #star-table td:nth-child(1),   #star-table td:nth-child(2),
+  #wl-table td:nth-child(1), #wl-table td:nth-child(2), #wl-table td:nth-child(3) {
     background: var(--bg2) !important;
   }
 }
