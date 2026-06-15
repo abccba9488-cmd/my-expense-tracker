@@ -8,7 +8,7 @@ from datetime import date, timedelta, datetime
 
 import csv
 import io
-from flask import Flask, jsonify, render_template, request, Response, session
+from flask import Flask, jsonify, render_template, request, Response, session, send_from_directory
 from sqlalchemy import desc, text, func as sa_func
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -138,6 +138,16 @@ def robots_txt():
         f'Sitemap: {request.url_root}sitemap.xml\n'
     )
     return Response(content, mimetype='text/plain')
+
+
+@app.route('/manifest.json')
+def manifest_json():
+    return send_from_directory('static', 'manifest.json')
+
+
+@app.route('/sw.js')
+def service_worker():
+    return send_from_directory('static', 'sw.js')
 
 
 @app.route('/sitemap.xml')

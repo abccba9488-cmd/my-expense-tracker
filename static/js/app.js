@@ -1392,6 +1392,13 @@ document.getElementById('msg-input').addEventListener('keydown', e => {
   }
 });
 
+/* ── PWA: service worker ── */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js');
+  });
+}
+
 /* ── Init ── */
 initTheme();
 initNotifications();
