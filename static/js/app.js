@@ -1399,8 +1399,43 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+/* ── PWA: install button ── */
+let deferredInstallPrompt = null;
+
+function initInstallButton() {
+  const btn = document.getElementById('install-app-btn');
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  if (isStandalone) return;
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent)) btn.classList.remove('hidden');
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  document.getElementById('install-app-btn').classList.remove('hidden');
+});
+
+window.addEventListener('appinstalled', () => {
+  document.getElementById('install-app-btn').classList.add('hidden');
+  deferredInstallPrompt = null;
+});
+
+function installApp() {
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt.userChoice.then(() => { deferredInstallPrompt = null; });
+    return;
+  }
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
+    showToast('請點擊 Safari 下方的分享按鈕，選擇「加入主畫面」', 4000);
+  } else {
+    showToast('此瀏覽器不支援安裝，請改用 Chrome', 3000);
+  }
+}
+
 /* ── Init ── */
 initTheme();
+initInstallButton();
 initNotifications();
 initAboutDot();
 loadMarketSummary();
