@@ -47,6 +47,9 @@ database.py     SQLAlchemy models + SQLite 設定 + migration
 templates/index.html   單頁前端（DataTables + Chart.js，CDN）
 static/css/style.css   CSS 設計代幣（dark/light theme）
 static/js/app.js       前端邏輯（vanilla JS）
+static/manifest.json   PWA manifest
+static/sw.js           PWA service worker
+static/img/icons/      PWA 圖示（generate_pwa_icons.py 產生）
 data/stocks.db         SQLite 資料庫（自動建立）
 ```
 
@@ -239,6 +242,16 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 | `open / high / low / volume` | `daily_prices` | 完整 OHLCV |
 
 新增分析功能時可直接從這些欄位取值，不需重新爬蟲。
+
+## PWA
+
+- `/manifest.json`、`/sw.js`：`app.py` 透過 `send_from_directory('static', ...)` 從根路徑提供（scope 需為 `/`，放在 `/static/` 下無法註冊根 scope 的 service worker）。
+- `static/sw.js`：只快取 `/static/` 下的資源（cache-first），`/api/` 一律直連網路，確保資料新鮮度。
+- 圖示（`static/img/icons/`）由 `generate_pwa_icons.py` 產生（K 線圖樣式），含 `icon-192/512`、`maskable-512`、`apple-touch-icon`、`favicon.ico`；改設計後重新執行該腳本即可。
+- `display: standalone`（manifest.json）：安裝後無網址列，但保留手機狀態列。
+- 安裝按鈕：`#install-app-btn`（list view，CSV 下載旁），`app.js` 的 `initInstallButton()` / `installApp()`：
+  - Chrome/Android：監聽 `beforeinstallprompt`，點擊觸發原生安裝對話框
+  - iOS Safari：無原生 API，顯示 toast 提示「加入主畫面」
 
 ## 前端架構
 
