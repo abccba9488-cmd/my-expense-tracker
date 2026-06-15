@@ -236,7 +236,7 @@ async function loadStockDetail(code) {
   // Stock info
   const info = state.allData.find(s => s.code === code) || {};
   document.getElementById('d-name').textContent     = info.name || code;
-  document.getElementById('d-code').textContent     = code;
+  document.getElementById('d-code').textContent     = code + (info.name ? ` ${info.name}` : '');
   document.getElementById('d-market').textContent   = info.market || '';
   document.getElementById('d-industry').textContent = info.industry || '';
 
