@@ -451,18 +451,43 @@ def api_financials(code):
         db.close()
 
 
+# ── API: debug ───────────────────────────────────────────────────────────────
+
+@app.route('/api/test/ai')
+def api_test_ai():
+    """Debug: verify OpenRouter API key and connectivity."""
+    import os, requests as _req
+    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    if not api_key:
+        return jsonify({'ok': False, 'error': 'OPENROUTER_API_KEY not set'}), 500
+    model = os.environ.get('OPENROUTER_MODEL', 'google/gemini-3.1-flash-lite-preview')
+    try:
+        resp = _req.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={'model': model, 'messages': [{'role': 'user', 'content': '回覆 OK'}]},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        reply = resp.json()['choices'][0]['message']['content']
+        return jsonify({'ok': True, 'model': model, 'reply': reply})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 # ── API: announcements ───────────────────────────────────────────────────────
 
 @app.route('/api/announcements/today')
 def api_announcements_today():
     db = SessionLocal()
     try:
-        today = date.today()
+        from datetime import timedelta
+        since = date.today() - timedelta(days=7)
         rows = (
             db.query(Announcement, Stock.name)
             .outerjoin(Stock, Stock.code == Announcement.stock_code)
-            .filter(Announcement.announce_date == today)
-            .order_by(desc(Announcement.announce_time))
+            .filter(Announcement.announce_date >= since)
+            .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
             .all()
         )
         return jsonify([{
