@@ -278,6 +278,10 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。
 
+### 重要 gotcha：jQuery `.data()` 型別轉換
+
+jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `number`（`1218`），導致 `state.allData.find(s => s.code === code)` 嚴格比對失敗（API 回傳的 `code` 是 `string`）。`loadStockDetail(code)` 入口第一行已做 `code = String(code)` 正規化，**所有呼叫 `loadStockDetail` 的地方不必再轉型**，但若未來新增其他用 `.data()` 取得 code 再做 find 的邏輯，需注意同樣問題。
+
 ### 飆股 / 自選股附加功能
 
 - `downloadStarCsv()`：下載飆股清單為 CSV
