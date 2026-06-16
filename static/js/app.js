@@ -481,8 +481,10 @@ document.querySelectorAll('.page-tab').forEach(btn => {
     document.getElementById('list-view').classList.toggle('active', state.activeTab === 'list');
     document.getElementById('star-view').classList.toggle('active', state.activeTab === 'star');
     document.getElementById('watchlist-view').classList.toggle('active', state.activeTab === 'watchlist');
+    document.getElementById('ann-view').classList.toggle('active', state.activeTab === 'ann');
     if (state.activeTab === 'star') renderStarTable();
     if (state.activeTab === 'watchlist') renderWatchlistView();
+    if (state.activeTab === 'ann') loadAnnouncements();
   });
 });
 
@@ -699,6 +701,7 @@ function showDetailView() {
   document.getElementById('list-view').classList.remove('active');
   document.getElementById('star-view').classList.remove('active');
   document.getElementById('watchlist-view').classList.remove('active');
+  document.getElementById('ann-view').classList.remove('active');
   document.getElementById('detail-view').classList.add('active');
   document.getElementById('page-tabs-bar').classList.add('hidden');
   window.scrollTo(0, 0);
@@ -707,7 +710,7 @@ function showDetailView() {
 function showListView() {
   document.getElementById('detail-view').classList.remove('active');
   document.getElementById('page-tabs-bar').classList.remove('hidden');
-  const viewMap = { star: 'star-view', watchlist: 'watchlist-view' };
+  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' };
   document.getElementById(viewMap[state.activeTab] || 'list-view').classList.add('active');
   state.currentCode = null;
 }
@@ -997,26 +1000,19 @@ async function runCrawler(task) {
   }
 }
 
-/* ── Announcement panel ── */
-document.getElementById('ann-btn').addEventListener('click', () => {
-  const panel = document.getElementById('ann-panel');
-  panel.classList.toggle('hidden');
-  if (!panel.classList.contains('hidden')) loadAnnouncements();
-});
-
-document.getElementById('ann-panel-close').addEventListener('click', () => {
-  document.getElementById('ann-panel').classList.add('hidden');
-});
-
+/* ── Announcement view ── */
 async function loadAnnouncements() {
+  const el = document.getElementById('ann-list');
+  if (!el) return;
+  el.innerHTML = '<div class="ann-empty">載入中…</div>';
   try {
     const data = await fetch('/api/announcements/today').then(r => r.json());
-    const el = document.getElementById('ann-list');
+    const countEl = document.getElementById('ann-count');
+    if (countEl) countEl.textContent = `共 ${data.length} 筆`;
     if (!data.length) {
       el.innerHTML = '<div class="ann-empty">今日無 EPS 相關公告</div>';
       return;
     }
-    document.getElementById('ann-dot').classList.remove('hidden');
     el.innerHTML = data.map(a => `
       <div class="ann-item">
         <div class="ann-header">
@@ -1476,7 +1472,6 @@ function installApp() {
 initTheme();
 initInstallButton();
 initNotifications();
-loadAnnouncements();
 initAboutDot();
 loadMarketSummary();
 initAuth();

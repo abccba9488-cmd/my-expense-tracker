@@ -300,9 +300,9 @@ table.dataTable tbody td {
 }
 .admin-user-del:hover { color: var(--neg); }
 
-/* ── Announcement panel ── */
-.ann-panel { right: auto; left: 16px; bottom: 56px; width: 420px; max-height: 560px; }
+/* ── Announcement view ── */
 .ann-list { overflow-y: auto; padding: 10px 14px; flex: 1; }
+.ann-view-list { max-width: 800px; margin: 0 auto; overflow-y: visible; }
 .ann-item {
   padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px;
 }
