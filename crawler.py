@@ -1,4 +1,5 @@
 import json as _json
+import os
 import re
 import time
 import random
@@ -17,7 +18,7 @@ _session.verify = False
 
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
-    QuarterlyFinancial, CrawlerLog
+    QuarterlyFinancial, CrawlerLog, Announcement
 )
 
 logger = logging.getLogger(__name__)
@@ -774,6 +775,265 @@ def crawl_quarterly_financials(year: int, quarter: int):
         raise
     finally:
         db.close()
+
+
+# ── announcements ─────────────────────────────────────────────────────────────
+
+_ANN_BASE = 'https://mopsov.twse.com.tw/mops/web'
+
+_AI_SYSTEM_PROMPT = """你是台灣股市財務分析師。根據公司公告內容給出投資評級與分析。
+
+評級標準（必須嚴格遵守）：
+🔴 強烈買進：路徑A = PE≤20 + EPS年增 + 營收不衰退；路徑B = PE>20 + 熱門題材 + (EPS年增>30% 或 EPS成長優於營收)
+🟠 建議買進：EPS/營收正成長 + PE≤30 + 基本面健康
+🟡 一般觀望：成長有限(年增<10%) 或 PE>30缺題材 或 虧損但收窄
+🟢 需要小心：營收/EPS年減 或 虧轉盈 或 衰退>30%
+
+必須以 JSON 格式輸出，所有欄位皆為必填：
+{
+  "ai_rating": "🔴 強烈買進",
+  "ai_analysis": "4段分析文字（評級+數據、成長動能、產業風險、結論）",
+  "monthly_eps": 1.23,
+  "eps_yoy": 45.6,
+  "estimated_pe": 18.5
+}
+
+規則：
+- ai_rating 只能是以上四種之一
+- monthly_eps/eps_yoy/estimated_pe 無法計算時填 null
+- 禁用 [1][2][3] 引用標記
+- ai_analysis 使用純文字，段落間用\\n分隔"""
+
+
+def _post_form(url, data, *, headers=None, timeout=30, retries=3):
+    """POST with form-encoded data (for MOPS HTML pages)."""
+    global _req_count
+    h = {
+        'User-Agent': _get_ua(),
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/html,application/xhtml+xml,*/*;q=0.9',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate',
+        'Referer': f'{_ANN_BASE}/t05sr01_1',
+    }
+    if headers:
+        h.update(headers)
+    _req_count += 1
+    if _req_count % _SESSION_REFRESH_EVERY == 0:
+        _session.cookies.clear()
+    for attempt in range(retries):
+        try:
+            resp = _session.post(url, data=data, headers=h, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            if attempt == retries - 1:
+                raise
+            wait = (attempt + 1) * random.uniform(5, 10)
+            logger.warning('Form POST error %s: %s — retry in %.1fs', url, e, wait)
+            time.sleep(wait)
+            continue
+        if resp.status_code == 429 or resp.status_code >= 500:
+            wait = (attempt + 1) * random.uniform(5, 10)
+            logger.warning('HTTP %d on form POST %s — retry in %.1fs', resp.status_code, url, wait)
+            time.sleep(wait)
+            continue
+        return resp
+    return resp
+
+
+def _analyze_with_ai(stock_code, stock_name, subject, content):
+    """Call OpenRouter (perplexity/sonar) to rate and analyze an announcement."""
+    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    if not api_key:
+        return None, None, None, None, None
+
+    user_msg = f'股票：{stock_name}（{stock_code}）\n主旨：{subject}\n\n公告說明：\n{content[:3000]}'
+    try:
+        resp = requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'https://stock-market.zeabur.app',
+            },
+            json={
+                'model': 'perplexity/sonar',
+                'messages': [
+                    {'role': 'system', 'content': _AI_SYSTEM_PROMPT},
+                    {'role': 'user',   'content': user_msg},
+                ],
+                'response_format': {'type': 'json_object'},
+            },
+            timeout=90,
+        )
+        resp.raise_for_status()
+        j = _json.loads(resp.json()['choices'][0]['message']['content'])
+        return (
+            j.get('ai_rating'),
+            j.get('ai_analysis'),
+            _parse_num(str(j.get('monthly_eps', '') or '')),
+            _parse_num(str(j.get('eps_yoy', '') or '')),
+            _parse_num(str(j.get('estimated_pe', '') or '')),
+        )
+    except Exception as e:
+        logger.warning('AI analysis failed for %s: %s', stock_code, e)
+        return None, None, None, None, None
+
+
+def crawl_announcements(date_str=None):
+    """Crawl MOPS重大訊息 for announcements containing EPS data."""
+    if date_str is None:
+        d = date.today() - timedelta(days=1)
+        # Skip weekends
+        while d.weekday() >= 5:
+            d -= timedelta(days=1)
+        date_str = d.strftime('%Y%m%d')
+
+    dt = datetime.strptime(date_str, '%Y%m%d').date()
+    roc_year  = str(dt.year - 1911)
+    month_str = f'{dt.month:02d}'
+    day_str   = f'{dt.day:02d}'
+
+    _log('announcements', 'running', date_str)
+    logger.info('Crawling announcements for %s', date_str)
+
+    try:
+        # Init session
+        _get(f'{_ANN_BASE}/t05sr01_1', timeout=20)
+        _jitter(1)
+
+        # Fetch announcement list for the date
+        list_resp = _post_form(
+            f'{_ANN_BASE}/ajax_t05st02',
+            data={
+                'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
+                'TYPEK': 'all',
+                'year': roc_year, 'month': month_str, 'day': day_str,
+            },
+            timeout=30,
+        )
+        list_resp.encoding = 'utf-8'
+        soup = BeautifulSoup(list_resp.text, 'lxml')
+
+        # Extract onclick params to build detail URLs
+        onclick_re = re.compile(
+            r"SEQ_NO\.value='(\d+)'.*?SPOKE_TIME\.value='(\d+)'.*?"
+            r"SPOKE_DATE\.value='(\d+)'.*?COMPANY_ID\.value='([^']+)'",
+            re.DOTALL,
+        )
+        links = []
+        for tag in soup.find_all(onclick=True):
+            m = onclick_re.search(tag['onclick'])
+            if m:
+                seq, spoke_time, spoke_date, company_id = m.groups()
+                links.append({
+                    'seq_no': seq,
+                    'url': (
+                        f'{_ANN_BASE}/ajax_t05sr01_1'
+                        f'?firstin=true&stp=1&step=1'
+                        f'&SEQ_NO={seq}&SPOKE_TIME={spoke_time}'
+                        f'&SPOKE_DATE={spoke_date}&COMPANY_ID={company_id}'
+                    ),
+                })
+
+        if not links:
+            _log('announcements', 'success', f'{date_str}: no announcements found')
+            return 0
+
+        logger.info('Found %d announcement links for %s', len(links), date_str)
+        db = SessionLocal()
+        saved = 0
+
+        try:
+            for item in links:
+                _jitter(2)
+                try:
+                    detail_resp = _get(item['url'], timeout=30)
+                    detail_resp.encoding = 'utf-8'
+                    dsoup = BeautifulSoup(detail_resp.text, 'lxml')
+
+                    # Extract stock code and name
+                    code, name = '', ''
+                    comp_row = dsoup.find('tr', class_='compName')
+                    if comp_row:
+                        txt = comp_row.get_text(' ', strip=True)
+                        m = re.match(r'(\d{4,6})\s*[－\-\s]\s*(.+)', txt)
+                        if m:
+                            code, name = m.group(1).strip(), m.group(2).strip()
+
+                    if not code:
+                        # Try hidden input h20 (company ID)
+                        h20 = dsoup.find('input', {'name': 'h20'})
+                        if h20:
+                            code = h20.get('value', '').strip()
+
+                    # Extract fields from th/td table
+                    def _get_field(label):
+                        th = dsoup.find('th', string=re.compile(label))
+                        if th:
+                            td = th.find_next_sibling('td')
+                            return td.get_text(' ', strip=True) if td else ''
+                        return ''
+
+                    subject = _get_field('主旨')
+                    content = _get_field('說明')
+                    if not content:
+                        pre = dsoup.find('pre')
+                        if pre:
+                            content = pre.get_text(' ', strip=True)
+                    announce_time = _get_field('發言時間') or ''
+
+                    # Only keep EPS-related announcements
+                    if '每股盈餘' not in content and '每股盈餘' not in subject:
+                        continue
+
+                    if not code:
+                        logger.warning('No stock code for seq %s', item['seq_no'])
+                        continue
+
+                    # AI analysis
+                    ai_rating, ai_analysis, monthly_eps, eps_yoy, estimated_pe = (
+                        _analyze_with_ai(code, name, subject, content)
+                    )
+
+                    # Insert (ignore duplicate)
+                    try:
+                        db.execute(
+                            Announcement.__table__.insert().prefix_with('OR IGNORE'),
+                            [{
+                                'stock_code':    code,
+                                'seq_no':        item['seq_no'],
+                                'announce_date': dt,
+                                'announce_time': announce_time[:10],
+                                'subject':       subject[:500],
+                                'content':       content[:5000],
+                                'ai_rating':     ai_rating,
+                                'ai_analysis':   ai_analysis,
+                                'monthly_eps':   monthly_eps,
+                                'eps_yoy':       eps_yoy,
+                                'estimated_pe':  estimated_pe,
+                                'created_at':    datetime.now(),
+                            }],
+                        )
+                        db.commit()
+                        saved += 1
+                        logger.info('Saved announcement %s %s', code, subject[:40])
+                    except Exception as e:
+                        db.rollback()
+                        logger.warning('DB insert skip %s seq %s: %s', code, item['seq_no'], e)
+
+                except Exception as e:
+                    logger.warning('Detail fetch failed seq %s: %s', item['seq_no'], e)
+
+        finally:
+            db.close()
+
+        _log('announcements', 'success', f'{date_str}: {saved} EPS announcements saved')
+        return saved
+
+    except Exception as e:
+        _log('announcements', 'failed', str(e))
+        logger.exception('crawl_announcements failed for %s', date_str)
+        raise
 
 
 # ── convenience ───────────────────────────────────────────────────────────────

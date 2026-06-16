@@ -997,6 +997,44 @@ async function runCrawler(task) {
   }
 }
 
+/* ── Announcement panel ── */
+document.getElementById('ann-btn').addEventListener('click', () => {
+  const panel = document.getElementById('ann-panel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) loadAnnouncements();
+});
+
+document.getElementById('ann-panel-close').addEventListener('click', () => {
+  document.getElementById('ann-panel').classList.add('hidden');
+});
+
+async function loadAnnouncements() {
+  try {
+    const data = await fetch('/api/announcements/today').then(r => r.json());
+    const el = document.getElementById('ann-list');
+    if (!data.length) {
+      el.innerHTML = '<div class="ann-empty">今日無 EPS 相關公告</div>';
+      return;
+    }
+    document.getElementById('ann-dot').classList.remove('hidden');
+    el.innerHTML = data.map(a => `
+      <div class="ann-item">
+        <div class="ann-header">
+          <span class="ann-code stock-link" data-code="${a.stock_code}">${a.stock_code} ${a.name}</span>
+          <span class="ann-rating">${a.ai_rating || ''}</span>
+        </div>
+        <div class="ann-subject">${a.subject || ''}</div>
+        ${a.ai_analysis
+          ? `<div class="ann-analysis">${a.ai_analysis}</div>`
+          : '<div class="ann-no-ai">（AI 分析未設定或執行中）</div>'
+        }
+      </div>
+    `).join('');
+  } catch (_) {
+    document.getElementById('ann-list').innerHTML = '<div class="ann-empty">載入失敗</div>';
+  }
+}
+
 /* ── Crawler status panel ── */
 document.getElementById('status-btn').addEventListener('click', () => {
   const panel = document.getElementById('status-panel');
@@ -1438,6 +1476,7 @@ function installApp() {
 initTheme();
 initInstallButton();
 initNotifications();
+loadAnnouncements();
 initAboutDot();
 loadMarketSummary();
 initAuth();

@@ -16,7 +16,8 @@ import crawler
 import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
-    QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message, init_db
+    QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message,
+    Announcement, init_db
 )
 
 logging.basicConfig(
@@ -450,6 +451,61 @@ def api_financials(code):
         db.close()
 
 
+# ── API: announcements ───────────────────────────────────────────────────────
+
+@app.route('/api/announcements/today')
+def api_announcements_today():
+    db = SessionLocal()
+    try:
+        today = date.today()
+        rows = (
+            db.query(Announcement, Stock.name)
+            .outerjoin(Stock, Stock.code == Announcement.stock_code)
+            .filter(Announcement.announce_date == today)
+            .order_by(desc(Announcement.announce_time))
+            .all()
+        )
+        return jsonify([{
+            'stock_code':   a.stock_code,
+            'name':         name or '',
+            'announce_date': str(a.announce_date),
+            'announce_time': a.announce_time or '',
+            'subject':      a.subject or '',
+            'ai_rating':    a.ai_rating or '',
+            'ai_analysis':  a.ai_analysis or '',
+            'monthly_eps':  a.monthly_eps,
+            'eps_yoy':      a.eps_yoy,
+            'estimated_pe': a.estimated_pe,
+        } for a, name in rows])
+    finally:
+        db.close()
+
+
+@app.route('/api/announcements/<code>')
+def api_announcements_stock(code):
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Announcement)
+            .filter(Announcement.stock_code == code)
+            .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
+            .limit(20)
+            .all()
+        )
+        return jsonify([{
+            'announce_date': str(a.announce_date),
+            'announce_time': a.announce_time or '',
+            'subject':      a.subject or '',
+            'ai_rating':    a.ai_rating or '',
+            'ai_analysis':  a.ai_analysis or '',
+            'monthly_eps':  a.monthly_eps,
+            'eps_yoy':      a.eps_yoy,
+            'estimated_pe': a.estimated_pe,
+        } for a in rows])
+    finally:
+        db.close()
+
+
 # ── API: crawler ──────────────────────────────────────────────────────────────
 
 @app.route('/api/crawler/status')
@@ -512,6 +568,10 @@ def api_run_crawler(task):
         y = int(request.args.get('year',  y))
         q = int(request.args.get('quarter', q))
         _run_bg(crawler.crawl_quarterly_financials, y, q)
+
+    elif task == 'announcements':
+        ann_date = request.args.get('date')  # optional YYYYMMDD override
+        _run_bg(crawler.crawl_announcements, ann_date)
 
     elif task == 'init':
         _run_bg(_initial_crawl)

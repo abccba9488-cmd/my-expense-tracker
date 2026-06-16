@@ -105,6 +105,7 @@
       <div id="auth-area"></div>
       <button class="icon-btn" id="about-btn" title="網站說明">ℹ<span class="unread-dot hidden" id="about-dot"></span></button>
       <button class="icon-btn" id="theme-btn" title="切換主題">☀</button>
+      <button class="icon-btn" id="ann-btn" title="今日公告">📰<span class="unread-dot hidden" id="ann-dot"></span></button>
       <button class="icon-btn" id="today-btn" title="今日更新">🆕</button>
       <button class="icon-btn" id="msg-btn" title="留言板">💬<span class="unread-dot hidden" id="msg-dot"></span></button>
       <button class="icon-btn admin-only hidden" id="admin-btn" title="會員管理">👥</button>
@@ -391,6 +392,15 @@
     <button class="icon-btn" id="admin-panel-close">✕</button>
   </div>
   <div id="admin-user-list" class="admin-user-list"></div>
+</div>
+
+<!-- ── 今日公告面板 ── -->
+<div id="ann-panel" class="status-panel ann-panel hidden">
+  <div class="status-panel-header">
+    <span>📰 今日公告</span>
+    <button class="icon-btn" id="ann-panel-close">✕</button>
+  </div>
+  <div id="ann-list" class="ann-list"></div>
 </div>
 
 <!-- ── TOAST ── -->
