@@ -230,6 +230,7 @@ document.getElementById('industry-filter').addEventListener('change', function()
 
 /* ── Stock detail ── */
 async function loadStockDetail(code) {
+  code = String(code);
   state.currentCode = code;
   showDetailView();
 
