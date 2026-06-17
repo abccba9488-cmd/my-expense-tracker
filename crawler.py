@@ -939,8 +939,12 @@ def crawl_announcements(date_str=None):
         saved = 0
 
         try:
-            for item in links:
-                _jitter(2)
+            for idx, item in enumerate(links):
+                _jitter(4)
+                # Longer pause every 30 requests to avoid MOPS rate-limiting
+                if idx > 0 and idx % 30 == 0:
+                    logger.info('Pausing 30s after %d requests (anti-throttle)', idx)
+                    time.sleep(30)
                 try:
                     detail_resp = _post_form(
                         f'{_ANN_BASE}/ajax_t05st02',
