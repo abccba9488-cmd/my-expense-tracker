@@ -898,42 +898,31 @@ def crawl_announcements(date_str=None):
     logger.info('Crawling announcements for %s', date_str)
 
     try:
-        # Init session
-        _get(f'{_ANN_BASE}/t05sr01_1', timeout=20)
-        _jitter(1)
-
-        # Fetch announcement list for the date
-        list_resp = _post_form(
-            f'{_ANN_BASE}/ajax_t05st02',
-            data={
-                'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
-                'TYPEK': 'all',
-                'year': roc_year, 'month': month_str, 'day': day_str,
-            },
-            timeout=30,
+        # Fetch announcement list (GET with date params; also inits session cookies)
+        list_url = (
+            f'{_ANN_BASE}/t05sr01_1'
+            f'?firstin=true&TYPEK=all'
+            f'&year={roc_year}&month={month_str}&day={day_str}'
         )
+        list_resp = _get(list_url, timeout=30)
         list_resp.encoding = 'utf-8'
         soup = BeautifulSoup(list_resp.text, 'lxml')
 
-        # Extract onclick params to build detail URLs
+        # onclick format: document.sii_fm0.TYPEK.value="sii";.i.value="0";.co_id.value="2362"
         onclick_re = re.compile(
-            r"SEQ_NO\.value='(\d+)'.*?SPOKE_TIME\.value='(\d+)'.*?"
-            r"SPOKE_DATE\.value='(\d+)'.*?COMPANY_ID\.value='([^']+)'",
+            r'\.TYPEK\.value="([^"]+)".*?\.i\.value="([^"]+)".*?\.co_id\.value="([^"]+)"',
             re.DOTALL,
         )
         links = []
         for tag in soup.find_all(onclick=True):
             m = onclick_re.search(tag['onclick'])
             if m:
-                seq, spoke_time, spoke_date, company_id = m.groups()
+                typek, idx, co_id = m.groups()
                 links.append({
-                    'seq_no': seq,
-                    'url': (
-                        f'{_ANN_BASE}/ajax_t05sr01_1'
-                        f'?firstin=true&stp=1&step=1'
-                        f'&SEQ_NO={seq}&SPOKE_TIME={spoke_time}'
-                        f'&SPOKE_DATE={spoke_date}&COMPANY_ID={company_id}'
-                    ),
+                    'seq_no': f'{typek}_{idx}_{co_id}_{date_str}',
+                    'typek': typek,
+                    'i': idx,
+                    'co_id': co_id,
                 })
 
         if not links:
@@ -948,7 +937,11 @@ def crawl_announcements(date_str=None):
             for item in links:
                 _jitter(2)
                 try:
-                    detail_resp = _get(item['url'], timeout=30)
+                    detail_resp = _post_form(
+                        f'{_ANN_BASE}/ajax_t05st02',
+                        data={'TYPEK': item['typek'], 'i': item['i'], 'co_id': item['co_id']},
+                        timeout=30,
+                    )
                     detail_resp.encoding = 'utf-8'
                     dsoup = BeautifulSoup(detail_resp.text, 'lxml')
 
