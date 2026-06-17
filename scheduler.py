@@ -1,19 +1,47 @@
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger(__name__)
+_TZ = ZoneInfo('Asia/Taipei')
 _scheduler = BackgroundScheduler(timezone='Asia/Taipei')
 
 
 def _daily_price_job():
     import crawler
-    today = datetime.today().strftime('%Y%m%d')
+    today = datetime.now(_TZ).strftime('%Y%m%d')
     try:
         crawler.crawl_daily_prices(today)
     except Exception as e:
         logger.error('Daily price job failed: %s', e)
+
+
+def _daily_price_watchdog():
+    """Every 30 min: if it's a weekday 14:00–17:00 Taipei and today's price is missing, crawl."""
+    from database import SessionLocal
+    from sqlalchemy import text
+    now = datetime.now(_TZ)
+    if now.weekday() >= 5 or not (14 <= now.hour < 17):
+        return
+    today_str = now.strftime('%Y%m%d')
+    db = SessionLocal()
+    try:
+        done = db.execute(
+            text("SELECT 1 FROM crawler_logs WHERE task='daily_price' AND status='success'"
+                 " AND message LIKE :pat LIMIT 1"),
+            {'pat': f'{today_str}:%'},
+        ).first()
+    finally:
+        db.close()
+    if not done:
+        logger.info('Watchdog: no daily price for %s — triggering crawl', today_str)
+        import crawler
+        try:
+            crawler.crawl_daily_prices(today_str)
+        except Exception as e:
+            logger.error('Watchdog crawl failed: %s', e)
 
 
 def _stock_list_job():
@@ -55,9 +83,12 @@ def start():
     # Update stock list every Sunday at 01:00
     _scheduler.add_job(_stock_list_job, CronTrigger(day_of_week='sun', hour=1, minute=0))
 
-    # Daily prices on weekdays at 14:00 and 15:00
+    # Daily prices on weekdays at 14:00 and 15:00 (primary triggers)
     _scheduler.add_job(_daily_price_job, CronTrigger(day_of_week='mon-fri', hour=14, minute=0))
     _scheduler.add_job(_daily_price_job, CronTrigger(day_of_week='mon-fri', hour=15, minute=0))
+
+    # Watchdog: every 30 min, triggers price crawl if today's data is still missing
+    _scheduler.add_job(_daily_price_watchdog, 'interval', minutes=30)
 
     # Monthly revenue: every day at 23:00 (some companies publish late, keep retrying)
     _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))
