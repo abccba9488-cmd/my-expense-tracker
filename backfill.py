@@ -14,7 +14,10 @@ Safe to stop (Ctrl+C) and restart — progress is preserved.
 import argparse
 import logging
 import time
-from datetime import date, timedelta
+from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
+
+_TZ = ZoneInfo('Asia/Taipei')
 
 from sqlalchemy import text
 
@@ -30,7 +33,7 @@ def backfill_prices(from_year: int):
     import crawler
 
     db = SessionLocal()
-    today = date.today()
+    today = datetime.now(_TZ).date()
     d = date(from_year, 1, 1)
     skipped = crawled = 0
 
@@ -73,7 +76,7 @@ def backfill_revenue(from_year: int):
     import crawler
 
     db = SessionLocal()
-    today = date.today()
+    today = datetime.now(_TZ).date()
     skipped = crawled = 0
 
     logger.info('=== Monthly revenue %d → %d ===', from_year, today.year)
@@ -111,7 +114,7 @@ def backfill_quarterly(from_year: int):
     import crawler
 
     db = SessionLocal()
-    today = date.today()
+    today = datetime.now(_TZ).date()
     skipped = crawled = 0
 
     # Disclosure deadlines: quarter must be disclosed before we crawl it

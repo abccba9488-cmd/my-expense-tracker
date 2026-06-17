@@ -1,10 +1,13 @@
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from sqlalchemy import (
     create_engine, event, Column, String, Integer, Float, BigInteger,
     Date, DateTime, Text, UniqueConstraint, Index, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+_TZ = ZoneInfo('Asia/Taipei')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'data', 'stocks.db')
@@ -40,7 +43,7 @@ class Stock(Base):
     name     = Column(String(50), nullable=False)
     market   = Column(String(10), nullable=False)  # TWSE | TPEX
     industry = Column(String(50))
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
 class DailyPrice(Base):
@@ -75,7 +78,7 @@ class MonthlyRevenue(Base):
     revenue_yoy = Column(Float)        # 年增率 %
     revenue_mom = Column(Float)        # 月增率 %
     start_price = Column(Float)        # 首次寫入當天收盤價
-    updated_at  = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at  = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
 class QuarterlyFinancial(Base):
@@ -92,7 +95,7 @@ class QuarterlyFinancial(Base):
     operating_income = Column(BigInteger)   # 千元
     net_income       = Column(BigInteger)   # 千元
     eps              = Column(Float)        # 元/股
-    updated_at       = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at       = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
 class User(Base):
@@ -100,7 +103,7 @@ class User(Base):
     id            = Column(Integer, primary_key=True, autoincrement=True)
     username      = Column(String(50), unique=True, nullable=False)
     password_hash = Column(String(256), nullable=False)
-    created_at    = Column(DateTime, default=datetime.now)
+    created_at    = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
 class Watchlist(Base):
@@ -109,7 +112,7 @@ class Watchlist(Base):
     id         = Column(Integer, primary_key=True, autoincrement=True)
     user_id    = Column(Integer, nullable=False)
     name       = Column(String(100), nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
 class WatchlistStock(Base):
@@ -129,7 +132,7 @@ class Message(Base):
     user_id    = Column(Integer, nullable=False)
     username   = Column(String(50), nullable=False)
     content    = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
 class CrawlerLog(Base):
@@ -138,7 +141,7 @@ class CrawlerLog(Base):
     task       = Column(String(50), nullable=False)
     status     = Column(String(20), nullable=False)  # running | success | failed
     message    = Column(Text)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
 class Announcement(Base):
@@ -156,7 +159,7 @@ class Announcement(Base):
     monthly_eps   = Column(Float)
     eps_yoy       = Column(Float)
     estimated_pe  = Column(Float)
-    created_at    = Column(DateTime, default=datetime.now)
+    created_at    = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
 def _migrate_q4_to_individual(conn):

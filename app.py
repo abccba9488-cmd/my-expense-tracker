@@ -5,6 +5,7 @@ import re
 import threading
 import time as _time
 from datetime import date, timedelta, datetime
+from zoneinfo import ZoneInfo
 
 import csv
 import io
@@ -25,6 +26,7 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(name)s: %(message)s',
 )
 logger = logging.getLogger(__name__)
+_TZ = ZoneInfo('Asia/Taipei')
 
 app = Flask(__name__)
 app.secret_key = 'tw-stock-local-2025'
@@ -76,7 +78,7 @@ def _initial_crawl():
         except Exception as e:
             logger.warning('Price skip %s: %s', d, e)
 
-    today = datetime.today()
+    today = datetime.now(_TZ)
     for delta in range(3, 0, -1):
         m = today.month - delta
         y = today.year
@@ -153,7 +155,7 @@ def service_worker():
 
 @app.route('/sitemap.xml')
 def sitemap_xml():
-    today = date.today().isoformat()
+    today = datetime.now(_TZ).date().isoformat()
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
@@ -191,7 +193,7 @@ def api_stats():
 def api_updates_today():
     db = SessionLocal()
     try:
-        today_str = date.today().isoformat()
+        today_str = datetime.now(_TZ).date().isoformat()
 
         # Latest successful daily_price log today → extract trade date from message
         price_log = (
@@ -396,7 +398,7 @@ def api_prices(code):
     db = SessionLocal()
     try:
         days   = int(request.args.get('days', 90))
-        cutoff = date.today() - timedelta(days=days)
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
         prices = (
             db.query(DailyPrice)
             .filter(DailyPrice.stock_code == code, DailyPrice.date >= cutoff)
@@ -495,7 +497,7 @@ def api_test_crawl():
         from datetime import datetime as _dt
         dt = _dt.strptime(date_str, '%Y%m%d').date()
     else:
-        dt = date.today() - timedelta(days=1)
+        dt = datetime.now(_TZ).date() - timedelta(days=1)
         while dt.weekday() >= 5:
             dt -= timedelta(days=1)
     roc_year  = str(dt.year - 1911)
@@ -537,7 +539,7 @@ def api_announcements_today():
     db = SessionLocal()
     try:
         from datetime import timedelta
-        since = date.today() - timedelta(days=7)
+        since = datetime.now(_TZ).date() - timedelta(days=7)
         rows = (
             db.query(Announcement, Stock.name)
             .outerjoin(Stock, Stock.code == Announcement.stock_code)
@@ -614,7 +616,7 @@ def api_run_crawler(task):
     is_admin = session.get('username') == ADMIN_USERNAME
     if not (is_local or is_admin):
         return jsonify({'error': 'forbidden'}), 403
-    today = datetime.today()
+    today = datetime.now(_TZ)
     date_str = today.strftime('%Y%m%d')
 
     if task == 'stock_list':
@@ -950,8 +952,7 @@ else:
     # worker restarts (e.g. redeploy) after today's 14:00/15:00 cron time,
     # today's daily_price run is skipped entirely (not deferred). Detect this
     # and trigger it once at startup.
-    from zoneinfo import ZoneInfo
-    _now_tw = datetime.now(ZoneInfo('Asia/Taipei'))
+    _now_tw = datetime.now(_TZ)
     if _now_tw.weekday() < 5 and _now_tw.hour >= 14:
         _today_str = _now_tw.strftime('%Y%m%d')
         _db = SessionLocal()

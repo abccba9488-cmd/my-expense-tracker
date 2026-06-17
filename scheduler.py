@@ -54,7 +54,7 @@ def _stock_list_job():
 
 def _monthly_revenue_job():
     import crawler
-    now = datetime.today()
+    now = datetime.now(_TZ)
     if now.month == 1:
         y, m = now.year - 1, 12
     else:
@@ -67,7 +67,7 @@ def _monthly_revenue_job():
 
 def _quarterly_job(quarter):
     import crawler
-    now = datetime.today()
+    now = datetime.now(_TZ)
     # Q1 by May 15  → year = now.year,   Q = 1
     # Q2 by Aug 14  → year = now.year,   Q = 2
     # Q3 by Nov 14  → year = now.year,   Q = 3

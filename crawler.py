@@ -5,6 +5,7 @@ import time
 import random
 import logging
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 import urllib3
@@ -22,6 +23,7 @@ from database import (
 )
 
 logger = logging.getLogger(__name__)
+_TZ = ZoneInfo('Asia/Taipei')
 
 _USER_AGENTS = [
     # Chrome Windows
@@ -237,7 +239,7 @@ def crawl_stock_list():
                     'name': name,
                     'market': market,
                     'industry': industry or current_industry,
-                    'updated_at': datetime.now(),
+                    'updated_at': datetime.now(_TZ),
                 })
 
             _jitter(1.0)
@@ -249,7 +251,7 @@ def crawl_stock_list():
                 existing.name = s['name']
                 existing.market = s['market']
                 existing.industry = s['industry']
-                existing.updated_at = datetime.now()
+                existing.updated_at = datetime.now(_TZ)
             else:
                 db.add(Stock(
                     code=s['code'], name=s['name'],
@@ -617,7 +619,7 @@ def crawl_monthly_revenue(year: int, month: int):
                     existing.revenue_mom = revenue_mom
                     # start_price intentionally unchanged (keep first-crawl price)
                     if changed:
-                        existing.updated_at = datetime.now()
+                        existing.updated_at = datetime.now(_TZ)
                 else:
                     latest_dp = db.query(DailyPrice.close).filter_by(
                         stock_code=stock.code
@@ -626,7 +628,7 @@ def crawl_monthly_revenue(year: int, month: int):
                         stock_code=stock.code, year=year, month=month,
                         revenue=revenue, revenue_yoy=revenue_yoy, revenue_mom=revenue_mom,
                         start_price=latest_dp[0] if latest_dp else None,
-                        updated_at=datetime.now(),
+                        updated_at=datetime.now(_TZ),
                     ))
                 total += 1
 
@@ -754,13 +756,13 @@ def crawl_quarterly_financials(year: int, quarter: int):
                     existing.net_income       = net_income
                     existing.eps              = eps
                     if changed:
-                        existing.updated_at = datetime.now()
+                        existing.updated_at = datetime.now(_TZ)
                 else:
                     db.add(QuarterlyFinancial(
                         stock_code=stock.code, year=year, quarter=quarter,
                         revenue=revenue, operating_income=op_income,
                         net_income=net_income, eps=eps,
-                        updated_at=datetime.now(),
+                        updated_at=datetime.now(_TZ),
                     ))
                 total += 1
                 if total % 50 == 0:
@@ -900,7 +902,7 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
 def crawl_announcements(date_str=None):
     """Crawl MOPS重大訊息 for announcements containing EPS data."""
     if date_str is None:
-        d = date.today() - timedelta(days=1)
+        d = datetime.now(_TZ).date() - timedelta(days=1)
         # Skip weekends
         while d.weekday() >= 5:
             d -= timedelta(days=1)
@@ -1033,7 +1035,7 @@ def crawl_announcements(date_str=None):
                                 'monthly_eps':   monthly_eps,
                                 'eps_yoy':       eps_yoy,
                                 'estimated_pe':  estimated_pe,
-                                'created_at':    datetime.now(),
+                                'created_at':    datetime.now(_TZ),
                             }],
                         )
                         db.commit()
@@ -1063,7 +1065,7 @@ def crawl_announcements(date_str=None):
 def get_recent_trading_days(n=10):
     """Return last n calendar weekdays as YYYYMMDD strings (oldest first)."""
     days = []
-    d = date.today()
+    d = datetime.now(_TZ).date()
     while len(days) < n:
         if d.weekday() < 5:
             days.append(d.strftime('%Y%m%d'))

@@ -1,10 +1,11 @@
 import os
 import sqlite3
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 DB = "/app/data/stocks.db"
 YEARS = 5
-cutoff = (date.today() - timedelta(days=YEARS * 365)).isoformat()
+cutoff = (datetime.now(ZoneInfo('Asia/Taipei')).date() - timedelta(days=YEARS * 365)).isoformat()
 
 print(f"DB size before: {os.path.getsize(DB) // 1024 // 1024} MB")
 
