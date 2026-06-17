@@ -475,6 +475,44 @@ def api_test_ai():
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
+@app.route('/api/test/crawl')
+def api_test_crawl():
+    """Debug: test MOPS crawl for a given date (default: last business day)."""
+    from datetime import timedelta
+    import re
+    from bs4 import BeautifulSoup
+    date_str = request.args.get('date')
+    if date_str:
+        from datetime import datetime as _dt
+        dt = _dt.strptime(date_str, '%Y%m%d').date()
+    else:
+        dt = date.today() - timedelta(days=1)
+        while dt.weekday() >= 5:
+            dt -= timedelta(days=1)
+    roc_year  = str(dt.year - 1911)
+    month_str = f'{dt.month:02d}'
+    day_str   = f'{dt.day:02d}'
+    try:
+        crawler._get(f'{crawler._ANN_BASE}/t05sr01_1', timeout=20)
+        resp = crawler._post_form(
+            f'{crawler._ANN_BASE}/ajax_t05st02',
+            data={'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
+                  'TYPEK': 'all', 'year': roc_year, 'month': month_str, 'day': day_str},
+            timeout=30,
+        )
+        resp.encoding = 'utf-8'
+        soup = BeautifulSoup(resp.text, 'lxml')
+        onclick_re = re.compile(
+            r"SEQ_NO\.value='(\d+)'.*?SPOKE_TIME\.value='(\d+)'.*?"
+            r"SPOKE_DATE\.value='(\d+)'.*?COMPANY_ID\.value='([^']+)'", re.DOTALL)
+        links = [m.group(1) for tag in soup.find_all(onclick=True)
+                 for m in [onclick_re.search(tag['onclick'])] if m]
+        html_snippet = resp.text[:500]
+        return jsonify({'date': str(dt), 'total_links': len(links), 'html_preview': html_snippet})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 # ── API: announcements ───────────────────────────────────────────────────────
 
 @app.route('/api/announcements/today')
