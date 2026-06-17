@@ -79,6 +79,15 @@ def _quarterly_job(quarter):
         logger.error('Quarterly Q%d job failed: %s', quarter, e)
 
 
+def _announcements_job():
+    import crawler
+    try:
+        logger.info('Announcement job starting')
+        crawler.crawl_announcements()
+    except Exception as e:
+        logger.error('Announcement job failed: %s', e)
+
+
 def start():
     # Update stock list every Sunday at 01:00
     _scheduler.add_job(_stock_list_job, CronTrigger(day_of_week='sun', hour=1, minute=0))
@@ -94,10 +103,7 @@ def start():
     _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))
 
     # Announcements: weekdays at 05:00 (off-peak, prior-day post-close announcements)
-    _scheduler.add_job(
-        lambda: __import__('crawler').crawl_announcements(),
-        CronTrigger(day_of_week='mon-fri', hour=5, minute=0)
-    )
+    _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=5, minute=0))
 
     # Quarterly financial reports — every day of the disclosure month at 23:00
     # Q1 (Jan–Mar): all of May (deadline May 15)

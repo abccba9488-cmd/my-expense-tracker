@@ -864,7 +864,7 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
     api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
     if not api_key:
         return None, None, None, None, None
-    model = os.environ.get('OPENROUTER_MODEL', 'google/gemini-3.1-flash-lite-preview')
+    model = os.environ.get('OPENROUTER_MODEL', 'google/gemini-2.0-flash-exp:free')
 
     user_msg = f'股票：{stock_name}（{stock_code}）\n主旨：{subject}\n\n公告說明：\n{content[:3000]}'
     try:
