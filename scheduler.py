@@ -127,18 +127,18 @@ def start():
     _scheduler.add_job(_daily_price_job, CronTrigger(day_of_week='mon-fri', hour=14, minute=0))
     _scheduler.add_job(_daily_price_job, CronTrigger(day_of_week='mon-fri', hour=15, minute=0))
 
-    # Watchdog: every 30 min, triggers price crawl if today's data is still missing
-    _scheduler.add_job(_daily_price_watchdog, 'interval', minutes=30)
+    # Watchdog: every 30 min, fires immediately on startup
+    _scheduler.add_job(_daily_price_watchdog, 'interval', minutes=30,
+                       next_run_time=datetime.now(_TZ))
 
     # Monthly revenue: every day at 23:00 (some companies publish late, keep retrying)
     _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))
 
     # Announcements: weekdays at 05:00 (off-peak, prior-day post-close announcements)
     _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=5, minute=0))
-    # Announcements watchdog: every 30 min during 05:00–10:00, catches missed 05:00 runs
-    _scheduler.add_job(_announcements_watchdog, 'interval', minutes=30)
-    # TEMP: test at 07:20 — REMOVE after test
-    _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=7, minute=20))
+    # Announcements watchdog: every 30 min, fires immediately on startup
+    _scheduler.add_job(_announcements_watchdog, 'interval', minutes=30,
+                       next_run_time=datetime.now(_TZ))
 
     # Quarterly financial reports — every day of the disclosure month at 23:00
     # Q1 (Jan–Mar): all of May (deadline May 15)
