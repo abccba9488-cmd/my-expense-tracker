@@ -63,7 +63,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 `_SUMMARY_SQL`（`app.py`）是核心查詢，JOIN `stocks` + 最新 `daily_prices` + 最新 `monthly_revenue` + 最新 `quarterly_financials`，包含 `yeps` CTE（加總同年四季 EPS）用於 Q4 本益比計算。欄位順序固定，`_row_to_dict()` 依索引轉換。
 
-**新增欄位時需同步修改六處**：`_SUMMARY_SQL` → `_row_to_dict` → CSV 端點 → `index.html <th>` → `app.js rows` 陣列 → `app.js columnDefs`。
+**新增欄位時需同步修改六處**：`_SUMMARY_SQL` → `_row_to_dict` → CSV 端點 → `index.html <th>` → `app.js rows` 陣列 → `app.js columnDefs`。若欄位可由現有欄位計算（如 `price_diff`），可跳過 SQL 修改，只在 `_row_to_dict` 計算後加入 dict。
 
 ### 效能快取
 
@@ -279,15 +279,17 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showDetailView()` 同時隱藏所有 view 含 `#ann-view`；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' }`。
 
-### 主表格欄位（15 欄，index 0–14）
+### 主表格欄位（16 欄，index 0–15）
 
-代號 → 名稱 → 產業 → **起始股價** → 收盤價 → 漲跌幅% → **營收預估股價** → 營收月份 → 月營收 → 月營收年增% → 季營收 → 最新EPS → 本益比 → EPS期別 → 資料日期
+代號 → 名稱 → 產業 → **起始股價** → 收盤價 → **價差%** → 漲跌幅% → **營收預估股價** → 營收月份 → 月營收 → 月營收年增% → 季營收 → 最新EPS → 本益比 → EPS期別 → 資料日期
+
+**價差%**：`(close - start_price) / start_price × 100`，在 `_row_to_dict()` 計算（非來自 SQL），`price_diff` 欄位直接放入 JSON 回傳。正值綠色，負值紅色。
 
 **營收預估股價**公式：`(月營收 / 季營收) × EPS × 240`；紅色格 = 現價 2x+，黃色格 = 1.5x+。
 
 **本益比**計算：Q1–Q3 用 `close / (eps / quarter × 4)`（年化）；Q4 用 `close / year_eps`（`yeps` CTE 全年加總）。
 
-自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。
+自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**和**價差%**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。
 
 ### 重要 gotcha：jQuery `.data()` 型別轉換
 
