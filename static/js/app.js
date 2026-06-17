@@ -1097,8 +1097,8 @@ async function loadTodayUpdates() {
         ${_todayChips(data.quarterly)}
       </div>
       <div class="today-section">
-        <div class="today-section-title">📰 自結公告（${(data.announcements||[]).length}）</div>
-        ${_todayChips(data.announcements||[])}
+        <div class="today-section-title">📰 自結公告</div>
+        ${data.ann_count > 0 ? `<div>今日新增 ${data.ann_count} 筆</div>` : '<div class="today-empty">今日尚無新增</div>'}
       </div>
     `;
     el.querySelectorAll('.today-stock-chip').forEach(chip => {
