@@ -493,9 +493,13 @@ def api_test_crawl():
     month_str = f'{dt.month:02d}'
     day_str   = f'{dt.day:02d}'
     try:
-        list_url = (f'{crawler._ANN_BASE}/t05sr01_1'
-                    f'?firstin=true&TYPEK=all&year={roc_year}&month={month_str}&day={day_str}')
-        resp = crawler._get(list_url, timeout=30)
+        crawler._get(f'{crawler._ANN_BASE}/t05sr01_1', timeout=20)
+        resp = crawler._post_form(
+            f'{crawler._ANN_BASE}/ajax_t05st02',
+            data={'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
+                  'TYPEK': 'all', 'year': roc_year, 'month': month_str, 'day': day_str},
+            timeout=30,
+        )
         resp.encoding = 'utf-8'
         soup = BeautifulSoup(resp.text, 'lxml')
         onclick_re = re.compile(

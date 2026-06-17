@@ -898,13 +898,18 @@ def crawl_announcements(date_str=None):
     logger.info('Crawling announcements for %s', date_str)
 
     try:
-        # Fetch announcement list (GET with date params; also inits session cookies)
-        list_url = (
-            f'{_ANN_BASE}/t05sr01_1'
-            f'?firstin=true&TYPEK=all'
-            f'&year={roc_year}&month={month_str}&day={day_str}'
+        # Init session then fetch announcement list for the date
+        _get(f'{_ANN_BASE}/t05sr01_1', timeout=20)
+        _jitter(1)
+        list_resp = _post_form(
+            f'{_ANN_BASE}/ajax_t05st02',
+            data={
+                'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
+                'TYPEK': 'all',
+                'year': roc_year, 'month': month_str, 'day': day_str,
+            },
+            timeout=30,
         )
-        list_resp = _get(list_url, timeout=30)
         list_resp.encoding = 'utf-8'
         soup = BeautifulSoup(list_resp.text, 'lxml')
 
