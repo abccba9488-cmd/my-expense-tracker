@@ -507,8 +507,16 @@ def api_test_crawl():
             r"SPOKE_DATE\.value='(\d+)'.*?COMPANY_ID\.value='([^']+)'", re.DOTALL)
         links = [m.group(1) for tag in soup.find_all(onclick=True)
                  for m in [onclick_re.search(tag['onclick'])] if m]
-        html_snippet = resp.text[:500]
-        return jsonify({'date': str(dt), 'total_links': len(links), 'html_preview': html_snippet})
+        # Collect sample onclick strings for debugging
+        all_onclicks = [tag['onclick'][:200] for tag in soup.find_all(onclick=True)][:5]
+        html_snippet = resp.text[:800]
+        return jsonify({
+            'date': str(dt),
+            'total_links': len(links),
+            'total_onclick_tags': len(all_onclicks),
+            'sample_onclicks': all_onclicks,
+            'html_preview': html_snippet,
+        })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
 
