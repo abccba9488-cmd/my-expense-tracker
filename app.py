@@ -221,10 +221,21 @@ def api_updates_today():
             .all()
         )
 
+        from datetime import timedelta
+        since = date.today() - timedelta(days=7)
+        ann_rows = (
+            db.query(Announcement.stock_code, Stock.name)
+            .outerjoin(Stock, Stock.code == Announcement.stock_code)
+            .filter(Announcement.announce_date >= since)
+            .order_by(desc(Announcement.announce_date))
+            .all()
+        )
+
         return jsonify({
             'price_date': price_date,
             'monthly_revenue': [{'code': c, 'name': n} for c, n in revenue_rows],
             'quarterly':       [{'code': c, 'name': n} for c, n in quarterly_rows],
+            'announcements':   [{'code': c, 'name': n or ''} for c, n in ann_rows],
         })
     finally:
         db.close()

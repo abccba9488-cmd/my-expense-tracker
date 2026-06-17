@@ -1096,6 +1096,10 @@ async function loadTodayUpdates() {
         <div class="today-section-title">📊 季財報（${data.quarterly.length}）</div>
         ${_todayChips(data.quarterly)}
       </div>
+      <div class="today-section">
+        <div class="today-section-title">📰 自結公告（${(data.announcements||[]).length}）</div>
+        ${_todayChips(data.announcements||[])}
+      </div>
     `;
     el.querySelectorAll('.today-stock-chip').forEach(chip => {
       chip.addEventListener('click', () => {
