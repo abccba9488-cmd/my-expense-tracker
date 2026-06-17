@@ -104,6 +104,8 @@ def start():
 
     # Announcements: weekdays at 05:00 (off-peak, prior-day post-close announcements)
     _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=5, minute=0))
+    # TEMP: one-time test at 06:45 — REMOVE after test
+    _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=6, minute=45))
 
     # Quarterly financial reports — every day of the disclosure month at 23:00
     # Q1 (Jan–Mar): all of May (deadline May 15)
