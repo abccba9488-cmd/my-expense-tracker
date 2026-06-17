@@ -83,6 +83,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `watchlists` | `id` | 屬於某 `user_id`，可多個 |
 | `watchlist_stocks` | `(watchlist_id, stock_code)` | 自選股關聯表 |
 | `messages` | `id` | 全站留言板；`user_id`/`username`/`content`/`created_at` |
+| `announcements` | `id` | UniqueConstraint(`stock_code`, `seq_no`)；`seq_no` 為合成鍵 `{typek}_{i}_{co_id}_{date}` |
 | `crawler_logs` | `id` | status: running \| success \| failed |
 | `schema_migrations` | `name` | 記錄已執行的 migration，防止重複執行 |
 
@@ -113,14 +114,17 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | TPEX 每日股價 | `tpex.org.tw/.../stk_wn1430_result.php?se=AL` | JSON `tables[0].data`（2025+ 新格式）；volume 單位為股 |
 | 月營收 | `mops.twse.com.tw/mops/api/t05st10_ifrs` | POST JSON；per-company；`data[0][1]`=當月營收，`data[3][1]`=年增率 |
 | 季財報 EPS | `mops.twse.com.tw/mops/api/t164sb04` | POST JSON；`reportList` 陣列，關鍵字比對列標籤取值 |
+| 自結公告清單 | `mopsov.twse.com.tw/mops/web/ajax_t05st02` | POST form（TYPEK=all, year/month/day ROC）→ HTML；onclick 格式 `.TYPEK.value="sii"`, `.i.value="0"`, `.co_id.value="2362"` |
+| 自結公告詳情 | `mopsov.twse.com.tw/mops/web/ajax_t05st02` | POST form（TYPEK, i, co_id）→ HTML；解析 `<th>` 標籤對應的 `<td>` 取主旨/說明/時間 |
 
 **SSL 注意**：TWSE/TPEX/MOPS 憑證有問題，`crawler.py` 用 `_session.verify = False` 統一處理。所有請求必須走 `_get()` / `_post()` 包裝函式，不可直接呼叫 `_session.get/post` 或裸的 `requests`。
 
 **防爬蟲機制**（`crawler.py` 頂部）：
-- `_get()` / `_post()`：統一入口，每次請求隨機挑選 UA、帶完整瀏覽器 headers、429/5xx 與連線層級例外（如 `Response ended prematurely`）自動重試最多 3 次（等待 8–15 秒）
+- `_get()` / `_post()` / `_post_form()`：統一入口，每次請求隨機挑選 UA、帶完整瀏覽器 headers（含 `Sec-Fetch-*`、`Origin`、`Cache-Control`）、429/5xx 與連線層級例外自動重試最多 3 次
+- UA 池含 Chrome 136、Firefox 138、Safari 17、Edge 136 共 9 組，定期輪替
 - `_jitter(base)`：`time.sleep(base × random(0.7, 1.6))`，消除固定間隔特徵
-- 每 80 次請求清除一次 session cookie，避免 session 指紋累積
-- **`Accept-Encoding` 不可加 `br`**：Zeabur 容器未安裝 `brotli`，若伺服器回傳 Brotli 壓縮內容會導致 `resp.json()` 解析失敗（`Expecting value: line 1 column 1`），整批資料變成 0 筆但 task 仍顯示 success。只用 `gzip, deflate`
+- 每 80 次請求清除一次 session cookie；MOPS 自結公告爬蟲額外每 50 筆重新初始化 session（清 cookie + 重做 GET init）
+- **`Accept-Encoding` 不可加 `br`**：Zeabur 容器未安裝 `brotli`，若伺服器回傳 Brotli 壓縮內容會導致 `resp.json()` 解析失敗，整批資料變成 0 筆但 task 仍顯示 success。只用 `gzip, deflate`
 - TWSE/TPEX JSON 解析失敗或 `stat != 'OK'` 時會記錄 `logger.warning`（含狀態碼與回應大小），方便從 Zeabur Runtime Logs 排查
 
 月營收爬蟲在新增記錄時，會查 `daily_prices` 最新收盤價寫入 `start_price`；更新既有記錄時不修改 `start_price`。
@@ -134,6 +138,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 股票清單 | 每週日 01:00 |
 | 每日股價 | 週一〜五 14:00 與 15:00（各跑一次，避免單次失敗漏抓） |
 | 月營收 | 每天 23:00（爬上個月；部分公司公布較晚，每天重抓直到有資料） |
+| 自結公告 | 週一〜五 **05:00**（非尖峰；爬前一個交易日的 MOPS 重大公告，過濾含「每股盈餘」者送 AI 分析） |
 | Q1 | 5 月每天 23:00（公告期限 5/15） |
 | Q2 | 8 月每天 23:00（公告期限 8/14） |
 | Q3 | 11 月每天 23:00（公告期限 11/14） |
@@ -141,7 +146,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 **注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
-手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋。
+手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期。
 
 ## REST API
 
@@ -154,7 +159,7 @@ GET  /api/stocks/<code>/financials 個股季財報
 GET  /api/stats                    DB 統計（stocks/prices/revenues/quarterly 筆數）
 GET  /api/crawler/status           最近 30 筆爬蟲 log
 POST /api/crawler/run/<task>       手動觸發爬蟲（僅限 localhost）
-GET  /api/updates/today            今日更新摘要（股價日期 + 今日有更新的月營收/季財報股票清單）
+GET  /api/updates/today            今日更新摘要（股價日期 + 月營收/季財報清單 + 今日自結公告筆數 ann_count）
 
 GET  /api/auth/me                  取得目前登入使用者
 POST /api/auth/register            註冊（自動通過，建立 session）
@@ -167,6 +172,11 @@ PUT  /api/watchlists/<id>          重新命名
 DELETE /api/watchlists/<id>        刪除
 POST /api/watchlists/<id>/stocks   加入股票 {code}
 DELETE /api/watchlists/<id>/stocks/<code>  移除股票
+
+GET  /api/announcements/today      自結公告清單（近 7 天，JOIN stocks 取名稱，依日期/時間降序）
+GET  /api/announcements/<code>     個股歷史自結公告（最近 20 筆）
+GET  /api/test/ai                  除錯：驗證 OPENROUTER_API_KEY 與模型連線
+GET  /api/test/crawl               除錯：測試 MOPS 爬蟲，回傳 total_links 與 sample_onclicks
 
 GET  /api/messages                 留言板列表（最新 100 筆，含 can_delete 旗標）
 POST /api/messages                 發表留言（需登入，內容上限 500 字）
@@ -257,16 +267,17 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 `state.allData` 存放 `/api/market/summary` 的完整資料，篩選（上市/上櫃、飆股）皆在前端計算，不重新呼叫 API。
 
-### 四個視圖
+### 五個視圖
 
 | 視圖 | 說明 |
 |------|------|
 | `#list-view` | 完整股票列表（DataTables，預設代號升冪） |
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
 | `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
+| `#ann-view` | 自結公告（近 7 天 EPS 公告 + AI 評級）；頁面上方有評級說明條 |
 | `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表） |
 
-分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 依 `state.activeTab` 決定返回 list 或 star。
+分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showDetailView()` 同時隱藏所有 view 含 `#ann-view`；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' }`。
 
 ### 主表格欄位（15 欄，index 0–14）
 
@@ -293,5 +304,23 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 ### 固定面板 / 抽屜
 
-- `#status-panel`（⚙ 爬蟲狀態）、`#today-panel`（🆕 今日更新，呼叫 `/api/updates/today`）：右下／左下角浮動面板，`.hidden` 切換顯示。
+- `#status-panel`（⚙ 爬蟲狀態）、`#today-panel`（🆕 今日更新，呼叫 `/api/updates/today`）：右下／左下角浮動面板，`.hidden` 切換顯示。`today-panel` 含「📰 自結公告」區塊，顯示今日新增筆數（`data.ann_count`）。
 - `#msg-panel`（💬 留言板）：右側滑出抽屜（`.msg-drawer.open` 切換），`loadMessages()` 載入、`sendMessage()` 發表、依 `can_delete` 顯示刪除按鈕。
+
+## 自結公告（AI 飆股雷達）
+
+`crawl_announcements(date_str=None)` 於 `crawler.py`，預設爬取前一個交易日的 MOPS 重大訊息。
+
+**爬蟲流程：**
+1. POST `ajax_t05st02`（帶 ROC 年月日）取得公告清單 HTML
+2. 解析 onclick：`\.TYPEK\.value="([^"]+)".*?\.i\.value="([^"]+)".*?\.co_id\.value="([^"]+)"`
+3. 每筆 POST `ajax_t05st02`（TYPEK, i, co_id）取詳情，間隔 `_jitter(2)`，每 50 筆重新初始化 session
+4. 過濾：說明或主旨含「每股盈餘」才進 AI
+5. `_analyze_with_ai()` 呼叫 OpenRouter，模型由 `OPENROUTER_MODEL` env 指定（預設 `google/gemini-3.1-flash-lite-preview`）
+6. INSERT OR IGNORE（`stock_code + seq_no` 去重），seq_no 為合成鍵 `{typek}_{i}_{co_id}_{date}`
+
+**AI 評級：** 🔴 強烈買進 / 🟠 建議買進 / 🟡 一般觀望 / 🟢 需要小心，輸出 JSON 含 `ai_rating`、`ai_analysis`、`monthly_eps`、`eps_yoy`、`estimated_pe`。
+
+**環境變數：**
+- `OPENROUTER_API_KEY`：必填，無此 key 則跳過 AI（公告仍存入但無評級）
+- `OPENROUTER_MODEL`：選填，預設 `google/gemini-3.1-flash-lite-preview`
