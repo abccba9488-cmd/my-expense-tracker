@@ -62,10 +62,10 @@ def start():
     # Monthly revenue: every day at 23:00 (some companies publish late, keep retrying)
     _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))
 
-    # Announcements: weekdays at 07:00 (catch prior-day post-close announcements)
+    # Announcements: weekdays at 05:00 (off-peak, prior-day post-close announcements)
     _scheduler.add_job(
         lambda: __import__('crawler').crawl_announcements(),
-        CronTrigger(day_of_week='mon-fri', hour=7, minute=0)
+        CronTrigger(day_of_week='mon-fri', hour=5, minute=0)
     )
 
     # Quarterly financial reports — every day of the disclosure month at 23:00

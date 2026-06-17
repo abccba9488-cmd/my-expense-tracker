@@ -24,12 +24,20 @@ from database import (
 logger = logging.getLogger(__name__)
 
 _USER_AGENTS = [
+    # Chrome Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+    # Chrome macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+    # Firefox
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:138.0) Gecko/20100101 Firefox/138.0',
+    # Safari
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15',
+    # Edge
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0',
 ]
 
 # Request counter for periodic session refresh
@@ -808,13 +816,22 @@ _AI_SYSTEM_PROMPT = """你是台灣股市財務分析師。根據公司公告內
 def _post_form(url, data, *, headers=None, timeout=30, retries=3):
     """POST with form-encoded data (for MOPS HTML pages)."""
     global _req_count
+    ua = _get_ua()
     h = {
-        'User-Agent': _get_ua(),
+        'User-Agent': ua,
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'text/html,application/xhtml+xml,*/*;q=0.9',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
         'Accept-Encoding': 'gzip, deflate',
+        'Origin': 'https://mopsov.twse.com.tw',
         'Referer': f'{_ANN_BASE}/t05sr01_1',
+        'Cache-Control': 'max-age=0',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        'Connection': 'keep-alive',
     }
     if headers:
         h.update(headers)
@@ -940,11 +957,13 @@ def crawl_announcements(date_str=None):
 
         try:
             for idx, item in enumerate(links):
-                _jitter(4)
-                # Longer pause every 30 requests to avoid MOPS rate-limiting
-                if idx > 0 and idx % 30 == 0:
-                    logger.info('Pausing 30s after %d requests (anti-throttle)', idx)
-                    time.sleep(30)
+                _jitter(2)
+                # Re-init MOPS session every 50 requests to rotate cookies
+                if idx > 0 and idx % 50 == 0:
+                    logger.info('Re-initializing MOPS session at request %d', idx)
+                    _session.cookies.clear()
+                    _get(f'{_ANN_BASE}/t05sr01_1', timeout=20)
+                    _jitter(2)
                 try:
                     detail_resp = _post_form(
                         f'{_ANN_BASE}/ajax_t05st02',
