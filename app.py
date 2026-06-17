@@ -310,6 +310,7 @@ def _row_to_dict(r):
         'qf_revenue':   r[14],
         'pe_ratio':     r[15],
         'start_price':  r[16],
+        'price_diff':   round((r[4] - r[16]) / r[16] * 100, 2) if r[4] is not None and r[16] and r[16] > 0 else None,
     }
 
 
@@ -339,7 +340,7 @@ def api_market_summary_csv():
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(['股票代號', '名稱', '市場', '產業',
-                    '起始股價', '收盤價', '漲跌幅%',
+                    '起始股價', '收盤價', '價差%', '漲跌幅%',
                     '月營收(千元)', '月營收年增%', '月營收期別',
                     '季營收(千元)',
                     '最新EPS', 'EPS期別',
@@ -351,6 +352,7 @@ def api_market_summary_csv():
                 r[0], r[1], r[2], r[3],
                 r[16] if r[16] is not None else '',
                 r[4] if r[4] is not None else '',
+                round((r[4] - r[16]) / r[16] * 100, 2) if r[4] is not None and r[16] and r[16] > 0 else '',
                 r[5] if r[5] is not None else '',
                 r[7] if r[7] is not None else '',
                 r[8] if r[8] is not None else '',

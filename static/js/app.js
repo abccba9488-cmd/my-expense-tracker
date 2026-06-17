@@ -142,6 +142,7 @@ function renderStockTable() {
     s.industry || '—',
     s.start_price != null ? fmt.price(s.start_price) : '—',
     s.close != null ? fmt.price(s.close) : '—',
+    s.price_diff != null ? `<span class="${pctClass(s.price_diff)}">${fmt.pct(s.price_diff)}</span>` : '—',
     s.change_pct != null
       ? `<span class="${pctClass(s.change_pct)}">${fmt.pct(s.change_pct)}</span>`
       : '—',
@@ -180,8 +181,8 @@ function renderStockTable() {
       order:      [[0, 'asc']],
       language:   dtLang(),
       columnDefs: [
-        { targets: [3, 4, 5, 6, 8, 9, 10, 11, 12], className: 'dt-right', type: 'num-cell' },
-        { targets: [0, 1, 2, 7, 13, 14], className: 'dt-left' },
+        { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
+        { targets: [0, 1, 2, 8, 14, 15], className: 'dt-left' },
       ],
     });
     // Row click
@@ -532,14 +533,14 @@ function getStarFiltered() {
 
 function downloadStarCsv() {
   const rows = getStarFiltered();
-  const headers = ['代號','名稱','產業','起始股價','收盤價','漲跌幅%','營收預估股價','預估倍數',
+  const headers = ['代號','名稱','產業','起始股價','收盤價','價差%','漲跌幅%','營收預估股價','預估倍數',
                    '營收月份','月營收(千元)','月營收年增%','最新EPS','本益比'];
   const lines = [headers.join(',')];
   rows.forEach(s => {
     const revMonth = (s.rev_year && s.rev_month) ? `${s.rev_year}/${String(s.rev_month).padStart(2,'0')}` : '';
     lines.push([
       s.code, s.name, s.industry || '',
-      s.start_price ?? '', s.close ?? '', s.change_pct ?? '',
+      s.start_price ?? '', s.close ?? '', s.price_diff ?? '', s.change_pct ?? '',
       s._est != null ? s._est.toFixed(2) : '',
       s._ratio != null ? s._ratio.toFixed(2) : '',
       revMonth,
@@ -663,6 +664,7 @@ function renderStarTable() {
       s.industry || '—',
       s.start_price != null ? fmt.price(s.start_price) : '—',
       fmt.price(s.close),
+      s.price_diff != null ? `<span class="${pctClass(s.price_diff)}">${fmt.pct(s.price_diff)}</span>` : '—',
       s.change_pct != null ? `<span class="${pctClass(s.change_pct)}">${fmt.pct(s.change_pct)}</span>` : '—',
       estCell,
       s._ratio.toFixed(2) + 'x',
@@ -681,11 +683,11 @@ function renderStarTable() {
       data: rows,
       deferRender: true,
       pageLength: 25,
-      order: [[6, 'desc']],
+      order: [[7, 'desc']],
       language: dtLang(),
       columnDefs: [
-        { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12], className: 'dt-right', type: 'num-cell' },
-        { targets: [0, 1, 2, 8], className: 'dt-left' },
+        { targets: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
+        { targets: [0, 1, 2, 9], className: 'dt-left' },
       ],
     });
     $('#star-table tbody').on('click', 'td', function() {
@@ -839,6 +841,7 @@ function renderWlTable() {
       s.industry || '—',
       s.start_price != null ? fmt.price(s.start_price) : '—',
       s.close != null ? fmt.price(s.close) : '—',
+      s.price_diff != null ? `<span class="${pctClass(s.price_diff)}">${fmt.pct(s.price_diff)}</span>` : '—',
       s.change_pct != null ? `<span class="${pctClass(s.change_pct)}">${fmt.pct(s.change_pct)}</span>` : '—',
       estCell,
       ratio != null ? ratio.toFixed(2) + 'x' : '—',
@@ -858,8 +861,8 @@ function renderWlTable() {
       data: rows, pageLength: 25, order: [], language: dtLang(), destroy: true,
       columnDefs: [
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
-        { targets: [4,5,6,7,8,10,11,12,13], className: 'dt-right', type: 'num-cell' },
-        { targets: [1,2,3,9,14],            className: 'dt-left' },
+        { targets: [4,5,6,7,8,9,11,12,13,14], className: 'dt-right', type: 'num-cell' },
+        { targets: [1,2,3,10,15],             className: 'dt-left' },
       ],
     });
     $('#wl-table tbody').on('click', '.wl-remove-btn', function(e) {
