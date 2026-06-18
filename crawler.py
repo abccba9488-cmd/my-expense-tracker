@@ -968,7 +968,7 @@ def crawl_announcements(date_str=None):
                     _jitter(2)
                 try:
                     detail_resp = _post_form(
-                        f'{_ANN_BASE}/ajax_t05st02',
+                        f'{_ANN_BASE}/ajax_t05sr01_1',
                         data={'TYPEK': item['typek'], 'i': item['i'], 'co_id': item['co_id']},
                         timeout=30,
                     )
