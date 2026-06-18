@@ -942,12 +942,24 @@ def crawl_announcements(date_str=None):
             m = onclick_re.search(tag['onclick'])
             if m:
                 typek, idx, co_id = m.groups()
+                # Try to extract subject hint from parent <tr>
+                row = tag.find_parent('tr')
+                subject_hint = ''
+                if row:
+                    tds = row.find_all('td')
+                    subject_hint = ' | '.join(td.get_text(strip=True) for td in tds)[:300]
                 links.append({
-                    'seq_no': f'{typek}_{idx}_{co_id}_{date_str}',
-                    'typek': typek,
-                    'i': idx,
-                    'co_id': co_id,
+                    'seq_no':       f'{typek}_{idx}_{co_id}_{date_str}',
+                    'typek':        typek,
+                    'i':            idx,
+                    'co_id':        co_id,
+                    'subject_hint': subject_hint,
                 })
+        # Diagnostic: show first 2 rows from the list page
+        if links:
+            logger.info('LIST ROW [0]: %s', links[0].get('subject_hint', ''))
+            if len(links) > 1:
+                logger.info('LIST ROW [1]: %s', links[1].get('subject_hint', ''))
 
         if not links:
             _log('announcements', 'success', f'{date_str}: no announcements found')
@@ -967,30 +979,10 @@ def crawl_announcements(date_str=None):
                     _get(f'{_ANN_BASE}/t05sr01_1', timeout=20)
                     _jitter(2)
                 try:
-                    # Step 1: get the wrapper page which contains a form with hidden fields
-                    step1_resp = _post_form(
-                        f'{_ANN_BASE}/ajax_t05sr01_1',
-                        data={'TYPEK': item['typek'], 'i': item['i'], 'co_id': item['co_id']},
-                        timeout=30,
-                    )
-                    step1_resp.encoding = 'utf-8'
-                    step1_soup = BeautifulSoup(step1_resp.text, 'lxml')
-
-                    # Step 2: re-POST with form hidden fields + original i/co_id
-                    form = step1_soup.find('form')
-                    form_data = {'TYPEK': item['typek'],
-                                 'i': item['i'], 'co_id': item['co_id']}
-                    if form:
-                        for inp in form.find_all('input', {'name': True}):
-                            form_data[inp['name']] = inp.get('value', '')
-                        # Ensure i/co_id are not overwritten by form defaults
-                        form_data['i'] = item['i']
-                        form_data['co_id'] = item['co_id']
-                    detail_resp = _post_form(
-                        f'{_ANN_BASE}/ajax_t05sr01_1',
-                        data=form_data,
-                        timeout=30,
-                    )
+                    # GET the static (non-ajax) detail page
+                    detail_url = (f'{_ANN_BASE}/t05sr01_1'
+                                  f'?TYPEK={item["typek"]}&i={item["i"]}&co_id={item["co_id"]}')
+                    detail_resp = _get(detail_url, timeout=30)
                     detail_resp.encoding = 'utf-8'
                     dsoup = BeautifulSoup(detail_resp.text, 'lxml')
 
@@ -1026,9 +1018,8 @@ def crawl_announcements(date_str=None):
 
                     # Diagnostic: log first 3 items
                     if idx < 3:
-                        form_keys = list(form_data.keys()) if form and form_data else []
-                        logger.info('DIAG [%d] form_keys=%s code=%s subj=%s html2=%s',
-                                    idx, form_keys, code, subject[:60],
+                        logger.info('DIAG [%d] hint=%s code=%s subj=%s html=%s',
+                                    idx, item.get('subject_hint', '')[:80], code, subject[:60],
                                     detail_resp.text[:300].replace('\n', ' '))
 
                     # Keep EPS / self-reported-financials related announcements
