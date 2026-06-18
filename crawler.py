@@ -967,11 +967,30 @@ def crawl_announcements(date_str=None):
                     _get(f'{_ANN_BASE}/t05sr01_1', timeout=20)
                     _jitter(2)
                 try:
-                    detail_resp = _post_form(
+                    # Step 1: get the wrapper page which contains a form with hidden fields
+                    step1_resp = _post_form(
                         f'{_ANN_BASE}/ajax_t05sr01_1',
                         data={'TYPEK': item['typek'], 'i': item['i'], 'co_id': item['co_id']},
                         timeout=30,
                     )
+                    step1_resp.encoding = 'utf-8'
+                    step1_soup = BeautifulSoup(step1_resp.text, 'lxml')
+
+                    # Step 2: find the auto-submit form and re-POST its hidden fields
+                    form = step1_soup.find('form')
+                    if form:
+                        form_data = {inp['name']: inp.get('value', '')
+                                     for inp in form.find_all('input', {'name': True})}
+                        if not form_data:
+                            form_data = {'TYPEK': item['typek'],
+                                         'i': item['i'], 'co_id': item['co_id']}
+                        detail_resp = _post_form(
+                            f'{_ANN_BASE}/ajax_t05sr01_1',
+                            data=form_data,
+                            timeout=30,
+                        )
+                    else:
+                        detail_resp = step1_resp
                     detail_resp.encoding = 'utf-8'
                     dsoup = BeautifulSoup(detail_resp.text, 'lxml')
 
@@ -985,7 +1004,6 @@ def crawl_announcements(date_str=None):
                             code, name = m.group(1).strip(), m.group(2).strip()
 
                     if not code:
-                        # Try hidden input h20 (company ID)
                         h20 = dsoup.find('input', {'name': 'h20'})
                         if h20:
                             code = h20.get('value', '').strip()
@@ -1006,11 +1024,11 @@ def crawl_announcements(date_str=None):
                             content = pre.get_text(' ', strip=True)
                     announce_time = _get_field('發言時間') or ''
 
-                    # Diagnostic: log first 3 items regardless of filter
+                    # Diagnostic: log first 3 items
                     if idx < 3:
-                        logger.info('DIAG [%d] status=%s code=%s subj=%s content=%s html=%s',
-                                    idx, detail_resp.status_code, code,
-                                    subject[:60], content[:80],
+                        form_keys = list(form_data.keys()) if form and form_data else []
+                        logger.info('DIAG [%d] form_keys=%s code=%s subj=%s html2=%s',
+                                    idx, form_keys, code, subject[:60],
                                     detail_resp.text[:300].replace('\n', ' '))
 
                     # Keep EPS / self-reported-financials related announcements
