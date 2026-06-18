@@ -813,6 +813,14 @@ _AI_SYSTEM_PROMPT = """你是台灣股市財務分析師。根據公司公告內
 - ai_analysis 使用純文字，段落間用\\n分隔"""
 
 
+def _strip_cjk_spaces(s):
+    """MOPS inserts a space between every CJK character in <td>/<th> text
+    (both list and detail pages). Strip it — leaves ASCII (numbers, units,
+    English) spacing untouched since the lookaround requires non-ASCII on
+    both sides."""
+    return re.sub(r'(?<=[^\x00-\x7F]) (?=[^\x00-\x7F])', '', s)
+
+
 _TURNAROUND_RE = re.compile(r'由虧轉盈|轉虧為盈|虧轉盈')
 _EPS_LABEL_RE  = re.compile(r'每股盈餘|每股稅後盈餘|每股稅前盈餘|基本每股盈餘')
 
@@ -1019,12 +1027,13 @@ def fetch_announcement_detail(sess, typek, i, co_id):
             return td.get_text('\n', strip=True) if td else ''
         return ''
 
-    subject = _get_field('主旨')
+    subject = _strip_cjk_spaces(_get_field('主旨'))
     content = _get_field('說明')
     if not content:
         pre = dsoup.find('pre')
         if pre:
             content = pre.get_text('\n', strip=True)
+    content = _strip_cjk_spaces(content)
     parsed = _parse_disclosure(content) if content else {}
     return subject, content, parsed
 
@@ -1092,8 +1101,7 @@ def crawl_announcements(date_str=None):
                 row = tag.find_parent('tr')
                 list_code, list_name, list_subject, list_time = '', '', '', ''
                 if row:
-                    tds = [re.sub(r'(?<=[^\x00-\x7F]) (?=[^\x00-\x7F])', '',
-                                   td.get_text(strip=True))
+                    tds = [_strip_cjk_spaces(td.get_text(strip=True))
                            for td in row.find_all('td')]
                     # Expected columns: ROC_date | time | code | name | subject | ...
                     if len(tds) >= 5:
