@@ -919,25 +919,42 @@ def crawl_announcements(date_str=None):
     _log('announcements', 'running', date_str)
     logger.info('Crawling announcements for %s', date_str)
 
-    try:
-        # Init session then fetch announcement list for the date
-        _get(f'{_ANN_BASE}/t05sr01_1', timeout=20)
-        _jitter(1)
-        list_resp = _post_form(
+    # Dedicated session for MOPS — completely isolated from the shared _session
+    # so its cookies are never cleared by _get()/_post_form() cookie-refresh logic.
+    ann_sess = requests.Session()
+    ann_sess.verify = False
+
+    def _ann_headers():
+        return {
+            'User-Agent': _get_ua(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate',
+            'Origin': 'https://mopsov.twse.com.tw',
+            'Referer': f'{_ANN_BASE}/t05sr01_1',
+            'Connection': 'keep-alive',
+        }
+
+    def _ann_post(data, timeout=30):
+        return ann_sess.post(
             f'{_ANN_BASE}/ajax_t05st02',
-            data={
-                'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
-                'TYPEK': 'all',
-                'year': roc_year, 'month': month_str, 'day': day_str,
-            },
-            timeout=30,
+            data=data,
+            headers={**_ann_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=timeout,
         )
+
+    try:
+        # Init MOPS session
+        ann_sess.get(f'{_ANN_BASE}/t05sr01_1', headers=_ann_headers(), timeout=20)
+        _jitter(1)
+
+        # Fetch full announcement list for the date (all companies)
+        list_resp = _ann_post({
+            'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
+            'TYPEK': 'all',
+            'year': roc_year, 'month': month_str, 'day': day_str,
+        })
         list_resp.encoding = 'utf-8'
-        # Save MOPS session cookies: the 'i' index in onclick only has meaning
-        # within the server-side session created by this POST.  _get() clears
-        # cookies every 80 requests, which would invalidate the session before
-        # we finish fetching all the detail pages.
-        _mops_cookies = dict(_session.cookies)
         soup = BeautifulSoup(list_resp.text, 'lxml')
 
         # onclick format: document.sii_fm0.TYPEK.value="sii";.i.value="0";.co_id.value="2362"
@@ -1014,26 +1031,23 @@ def crawl_announcements(date_str=None):
 
                 _jitter(2)
                 try:
-                    # Restore MOPS session cookies before every detail fetch.
-                    # _get() clears _session.cookies periodically, which would
-                    # break the server-side 'i'-index lookup.  Bypass _get()
-                    # here and call _session.get() directly so cookies survive.
-                    for _k, _v in _mops_cookies.items():
-                        _session.cookies.set(_k, _v)
-                    detail_url = (f'{_ANN_BASE}/t05sr01_1'
-                                  f'?TYPEK={item["typek"]}&i={item["i"]}&co_id={item["co_id"]}')
-                    detail_resp = _session.get(
-                        detail_url,
-                        headers={
-                            'User-Agent': _get_ua(),
-                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-                            'Accept-Encoding': 'gzip, deflate',
-                            'Referer': f'{_ANN_BASE}/t05sr01_1',
-                            'Connection': 'keep-alive',
-                        },
+                    typek = item['typek']
+                    co_id = item['co_id']
+
+                    # POST company-specific query so the server session now contains
+                    # only THIS company's announcements for the target date.
+                    # Then i=0 reliably refers to the first (usually only) result —
+                    # no dependency on the original 842-item session index.
+                    _ann_post({
+                        'firstin': 'true', 'off': '1', 'step': '1',
+                        'TYPEK': typek, 'co_id': co_id,
+                        'year': roc_year, 'month': month_str, 'day': day_str,
+                    })
+
+                    detail_resp = ann_sess.get(
+                        f'{_ANN_BASE}/t05sr01_1?TYPEK={typek}&i=0&co_id={co_id}',
+                        headers=_ann_headers(),
                         timeout=30,
-                        verify=False,
                     )
                     detail_resp.encoding = 'utf-8'
                     dsoup = BeautifulSoup(detail_resp.text, 'lxml')
