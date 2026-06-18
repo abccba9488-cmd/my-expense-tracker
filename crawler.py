@@ -1034,18 +1034,40 @@ def crawl_announcements(date_str=None):
                     typek = item['typek']
                     co_id = item['co_id']
 
-                    # POST company-specific query so the server session now contains
-                    # only THIS company's announcements for the target date.
-                    # Then i=0 reliably refers to the first (usually only) result —
-                    # no dependency on the original 842-item session index.
-                    _ann_post({
+                    # Company-specific POST: server session now contains only THIS
+                    # company's announcements for the target date.
+                    co_resp = _ann_post({
                         'firstin': 'true', 'off': '1', 'step': '1',
                         'TYPEK': typek, 'co_id': co_id,
                         'year': roc_year, 'month': month_str, 'day': day_str,
                     })
+                    co_resp.encoding = 'utf-8'
+                    co_soup = BeautifulSoup(co_resp.text, 'lxml')
+
+                    # Find the EPS-related announcement among this company's results.
+                    # The company may have filed multiple announcements on the same
+                    # date (e.g. 注意交易 + 解除競業禁止); we need the correct 'i'.
+                    target_i = None
+                    for co_tag in co_soup.find_all(onclick=True):
+                        co_m = onclick_re.search(co_tag['onclick'])
+                        if not co_m:
+                            continue
+                        _, co_i, _ = co_m.groups()
+                        co_row = co_tag.find_parent('tr')
+                        if co_row:
+                            co_tds = [td.get_text(strip=True) for td in co_row.find_all('td')]
+                            co_subj = co_tds[4] if len(co_tds) >= 5 else (co_tds[2] if len(co_tds) >= 3 else '')
+                            logger.info('DIAG co_result code=%s i=%s subj=%s', code, co_i, co_subj[:60])
+                            if any(kw in co_subj for kw in _EPS_KEYWORDS):
+                                target_i = co_i
+                                break
+
+                    if target_i is None:
+                        logger.info('Skip %s — no EPS announcement in company-specific results', code)
+                        continue
 
                     detail_resp = ann_sess.get(
-                        f'{_ANN_BASE}/t05sr01_1?TYPEK={typek}&i=0&co_id={co_id}',
+                        f'{_ANN_BASE}/t05sr01_1?TYPEK={typek}&i={target_i}&co_id={co_id}',
                         headers=_ann_headers(),
                         timeout=30,
                     )
