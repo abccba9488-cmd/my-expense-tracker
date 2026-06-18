@@ -976,21 +976,21 @@ def crawl_announcements(date_str=None):
                     step1_resp.encoding = 'utf-8'
                     step1_soup = BeautifulSoup(step1_resp.text, 'lxml')
 
-                    # Step 2: find the auto-submit form and re-POST its hidden fields
+                    # Step 2: re-POST with form hidden fields + original i/co_id
                     form = step1_soup.find('form')
+                    form_data = {'TYPEK': item['typek'],
+                                 'i': item['i'], 'co_id': item['co_id']}
                     if form:
-                        form_data = {inp['name']: inp.get('value', '')
-                                     for inp in form.find_all('input', {'name': True})}
-                        if not form_data:
-                            form_data = {'TYPEK': item['typek'],
-                                         'i': item['i'], 'co_id': item['co_id']}
-                        detail_resp = _post_form(
-                            f'{_ANN_BASE}/ajax_t05sr01_1',
-                            data=form_data,
-                            timeout=30,
-                        )
-                    else:
-                        detail_resp = step1_resp
+                        for inp in form.find_all('input', {'name': True}):
+                            form_data[inp['name']] = inp.get('value', '')
+                        # Ensure i/co_id are not overwritten by form defaults
+                        form_data['i'] = item['i']
+                        form_data['co_id'] = item['co_id']
+                    detail_resp = _post_form(
+                        f'{_ANN_BASE}/ajax_t05sr01_1',
+                        data=form_data,
+                        timeout=30,
+                    )
                     detail_resp.encoding = 'utf-8'
                     dsoup = BeautifulSoup(detail_resp.text, 'lxml')
 
