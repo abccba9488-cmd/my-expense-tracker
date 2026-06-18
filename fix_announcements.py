@@ -64,13 +64,8 @@ def main(limit=None, since=None):
             crawler._jitter(3)
             continue
 
-        if not content:
-            logger.info('id=%d %s seq=%s — no content parsed, skip', ann_id, code, seq_no)
-            failed += 1
-            continue
-
         qf = db.execute(text(
-            "SELECT eps FROM quarterly_financials WHERE stock_code=:c"
+            "SELECT eps, year, quarter FROM quarterly_financials WHERE stock_code=:c"
             " ORDER BY year DESC, quarter DESC LIMIT 1"), {'c': code}).first()
         dp = db.execute(text(
             "SELECT close FROM daily_prices WHERE stock_code=:c"
@@ -78,6 +73,17 @@ def main(limit=None, since=None):
 
         if 'quarterly_eps' not in parsed and qf:
             parsed['quarterly_eps'] = qf[0]
+        if not content:
+            if not qf:
+                logger.info('id=%d %s seq=%s — no detail content and not in DB, skip',
+                             ann_id, code, seq_no)
+                failed += 1
+                continue
+            # No real disclosure content (e.g. 注意交易 announcements without
+            # an EPS table) — still overwrite any stale monthly_eps with the
+            # correct null + DB-derived quarterly_eps, same as crawl_announcements().
+            content = f"最新季EPS：{qf[0]} 元（{qf[1]}年Q{qf[2]}）\n"
+            subject = subject or old_subject
 
         monthly_eps       = parsed.get('monthly_eps')
         eps_yoy           = parsed.get('eps_yoy')
