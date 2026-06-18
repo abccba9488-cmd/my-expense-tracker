@@ -895,7 +895,17 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
         raw = resp.json()['choices'][0]['message']['content']
         # strip markdown code fences if the model wraps the JSON
         m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', raw)
-        j = _json.loads(m.group(1) if m else raw)
+        text_to_parse = m.group(1) if m else raw
+        # fallback: extract first {...} block if top-level text wraps JSON
+        if not text_to_parse.strip().startswith('{'):
+            bm = re.search(r'\{[\s\S]+\}', text_to_parse)
+            if bm:
+                text_to_parse = bm.group(0)
+        try:
+            j = _json.loads(text_to_parse)
+        except _json.JSONDecodeError:
+            logger.warning('AI JSON parse failed for %s — raw: %s', stock_code, raw[:500])
+            return None, None, None, None, None
         return (
             j.get('ai_rating'),
             j.get('ai_analysis'),
