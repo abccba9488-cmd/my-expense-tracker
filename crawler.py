@@ -1006,10 +1006,12 @@ def crawl_announcements(date_str=None):
                             content = pre.get_text(' ', strip=True)
                     announce_time = _get_field('發言時間') or ''
 
-                    # Diagnostic: log first 5 items regardless of filter
-                    if idx < 5:
-                        logger.info('DIAG [%d] code=%s subj=%s content_head=%s',
-                                    idx, code, subject[:60], content[:120])
+                    # Diagnostic: log first 3 items regardless of filter
+                    if idx < 3:
+                        logger.info('DIAG [%d] status=%s code=%s subj=%s content=%s html=%s',
+                                    idx, detail_resp.status_code, code,
+                                    subject[:60], content[:80],
+                                    detail_resp.text[:300].replace('\n', ' '))
 
                     # Keep EPS / self-reported-financials related announcements
                     _EPS_KEYWORDS = ('每股盈餘', '每股稅後盈餘', '每股稅前盈餘',
