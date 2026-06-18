@@ -887,8 +887,10 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
             timeout=90,
         )
         if resp.status_code == 429:
-            logger.warning('AI 429 rate limit for %s — skipping AI, announcement saved without rating',
-                           stock_code)
+            logger.warning('AI 429 for %s — headers: %s body: %s',
+                           stock_code,
+                           dict(resp.headers),
+                           resp.text[:300])
             return None, None, None, None, None
         resp.raise_for_status()
         raw = resp.json()['choices'][0]['message']['content']
