@@ -1042,6 +1042,9 @@ def crawl_announcements(date_str=None):
                         'year': roc_year, 'month': month_str, 'day': day_str,
                     })
                     co_resp.encoding = 'utf-8'
+                    logger.info('DIAG co_post code=%s status=%d html=%s',
+                                code, co_resp.status_code,
+                                co_resp.text[:400].replace('\n', ' '))
                     co_soup = BeautifulSoup(co_resp.text, 'lxml')
 
                     # Find the EPS-related announcement among this company's results.
