@@ -301,34 +301,90 @@ table.dataTable tbody td {
 .admin-user-del:hover { color: var(--neg); }
 
 /* ── Announcement view ── */
-.ann-list { overflow-y: auto; padding: 10px 14px; flex: 1; }
-.ann-view-list { max-width: 800px; margin: 0 auto; overflow-y: visible; }
 .ann-legend {
-  max-width: 800px; margin: 0 auto 12px;
+  margin: 0 0 12px;
   background: var(--bg2); border-radius: 8px; padding: 10px 14px;
   display: flex; flex-direction: column; gap: 4px;
 }
-.ann-legend-item { font-size: 13px; color: var(--text); line-height: 1.8; display: block; }
+.ann-legend-item { font-size: 12px; color: var(--text); line-height: 1.8; display: block; }
 .about-rating-list { margin: 6px 0 0 16px; padding: 0; font-size: 13px; line-height: 1.8; color: var(--text); }
-.ann-item {
-  padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+.ann-list { padding: 0 0 20px; }
+.ann-empty { color: var(--text2); padding: 24px 0; text-align: center; font-size: 13px; }
+
+/* table */
+.ann-table-wrap { overflow-x: auto; }
+.ann-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
 }
-.ann-item:last-child { border-bottom: none; }
-.ann-header {
+.ann-table th {
+  background: var(--bg2); color: var(--text2);
+  font-weight: 600; font-size: 12px;
+  padding: 8px 10px; text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ann-table td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  vertical-align: middle; white-space: nowrap;
+}
+.ann-table tr:last-child td { border-bottom: none; }
+.ann-table tr:hover td { background: var(--bg2); }
+.ann-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ann-table .td-center { text-align: center; }
+.ann-table .up { color: #ef5350; }
+.ann-table .dn { color: #26a69a; }
+.ann-dot { font-size: 14px; cursor: default; }
+.ann-dot-empty { color: var(--text2); font-size: 12px; }
+.ann-link { font-weight: 700; cursor: pointer; }
+.ann-link:hover { color: var(--primary); }
+.ann-name-link { cursor: pointer; }
+.ann-name-link:hover { color: var(--primary); text-decoration: underline; }
+.ann-analysis-btn {
+  color: var(--text2); font-size: 12px; cursor: pointer;
+  max-width: 260px; display: inline-block; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+}
+.ann-analysis-btn:hover { color: var(--text); }
+.ann-td-date { color: var(--text2); font-size: 12px; }
+
+/* modal */
+.ann-modal-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,.6); display: flex;
+  align-items: center; justify-content: center;
+}
+.ann-modal-overlay.hidden { display: none; }
+.ann-modal {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 12px; width: min(680px, 94vw);
+  max-height: 80vh; display: flex; flex-direction: column;
+  box-shadow: 0 8px 40px rgba(0,0,0,.5);
+}
+.ann-modal-hdr {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; margin-bottom: 4px;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  font-weight: 700; font-size: 15px;
 }
-.ann-code { font-weight: 700; color: var(--text); cursor: pointer; }
-.ann-code:hover { color: var(--primary); }
-.ann-rating { font-size: 12px; white-space: nowrap; flex-shrink: 0; }
-.ann-subject { color: var(--text2); font-size: 12px; margin-bottom: 4px; }
-.ann-analysis {
-  color: var(--text); font-size: 12px; white-space: pre-wrap;
-  background: var(--bg3); border-radius: 6px; padding: 8px 10px; margin-top: 6px;
-  max-height: 120px; overflow-y: auto;
+.ann-modal-close {
+  background: none; border: none; color: var(--text2);
+  font-size: 18px; cursor: pointer; padding: 0 4px;
 }
-.ann-empty { color: var(--text2); padding: 12px 0; text-align: center; font-size: 13px; }
-.ann-no-ai { color: var(--text2); font-size: 11px; margin-top: 4px; }
+.ann-modal-close:hover { color: var(--text); }
+.ann-modal-body {
+  padding: 16px 18px; overflow-y: auto; flex: 1;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.ann-modal-subject { font-size: 13px; color: var(--text); font-weight: 600; }
+.ann-modal-rating { font-size: 13px; }
+.ann-modal-analysis {
+  font-size: 13px; color: var(--text); white-space: pre-wrap;
+  background: var(--bg2); border-radius: 8px; padding: 10px 12px;
+}
+.ann-modal-divider { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
+.ann-modal-content {
+  font-size: 12px; color: var(--text2); white-space: pre-wrap;
+  font-family: inherit; margin: 0;
+}
 
 /* ── Today updates panel ── */
 .today-panel { left: 16px; right: auto; }

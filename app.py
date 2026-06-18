@@ -553,6 +553,7 @@ def api_announcements_today():
             'announce_date': str(a.announce_date),
             'announce_time': a.announce_time or '',
             'subject':      a.subject or '',
+            'content':      a.content or '',
             'ai_rating':    a.ai_rating or '',
             'ai_analysis':  a.ai_analysis or '',
             'monthly_eps':  a.monthly_eps,

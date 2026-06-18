@@ -280,7 +280,18 @@
         <span class="ann-legend-item">🟡 一般觀望：成長有限（年增&lt;10%）或 PE&gt;30 缺題材 或 虧損但收窄</span>
         <span class="ann-legend-item">🟢 需要小心：營收/EPS 年減 或 虧轉盈 或 衰退&gt;30%</span>
       </div>
-      <div id="ann-list" class="ann-list ann-view-list"></div>
+      <div id="ann-list" class="ann-list"></div>
+    </div>
+  </div>
+
+  <!-- 公告全文 Modal -->
+  <div id="ann-modal" class="ann-modal-overlay hidden" onclick="if(event.target===this)closeAnnModal()">
+    <div class="ann-modal">
+      <div class="ann-modal-hdr">
+        <span id="ann-modal-title"></span>
+        <button class="ann-modal-close" onclick="closeAnnModal()">✕</button>
+      </div>
+      <div id="ann-modal-body" class="ann-modal-body"></div>
     </div>
   </div>
 

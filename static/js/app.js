@@ -1004,6 +1004,16 @@ async function runCrawler(task) {
 }
 
 /* ── Announcement view ── */
+function _annRatingDot(r) {
+  if (!r) return '<span class="ann-dot-empty">—</span>';
+  const cls = r.includes('強烈') ? 'red' : r.includes('建議') ? 'orange'
+            : r.includes('一般') ? 'yellow' : 'green';
+  return `<span class="ann-dot ann-dot-${cls}" title="${r}">${
+    r.includes('強烈') ? '🔴' : r.includes('建議') ? '🟠'
+    : r.includes('一般') ? '🟡' : '🟢'
+  }</span>`;
+}
+
 async function loadAnnouncements() {
   const el = document.getElementById('ann-list');
   if (!el) return;
@@ -1016,22 +1026,56 @@ async function loadAnnouncements() {
       el.innerHTML = '<div class="ann-empty">今日無 EPS 相關公告</div>';
       return;
     }
-    el.innerHTML = data.map(a => `
-      <div class="ann-item">
-        <div class="ann-header">
-          <span class="ann-code stock-link" data-code="${a.stock_code}">${a.stock_code} ${a.name}</span>
-          <span class="ann-rating">${a.ai_rating || ''}</span>
-        </div>
-        <div class="ann-subject">${a.subject || ''}</div>
-        ${a.ai_analysis
-          ? `<div class="ann-analysis">${a.ai_analysis}</div>`
-          : '<div class="ann-no-ai">（AI 分析未設定或執行中）</div>'
-        }
-      </div>
-    `).join('');
+    el.innerHTML = `
+      <div class="ann-table-wrap">
+        <table class="ann-table">
+          <thead><tr>
+            <th>代號</th><th>評級</th><th>名稱</th>
+            <th>月EPS</th><th>EPS年增%</th><th>預估PE</th>
+            <th>AI分析</th><th>公告日期</th>
+          </tr></thead>
+          <tbody>
+            ${data.map((a, i) => {
+              const yoy = a.eps_yoy != null ? a.eps_yoy : null;
+              const yoyCls = yoy > 0 ? 'up' : yoy < 0 ? 'dn' : '';
+              return `<tr>
+                <td><span class="stock-link ann-link" data-code="${a.stock_code}">${a.stock_code}</span></td>
+                <td class="td-center">${_annRatingDot(a.ai_rating)}</td>
+                <td><span class="ann-name-link" data-idx="${i}">${a.name || ''}</span></td>
+                <td class="num">${a.monthly_eps != null ? a.monthly_eps.toFixed(2) : '—'}</td>
+                <td class="num ${yoyCls}">${yoy != null ? yoy.toFixed(1) + '%' : '—'}</td>
+                <td class="num">${a.estimated_pe != null ? a.estimated_pe.toFixed(1) : '—'}</td>
+                <td class="ann-td-analysis"><span class="ann-analysis-btn" data-idx="${i}">${
+                  a.ai_analysis ? a.ai_analysis.substring(0, 36) + '…' : '—'
+                }</span></td>
+                <td class="ann-td-date">${a.announce_date}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    el._annData = data;
+    el.querySelectorAll('.ann-name-link, .ann-analysis-btn').forEach(btn => {
+      btn.addEventListener('click', () => openAnnModal(data[+btn.dataset.idx]));
+    });
   } catch (_) {
     document.getElementById('ann-list').innerHTML = '<div class="ann-empty">載入失敗</div>';
   }
+}
+
+function openAnnModal(a) {
+  document.getElementById('ann-modal-title').textContent = `${a.stock_code} ${a.name}`;
+  document.getElementById('ann-modal-body').innerHTML = `
+    <div class="ann-modal-subject">${a.subject || ''}</div>
+    ${a.ai_rating ? `<div class="ann-modal-rating">${a.ai_rating}</div>` : ''}
+    ${a.ai_analysis ? `<div class="ann-modal-analysis">${a.ai_analysis}</div>` : ''}
+    ${a.content ? `<hr class="ann-modal-divider"><pre class="ann-modal-content">${a.content}</pre>` : ''}
+  `;
+  document.getElementById('ann-modal').classList.remove('hidden');
+}
+
+function closeAnnModal() {
+  document.getElementById('ann-modal').classList.add('hidden');
 }
 
 /* ── Crawler status panel ── */
