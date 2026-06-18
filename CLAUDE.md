@@ -348,4 +348,4 @@ python fix_announcements.py --since 2026-06-01  # 只修正某日期後的公告
 
 **環境變數：**
 - `OPENROUTER_API_KEY`：必填，無此 key 則跳過 AI（公告仍存入但無評級）
-- `OPENROUTER_MODEL`：選填，預設 `meta-llama/llama-3.3-70b-instruct:free`（易被 Venice upstream 限速，建議改為走 Google/DeepSeek provider 的模型）
+- `OPENROUTER_MODEL`：選填，預設 `google/gemini-3.1-flash-lite-preview`（`meta-llama/llama-3.3-70b-instruct:free` 透過某些 provider 路由時，中文輸出會在每個字之間插入空格，導致 JSON 解析失敗，故換回 Gemini）
