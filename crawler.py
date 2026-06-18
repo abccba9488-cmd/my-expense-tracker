@@ -868,39 +868,48 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
     model = os.environ.get('OPENROUTER_MODEL', 'meta-llama/llama-3.3-70b-instruct:free')
 
     user_msg = f'股票：{stock_name}（{stock_code}）\n主旨：{subject}\n\n公告說明：\n{content[:3000]}'
-    try:
-        resp = requests.post(
-            'https://openrouter.ai/api/v1/chat/completions',
-            headers={
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'https://stock-market.zeabur.app',
-            },
-            json={
-                'model': model,
-                'messages': [
-                    {'role': 'system', 'content': _AI_SYSTEM_PROMPT},
-                    {'role': 'user',   'content': user_msg},
-                ],
-                'response_format': {'type': 'json_object'},
-            },
-            timeout=90,
-        )
-        resp.raise_for_status()
-        raw = resp.json()['choices'][0]['message']['content']
-        # strip markdown code fences if the model wraps the JSON
-        m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', raw)
-        j = _json.loads(m.group(1) if m else raw)
-        return (
-            j.get('ai_rating'),
-            j.get('ai_analysis'),
-            _parse_num(str(j.get('monthly_eps', '') or '')),
-            _parse_num(str(j.get('eps_yoy', '') or '')),
-            _parse_num(str(j.get('estimated_pe', '') or '')),
-        )
-    except Exception as e:
-        logger.warning('AI analysis failed for %s: %s', stock_code, e)
-        return None, None, None, None, None
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://stock-market.zeabur.app',
+                },
+                json={
+                    'model': model,
+                    'messages': [
+                        {'role': 'system', 'content': _AI_SYSTEM_PROMPT},
+                        {'role': 'user',   'content': user_msg},
+                    ],
+                    'response_format': {'type': 'json_object'},
+                },
+                timeout=90,
+            )
+            if resp.status_code == 429:
+                wait = int(resp.headers.get('Retry-After', 60))
+                logger.warning('AI 429 rate limit for %s — waiting %ds (attempt %d)',
+                               stock_code, wait, attempt + 1)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            raw = resp.json()['choices'][0]['message']['content']
+            # strip markdown code fences if the model wraps the JSON
+            m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', raw)
+            j = _json.loads(m.group(1) if m else raw)
+            return (
+                j.get('ai_rating'),
+                j.get('ai_analysis'),
+                _parse_num(str(j.get('monthly_eps', '') or '')),
+                _parse_num(str(j.get('eps_yoy', '') or '')),
+                _parse_num(str(j.get('estimated_pe', '') or '')),
+            )
+        except Exception as e:
+            logger.warning('AI analysis failed for %s: %s', stock_code, e)
+            return None, None, None, None, None
+    logger.warning('AI analysis gave up after 3 retries for %s', stock_code)
+    return None, None, None, None, None
 
 
 def crawl_announcements(date_str=None):
@@ -1098,7 +1107,7 @@ def crawl_announcements(date_str=None):
                         logger.warning('DB insert skip %s seq %s: %s', code, item['seq_no'], e)
 
                 except Exception as e:
-                    logger.warning('Detail fetch failed seq %s: %s', item['seq_no'], e)
+                    logger.warning('Processing failed seq %s: %s', item['seq_no'], e)
 
         finally:
             db.close()
