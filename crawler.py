@@ -803,17 +803,86 @@ _AI_SYSTEM_PROMPT = """你是台灣股市財務分析師。根據公司公告內
 必須以 JSON 格式輸出，所有欄位皆為必填：
 {
   "ai_rating": "🔴 強烈買進",
-  "ai_analysis": "4段分析文字（評級+數據、成長動能、產業風險、結論）",
-  "monthly_eps": 1.23,
-  "eps_yoy": 45.6,
-  "estimated_pe": 18.5
+  "ai_analysis": "4段分析文字（評級+數據、成長動能、產業風險、結論）"
 }
 
 規則：
 - ai_rating 只能是以上四種之一
-- monthly_eps/eps_yoy/estimated_pe 無法計算時填 null
+- 公告說明中標註的[結構化數據]（月EPS/季EPS/由虧轉盈）為已驗證數字，分析時直接引用，勿自行重新計算
 - 禁用 [1][2][3] 引用標記
 - ai_analysis 使用純文字，段落間用\\n分隔"""
+
+
+_TURNAROUND_RE = re.compile(r'由虧轉盈|轉虧為盈|虧轉盈')
+_EPS_LABEL_RE  = re.compile(r'每股盈餘|每股稅後盈餘|每股稅前盈餘|基本每股盈餘')
+
+
+def _extract_numbers(line):
+    """Pull numeric tokens from a table row, stripping thousand-separators
+    and trailing '(由虧轉盈)'-style annotations first."""
+    cleaned = re.sub(r'\([由轉虧盈為]+\)', '', line)
+    return [float(n.replace(',', '')) for n in re.findall(r'-?\d[\d,]*\.?\d*', cleaned)]
+
+
+def _parse_disclosure(body):
+    """Parse a MOPS 自結合併財務資訊 announcement body into structured EPS
+    fields. Two known layouts:
+      A) TWSE 'sii' — single table, EPS row has 5 numeric columns:
+         月值, 月年增%, 季值, 季年增%, 累計值
+      B) TPEX 'otc' — sections (1)單月 (2)單季 (3)最近四季累計, each with
+         3 numeric columns: 本期值, 去年同期值, 年增%
+    Returns a dict with whatever fields were found (missing keys omitted)."""
+    result = {}
+    if _TURNAROUND_RE.search(body):
+        result['turnaround'] = 1
+
+    lines = [l for l in body.splitlines() if l.strip()]
+
+    # Format A: EPS row carries 5 numbers (monthly + quarterly + cumulative).
+    for i, line in enumerate(lines):
+        if _EPS_LABEL_RE.search(line):
+            nums = _extract_numbers(line)
+            if len(nums) < 5 and i + 1 < len(lines):
+                nums += _extract_numbers(lines[i + 1])
+            if len(nums) >= 5:
+                result['monthly_eps']       = nums[0]
+                result['eps_yoy']           = nums[1]
+                result['quarterly_eps']     = nums[2]
+                result['quarterly_eps_yoy'] = nums[3]
+                return result
+
+    # Format B: section-scoped EPS row, 3 numbers each.
+    section_re = re.compile(r'\(1\)\s*單月|\(2\)\s*單季|\(3\)\s*(最近)?四季累計')
+    sections, cur, cur_name = [], [], None
+    for line in lines:
+        m = section_re.search(line)
+        if m:
+            if cur_name:
+                sections.append((cur_name, cur))
+            cur_name = '單月' if '單月' in m.group(0) else ('單季' if '單季' in m.group(0) else '累計')
+            cur = []
+        else:
+            cur.append(line)
+    if cur_name:
+        sections.append((cur_name, cur))
+
+    for name, section_lines in sections:
+        if name not in ('單月', '單季'):
+            continue
+        for line in section_lines:
+            if _EPS_LABEL_RE.search(line):
+                nums = _extract_numbers(line)
+                if len(nums) >= 3:
+                    val, yoy = nums[0], nums[2]
+                    if name == '單月':
+                        result.setdefault('monthly_eps', val)
+                        result.setdefault('eps_yoy', yoy)
+                    else:
+                        result.setdefault('quarterly_eps', val)
+                        result.setdefault('quarterly_eps_yoy', yoy)
+                break
+
+    return result
 
 
 def _post_form(url, data, *, headers=None, timeout=30, retries=3):
@@ -861,10 +930,12 @@ def _post_form(url, data, *, headers=None, timeout=30, retries=3):
 
 
 def _analyze_with_ai(stock_code, stock_name, subject, content):
-    """Call OpenRouter (perplexity/sonar) to rate and analyze an announcement."""
+    """Call OpenRouter to rate and analyze an announcement. Numeric fields
+    (EPS/PE/turnaround) are parsed deterministically by _parse_disclosure()
+    elsewhere — AI here only judges qualitative rating + analysis text."""
     api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
     if not api_key:
-        return None, None, None, None, None
+        return None, None
     model = os.environ.get('OPENROUTER_MODEL', 'meta-llama/llama-3.3-70b-instruct:free')
 
     user_msg = f'股票：{stock_name}（{stock_code}）\n主旨：{subject}\n\n公告說明：\n{content[:3000]}'
@@ -890,7 +961,7 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
             logger.warning('AI 429 rate limit for %s (provider: %s) — skipping',
                            stock_code,
                            resp.json().get('error', {}).get('metadata', {}).get('provider_name', '?'))
-            return None, None, None, None, None
+            return None, None
         resp.raise_for_status()
         raw = resp.json()['choices'][0]['message']['content']
         # strip markdown code fences if the model wraps the JSON
@@ -905,17 +976,57 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
             j = _json.loads(text_to_parse)
         except _json.JSONDecodeError:
             logger.warning('AI JSON parse failed for %s — raw: %s', stock_code, raw[:500])
-            return None, None, None, None, None
-        return (
-            j.get('ai_rating'),
-            j.get('ai_analysis'),
-            _parse_num(str(j.get('monthly_eps', '') or '')),
-            _parse_num(str(j.get('eps_yoy', '') or '')),
-            _parse_num(str(j.get('estimated_pe', '') or '')),
-        )
+            return None, None
+        return j.get('ai_rating'), j.get('ai_analysis')
     except Exception as e:
         logger.warning('AI analysis failed for %s: %s', stock_code, e)
-        return None, None, None, None, None
+        return None, None
+
+
+def _ann_headers():
+    return {
+        'User-Agent': _get_ua(),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate',
+        'Origin': 'https://mopsov.twse.com.tw',
+        'Referer': f'{_ANN_BASE}/t05sr01_1',
+        'Connection': 'keep-alive',
+    }
+
+
+def new_mops_session():
+    """Create + init a MOPS session (sets cookies) for repeated detail fetches."""
+    sess = requests.Session()
+    sess.verify = False
+    sess.get(f'{_ANN_BASE}/t05sr01_1', headers=_ann_headers(), timeout=20)
+    return sess
+
+
+def fetch_announcement_detail(sess, typek, i, co_id):
+    """GET a MOPS 重大訊息 detail page and return (subject, content, parsed).
+    parsed is the dict from _parse_disclosure() (empty if content unparseable).
+    Raises requests.exceptions.RequestException on connection failure."""
+    detail_url = f'{_ANN_BASE}/t05sr01_1?TYPEK={typek}&i={i}&co_id={co_id}'
+    resp = sess.get(detail_url, headers=_ann_headers(), timeout=30)
+    resp.encoding = 'utf-8'
+    dsoup = BeautifulSoup(resp.text, 'lxml')
+
+    def _get_field(label):
+        th = dsoup.find('th', string=re.compile(label))
+        if th:
+            td = th.find_next_sibling('td')
+            return td.get_text('\n', strip=True) if td else ''
+        return ''
+
+    subject = _get_field('主旨')
+    content = _get_field('說明')
+    if not content:
+        pre = dsoup.find('pre')
+        if pre:
+            content = pre.get_text('\n', strip=True)
+    parsed = _parse_disclosure(content) if content else {}
+    return subject, content, parsed
 
 
 def crawl_announcements(date_str=None):
@@ -939,17 +1050,6 @@ def crawl_announcements(date_str=None):
     # so its cookies are never cleared by _get()/_post_form() cookie-refresh logic.
     ann_sess = requests.Session()
     ann_sess.verify = False
-
-    def _ann_headers():
-        return {
-            'User-Agent': _get_ua(),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate',
-            'Origin': 'https://mopsov.twse.com.tw',
-            'Referer': f'{_ANN_BASE}/t05sr01_1',
-            'Connection': 'keep-alive',
-        }
 
     def _ann_post(data, timeout=30):
         return ann_sess.post(
@@ -1050,45 +1150,62 @@ def crawl_announcements(date_str=None):
                 _jitter(3)
                 try:
                     subject = item.get('list_subject', '')
+                    typek, idx_, co_id = item['typek'], item['i'], item['co_id']
 
-                    # MOPS detail pages reset the connection (bot protection).
-                    # Build content from our own DB instead: latest quarterly EPS,
-                    # monthly revenue, and close price are sufficient for AI rating.
                     qf = db.execute(text(
                         "SELECT eps, year, quarter FROM quarterly_financials"
                         " WHERE stock_code=:c ORDER BY year DESC, quarter DESC LIMIT 1"
-                    ), {'c': code}).first()
-                    mr = db.execute(text(
-                        "SELECT revenue, revenue_yoy, year, month FROM monthly_revenue"
-                        " WHERE stock_code=:c ORDER BY year DESC, month DESC LIMIT 1"
                     ), {'c': code}).first()
                     dp = db.execute(text(
                         "SELECT close FROM daily_prices"
                         " WHERE stock_code=:c ORDER BY date DESC LIMIT 1"
                     ), {'c': code}).first()
 
-                    if not qf:
-                        logger.info('Skip %s — not in DB', code)
-                        continue
+                    # Fetch the real MOPS detail page. It occasionally resets
+                    # the connection (bot protection) — on failure we fall
+                    # back to a minimal DB-derived note for this item only,
+                    # rather than abandoning real content for every item.
+                    content, parsed = '', {}
+                    try:
+                        detail_subject, content, parsed = fetch_announcement_detail(
+                            ann_sess, typek, idx_, co_id)
+                        subject = detail_subject or subject
+                        if content:
+                            logger.info('Detail parsed %s seq %s: %s', code, item['seq_no'], parsed)
+                    except requests.exceptions.RequestException as e:
+                        logger.warning('Detail fetch failed for %s seq %s: %s — using DB fallback',
+                                        code, item['seq_no'], e)
 
-                    content = (
-                        f"公司被 TWSE/TPEX 列入注意交易股票。\n"
-                        f"最新季EPS：{qf[0]} 元（{qf[1]}年Q{qf[2]}）\n"
-                    )
-                    if mr:
-                        content += (f"最新月營收：{mr[0]:,.0f} 千元"
-                                    f"（年增 {mr[1]:.1f}%，{mr[2]}年{mr[3]}月）\n")
-                    if dp:
-                        content += f"現收盤價：{dp[0]} 元\n"
+                    if 'quarterly_eps' not in parsed and qf:
+                        parsed['quarterly_eps'] = qf[0]
+                    if not content:
+                        if not qf:
+                            logger.info('Skip %s — no detail content and not in DB', code)
+                            continue
+                        content = f"最新季EPS：{qf[0]} 元（{qf[1]}年Q{qf[2]}）\n"
 
-                    logger.info('DB content for %s: %s', code, content[:120])
+                    monthly_eps       = parsed.get('monthly_eps')
+                    eps_yoy           = parsed.get('eps_yoy')
+                    quarterly_eps     = parsed.get('quarterly_eps')
+                    quarterly_eps_yoy = parsed.get('quarterly_eps_yoy')
+                    turnaround        = parsed.get('turnaround')
+
+                    eps_for_pe = (monthly_eps * 12) if monthly_eps else (
+                        quarterly_eps * 4 if quarterly_eps else None)
+                    estimated_pe = (round(dp[0] / eps_for_pe, 1)
+                                     if eps_for_pe and dp and eps_for_pe != 0 else None)
+
+                    ai_context = content
+                    if monthly_eps is not None or quarterly_eps is not None:
+                        ai_context += (
+                            f"\n[結構化數據] 月EPS={monthly_eps}（年增{eps_yoy}%）"
+                            f" 季EPS={quarterly_eps}（年增{quarterly_eps_yoy}%）"
+                            f" 由虧轉盈={'是' if turnaround else '否'}"
+                        )
 
                     # Free-tier rate limit ~3 req/min; sleep before each AI call
                     time.sleep(20)
-                    # AI analysis
-                    ai_rating, ai_analysis, monthly_eps, eps_yoy, estimated_pe = (
-                        _analyze_with_ai(code, name, subject, content)
-                    )
+                    ai_rating, ai_analysis = _analyze_with_ai(code, name, subject, ai_context)
 
                     # Insert (ignore duplicate); if AI succeeded, also update
                     # existing records that have NULL ai_rating (allows re-run to
@@ -1097,27 +1214,32 @@ def crawl_announcements(date_str=None):
                         db.execute(
                             Announcement.__table__.insert().prefix_with('OR IGNORE'),
                             [{
-                                'stock_code':    code,
-                                'seq_no':        item['seq_no'],
-                                'announce_date': dt,
-                                'announce_time': announce_time[:10],
-                                'subject':       subject[:500],
-                                'content':       content[:5000],
-                                'ai_rating':     ai_rating,
-                                'ai_analysis':   ai_analysis,
-                                'monthly_eps':   monthly_eps,
-                                'eps_yoy':       eps_yoy,
-                                'estimated_pe':  estimated_pe,
-                                'created_at':    datetime.now(_TZ),
+                                'stock_code':        code,
+                                'seq_no':            item['seq_no'],
+                                'announce_date':     dt,
+                                'announce_time':     announce_time[:10],
+                                'subject':           subject[:500],
+                                'content':           content[:5000],
+                                'ai_rating':         ai_rating,
+                                'ai_analysis':       ai_analysis,
+                                'monthly_eps':       monthly_eps,
+                                'eps_yoy':           eps_yoy,
+                                'estimated_pe':      estimated_pe,
+                                'quarterly_eps':     quarterly_eps,
+                                'quarterly_eps_yoy': quarterly_eps_yoy,
+                                'turnaround':        turnaround,
+                                'created_at':        datetime.now(_TZ),
                             }],
                         )
                         if ai_rating is not None:
                             db.execute(
                                 text("UPDATE announcements SET ai_rating=:r, ai_analysis=:a,"
-                                     " monthly_eps=:me, eps_yoy=:ey, estimated_pe=:ep"
+                                     " monthly_eps=:me, eps_yoy=:ey, estimated_pe=:ep,"
+                                     " quarterly_eps=:qe, quarterly_eps_yoy=:qey, turnaround=:ta"
                                      " WHERE stock_code=:c AND seq_no=:s AND ai_rating IS NULL"),
                                 {'r': ai_rating, 'a': ai_analysis, 'me': monthly_eps,
                                  'ey': eps_yoy, 'ep': estimated_pe,
+                                 'qe': quarterly_eps, 'qey': quarterly_eps_yoy, 'ta': turnaround,
                                  'c': code, 's': item['seq_no']},
                             )
                         db.commit()

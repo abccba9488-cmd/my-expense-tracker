@@ -559,6 +559,9 @@ def api_announcements_today():
             'monthly_eps':  a.monthly_eps,
             'eps_yoy':      a.eps_yoy,
             'estimated_pe': a.estimated_pe,
+            'quarterly_eps':     a.quarterly_eps,
+            'quarterly_eps_yoy': a.quarterly_eps_yoy,
+            'turnaround':        bool(a.turnaround),
         } for a, name in rows])
     finally:
         db.close()
@@ -584,6 +587,9 @@ def api_announcements_stock(code):
             'monthly_eps':  a.monthly_eps,
             'eps_yoy':      a.eps_yoy,
             'estimated_pe': a.estimated_pe,
+            'quarterly_eps':     a.quarterly_eps,
+            'quarterly_eps_yoy': a.quarterly_eps_yoy,
+            'turnaround':        bool(a.turnaround),
         } for a in rows])
     finally:
         db.close()

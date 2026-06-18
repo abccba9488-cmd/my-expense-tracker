@@ -274,7 +274,7 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 | `#list-view` | 完整股票列表（DataTables，預設代號升冪） |
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
 | `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
-| `#ann-view` | 自結公告（近 7 天 EPS 公告 + AI 評級）；頁面上方有評級說明條 |
+| `#ann-view` | 自結公告（近 7 天 EPS 公告 + AI 評級）；表格樣式，點名稱/AI分析欄開 `#ann-modal` 看全文 |
 | `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表） |
 
 分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showDetailView()` 同時隱藏所有 view 含 `#ann-view`；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' }`。
@@ -316,13 +316,36 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 **爬蟲流程：**
 1. POST `ajax_t05st02`（帶 ROC 年月日）取得公告清單 HTML
 2. 解析 onclick：`\.TYPEK\.value="([^"]+)".*?\.i\.value="([^"]+)".*?\.co_id\.value="([^"]+)"`
-3. 每筆 POST `ajax_t05st02`（TYPEK, i, co_id）取詳情，間隔 `_jitter(2)`，每 50 筆重新初始化 session
-4. 過濾：說明或主旨含「每股盈餘」才進 AI
-5. `_analyze_with_ai()` 呼叫 OpenRouter，模型由 `OPENROUTER_MODEL` env 指定（預設 `google/gemini-3.1-flash-lite-preview`）
-6. INSERT OR IGNORE（`stock_code + seq_no` 去重），seq_no 為合成鍵 `{typek}_{i}_{co_id}_{date}`
+3. 以 `_EPS_KEYWORDS` 對主旨做 pre-filter（含「每股盈餘」、「注意交易」等）；`注意交易` 公告的 EPS 資料在說明欄，主旨形如「達公布注意交易資訊標準」
+4. `fetch_announcement_detail()` GET `t05sr01_1?TYPEK&i&co_id` 取得真實詳情頁（**注意：此 GET 在 Zeabur 雲端曾持續出現 `ConnectionResetError`，但本機網路可正常存取**，原因尚不確定，懷疑是雲端機房 IP 被 MOPS 反爬蟲規則擋下；目前重新啟用，個別公告抓取失敗時僅該筆 fallback，不影響其他筆）
+5. `_parse_disclosure()` 解析「說明」欄的自結合併財務資訊表格，取得**真實**月/季 EPS 與年增%，並偵測「由虧轉盈/轉虧為盈」標註 → `turnaround` 旗標；支援兩種版面：
+   - A）TWSE「sii」單一表格，EPS 列含 5 個數字（月值/月年增%/季值/季年增%/累計值）
+   - B）TPEX「otc」三段式 `(1)單月 (2)單季 (3)最近四季累計`，每段 EPS 列含 3 個數字（本期/去年同期/年增%）
+   - 解析失敗（詳情頁抓取失敗或版面不符）時，`quarterly_eps` 退回用本站 DB 最新一筆 `quarterly_financials.eps`；**`monthly_eps` 絕不用季EPS頂替**（這正是先前版本的 bug：AI 曾把唯一拿到的季EPS誤標成月EPS）
+6. `estimated_pe` 改為**決定性計算**（不再讓 AI 自由生成）：`收盤價 / (月EPS×12)`，無月EPS則用 `收盤價 / (季EPS×4)`
+7. AI（`_analyze_with_ai()`）現在只負責 `ai_rating` + `ai_analysis` 兩個欄位，所有數字皆已由 `_parse_disclosure()` 決定性算出後一併放進 prompt 的 `[結構化數據]` 段落，AI 只需引用不必自算
+8. 每筆 AI 呼叫前 `time.sleep(20)` 避免 OpenRouter free tier upstream rate limit（429），model 由 `OPENROUTER_MODEL` env 指定
+9. INSERT OR IGNORE（`stock_code + seq_no` 去重）；若 AI 分析成功，額外執行 `UPDATE ... WHERE ai_rating IS NULL`，允許重跑補上原本因 429 跳過的評級
 
-**AI 評級：** 🔴 強烈買進 / 🟠 建議買進 / 🟡 一般觀望 / 🟢 需要小心，輸出 JSON 含 `ai_rating`、`ai_analysis`、`monthly_eps`、`eps_yoy`、`estimated_pe`。
+**`_EPS_KEYWORDS`（`crawler.py` 頂部常數）**：新增/移除關鍵字時需同步在此處修改，pre-filter 即依此過濾。
+
+**MOPS HTML 中文字空格問題**：MOPS 的 `<td>` 文字每個字之間有空格。`td.get_text(strip=True)` 後以 `re.sub(r'(?<=[^\x00-\x7F]) (?=[^\x00-\x7F])', '', ...)` 去除（僅用於清單頁；詳情頁的 `_get_field()` 用 `get_text('\n', strip=True)` 保留換行以利表格解析，不可改成空白分隔）。
+
+**`fetch_announcement_detail(sess, typek, i, co_id)` / `new_mops_session()`（`crawler.py` 模組層級函式）**：抽出共用的詳情頁抓取+解析邏輯，`crawl_announcements()` 與 `fix_announcements.py` 共用，避免重複實作。
+
+**`fix_announcements.py`**：一次性修正腳本，重新抓取既有 `announcements` 資料列的真實詳情頁內容，修正舊版 DB-fallback 寫入的錯誤 `monthly_eps`（原本誤填季EPS）。從 `seq_no`（`{typek}_{i}_{co_id}_{date}`）還原原始 GET 參數。**需在雲端終端機執行**（本機已驗證 GET 可行，但雲端是否同樣可行尚待實測）：
+```bash
+python fix_announcements.py                    # 全部重跑
+python fix_announcements.py --limit 50          # 只跑前 50 筆（先小量驗證）
+python fix_announcements.py --since 2026-06-01  # 只修正某日期後的公告
+```
+
+**AI 評級：** 🔴 強烈買進 / 🟠 建議買進 / 🟡 一般觀望 / 🟢 需要小心，輸出 JSON 僅含 `ai_rating`、`ai_analysis`。
+
+**前端（`#ann-view`）：** 以表格呈現（代號 / 評級 / 名稱 / 月EPS / EPS年增% / 預估PE / **虧轉盈** / AI分析 / 日期）；`turnaround` 為真時整列標色並顯示「🔄 由虧轉盈」徽章；點代號跳到個股詳情；點名稱或 AI分析欄開 modal，內含季EPS與虧轉盈標示。
+
+**`announcements` 表新增欄位**：`quarterly_eps`、`quarterly_eps_yoy`、`turnaround`（`database.py` migration 用 try/except ALTER 防重複加欄）。
 
 **環境變數：**
 - `OPENROUTER_API_KEY`：必填，無此 key 則跳過 AI（公告仍存入但無評級）
-- `OPENROUTER_MODEL`：選填，預設 `google/gemini-3.1-flash-lite-preview`
+- `OPENROUTER_MODEL`：選填，預設 `meta-llama/llama-3.3-70b-instruct:free`（易被 Venice upstream 限速，建議改為走 Google/DeepSeek provider 的模型）

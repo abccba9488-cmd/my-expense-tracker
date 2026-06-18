@@ -156,9 +156,12 @@ class Announcement(Base):
     content       = Column(Text)
     ai_rating     = Column(String(30))   # 🔴🟠🟡🟢 + label
     ai_analysis   = Column(Text)
-    monthly_eps   = Column(Float)
-    eps_yoy       = Column(Float)
+    monthly_eps   = Column(Float)        # 真實月自結 EPS（非季EPS）
+    eps_yoy       = Column(Float)        # 月EPS 與去年同期增減%
     estimated_pe  = Column(Float)
+    quarterly_eps     = Column(Float)    # 自結季EPS
+    quarterly_eps_yoy = Column(Float)    # 季EPS 與去年同期增減%
+    turnaround    = Column(Integer)      # 1 = 公告內容含「由虧轉盈/轉虧為盈」
     created_at    = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
@@ -253,6 +256,16 @@ def init_db():
             Base.metadata.tables['announcements'].create(engine, checkfirst=True)
             conn.execute(text("INSERT INTO schema_migrations(name) VALUES('create_announcements')"))
             conn.commit()
+
+    # Migration: add quarterly_eps / quarterly_eps_yoy / turnaround to announcements
+    with engine.connect() as conn:
+        for col, coltype in (('quarterly_eps', 'REAL'), ('quarterly_eps_yoy', 'REAL'),
+                              ('turnaround', 'INTEGER')):
+            try:
+                conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col} {coltype}'))
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
 
     # Migration: fix Q4 annual EPS/revenue → individual Q4 (subtract Q1+Q2+Q3)
     with engine.connect() as conn:

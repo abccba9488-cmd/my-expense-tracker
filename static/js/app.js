@@ -1031,20 +1031,21 @@ async function loadAnnouncements() {
         <table class="ann-table">
           <thead><tr>
             <th>代號</th><th>評級</th><th>名稱</th>
-            <th>月EPS</th><th>EPS年增%</th><th>預估PE</th>
+            <th>月EPS</th><th>EPS年增%</th><th>預估PE</th><th>虧轉盈</th>
             <th>AI分析</th><th>公告日期</th>
           </tr></thead>
           <tbody>
             ${data.map((a, i) => {
               const yoy = a.eps_yoy != null ? a.eps_yoy : null;
               const yoyCls = yoy > 0 ? 'up' : yoy < 0 ? 'dn' : '';
-              return `<tr>
+              return `<tr class="${a.turnaround ? 'ann-row-turnaround' : ''}">
                 <td><span class="stock-link ann-link" data-code="${a.stock_code}">${a.stock_code}</span></td>
                 <td class="td-center">${_annRatingDot(a.ai_rating)}</td>
                 <td><span class="ann-name-link" data-idx="${i}">${a.name || ''}</span></td>
                 <td class="num">${a.monthly_eps != null ? a.monthly_eps.toFixed(2) : '—'}</td>
                 <td class="num ${yoyCls}">${yoy != null ? yoy.toFixed(1) + '%' : '—'}</td>
                 <td class="num">${a.estimated_pe != null ? a.estimated_pe.toFixed(1) : '—'}</td>
+                <td class="td-center">${a.turnaround ? '<span class="ann-turnaround-badge">🔄 由虧轉盈</span>' : '—'}</td>
                 <td class="ann-td-analysis"><span class="ann-analysis-btn" data-idx="${i}">${
                   a.ai_analysis ? a.ai_analysis.substring(0, 36) + '…' : '—'
                 }</span></td>
@@ -1068,6 +1069,8 @@ function openAnnModal(a) {
   document.getElementById('ann-modal-body').innerHTML = `
     <div class="ann-modal-subject">${a.subject || ''}</div>
     ${a.ai_rating ? `<div class="ann-modal-rating">${a.ai_rating}</div>` : ''}
+    ${a.turnaround ? `<div class="ann-turnaround-badge">🔄 由虧轉盈</div>` : ''}
+    ${a.quarterly_eps != null ? `<div class="ann-modal-quarterly">季EPS：${a.quarterly_eps.toFixed(2)} 元${a.quarterly_eps_yoy != null ? `（年增 ${a.quarterly_eps_yoy.toFixed(1)}%）` : ''}</div>` : ''}
     ${a.ai_analysis ? `<div class="ann-modal-analysis">${a.ai_analysis}</div>` : ''}
     ${a.content ? `<hr class="ann-modal-divider"><pre class="ann-modal-content">${a.content}</pre>` : ''}
   `;

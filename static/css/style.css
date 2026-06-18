@@ -346,6 +346,12 @@ table.dataTable tbody td {
 }
 .ann-analysis-btn:hover { color: var(--text); }
 .ann-td-date { color: var(--text2); font-size: 12px; }
+.ann-row-turnaround { background: rgba(239, 83, 80, 0.06); }
+.ann-turnaround-badge {
+  display: inline-block; font-size: 11px; font-weight: 600;
+  color: #ef5350; background: rgba(239, 83, 80, 0.12);
+  border-radius: 6px; padding: 2px 8px; white-space: nowrap;
+}
 
 /* modal */
 .ann-modal-overlay {
@@ -376,6 +382,7 @@ table.dataTable tbody td {
 }
 .ann-modal-subject { font-size: 13px; color: var(--text); font-weight: 600; }
 .ann-modal-rating { font-size: 13px; }
+.ann-modal-quarterly { font-size: 13px; color: var(--text2); }
 .ann-modal-analysis {
   font-size: 13px; color: var(--text); white-space: pre-wrap;
   background: var(--bg2); border-radius: 8px; padding: 10px 12px;
