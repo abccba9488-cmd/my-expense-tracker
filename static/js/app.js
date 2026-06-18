@@ -482,10 +482,8 @@ document.querySelectorAll('.page-tab').forEach(btn => {
     document.getElementById('list-view').classList.toggle('active', state.activeTab === 'list');
     document.getElementById('star-view').classList.toggle('active', state.activeTab === 'star');
     document.getElementById('watchlist-view').classList.toggle('active', state.activeTab === 'watchlist');
-    document.getElementById('ann-view').classList.toggle('active', state.activeTab === 'ann');
     if (state.activeTab === 'star') renderStarTable();
     if (state.activeTab === 'watchlist') renderWatchlistView();
-    if (state.activeTab === 'ann') loadAnnouncements();
   });
 });
 
@@ -703,7 +701,6 @@ function showDetailView() {
   document.getElementById('list-view').classList.remove('active');
   document.getElementById('star-view').classList.remove('active');
   document.getElementById('watchlist-view').classList.remove('active');
-  document.getElementById('ann-view').classList.remove('active');
   document.getElementById('detail-view').classList.add('active');
   document.getElementById('page-tabs-bar').classList.add('hidden');
   window.scrollTo(0, 0);
@@ -712,7 +709,7 @@ function showDetailView() {
 function showListView() {
   document.getElementById('detail-view').classList.remove('active');
   document.getElementById('page-tabs-bar').classList.remove('hidden');
-  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' };
+  const viewMap = { star: 'star-view', watchlist: 'watchlist-view' };
   document.getElementById(viewMap[state.activeTab] || 'list-view').classList.add('active');
   state.currentCode = null;
 }
@@ -1003,84 +1000,6 @@ async function runCrawler(task) {
   }
 }
 
-/* ── Announcement view ── */
-function _annRatingDot(r) {
-  if (!r) return '<span class="ann-dot-empty">—</span>';
-  const cls = r.includes('強烈') ? 'red' : r.includes('建議') ? 'orange'
-            : r.includes('一般') ? 'yellow' : 'green';
-  return `<span class="ann-dot ann-dot-${cls}" title="${r}">${
-    r.includes('強烈') ? '🔴' : r.includes('建議') ? '🟠'
-    : r.includes('一般') ? '🟡' : '🟢'
-  }</span>`;
-}
-
-async function loadAnnouncements() {
-  const el = document.getElementById('ann-list');
-  if (!el) return;
-  el.innerHTML = '<div class="ann-empty">載入中…</div>';
-  try {
-    const data = await fetch('/api/announcements/today').then(r => r.json());
-    const countEl = document.getElementById('ann-count');
-    if (countEl) countEl.textContent = `共 ${data.length} 筆`;
-    if (!data.length) {
-      el.innerHTML = '<div class="ann-empty">今日無 EPS 相關公告</div>';
-      return;
-    }
-    el.innerHTML = `
-      <div class="ann-table-wrap">
-        <table class="ann-table">
-          <thead><tr>
-            <th>代號</th><th>評級</th><th>名稱</th>
-            <th>月EPS</th><th>EPS年增%</th><th>預估PE</th><th>虧轉盈</th>
-            <th>AI分析</th><th>公告日期</th>
-          </tr></thead>
-          <tbody>
-            ${data.map((a, i) => {
-              const yoy = a.eps_yoy != null ? a.eps_yoy : null;
-              const yoyCls = yoy > 0 ? 'up' : yoy < 0 ? 'dn' : '';
-              return `<tr class="${a.turnaround ? 'ann-row-turnaround' : ''}">
-                <td><span class="stock-link ann-link" data-code="${a.stock_code}">${a.stock_code}</span></td>
-                <td class="td-center">${_annRatingDot(a.ai_rating)}</td>
-                <td><span class="ann-name-link" data-idx="${i}">${a.name || ''}</span></td>
-                <td class="num">${a.monthly_eps != null ? a.monthly_eps.toFixed(2) : '—'}</td>
-                <td class="num ${yoyCls}">${yoy != null ? yoy.toFixed(1) + '%' : '—'}</td>
-                <td class="num">${a.estimated_pe != null ? a.estimated_pe.toFixed(1) : '—'}</td>
-                <td class="td-center">${a.turnaround ? '<span class="ann-turnaround-badge">🔄 由虧轉盈</span>' : '—'}</td>
-                <td class="ann-td-analysis"><span class="ann-analysis-btn" data-idx="${i}">${
-                  a.ai_analysis ? a.ai_analysis.substring(0, 36) + '…' : '—'
-                }</span></td>
-                <td class="ann-td-date">${a.announce_date}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>`;
-    el._annData = data;
-    el.querySelectorAll('.ann-name-link, .ann-analysis-btn').forEach(btn => {
-      btn.addEventListener('click', () => openAnnModal(data[+btn.dataset.idx]));
-    });
-  } catch (_) {
-    document.getElementById('ann-list').innerHTML = '<div class="ann-empty">載入失敗</div>';
-  }
-}
-
-function openAnnModal(a) {
-  document.getElementById('ann-modal-title').textContent = `${a.stock_code} ${a.name}`;
-  document.getElementById('ann-modal-body').innerHTML = `
-    <div class="ann-modal-subject">${a.subject || ''}</div>
-    ${a.ai_rating ? `<div class="ann-modal-rating">${a.ai_rating}</div>` : ''}
-    ${a.turnaround ? `<div class="ann-turnaround-badge">🔄 由虧轉盈</div>` : ''}
-    ${a.quarterly_eps != null ? `<div class="ann-modal-quarterly">季EPS：${a.quarterly_eps.toFixed(2)} 元${a.quarterly_eps_yoy != null ? `（年增 ${a.quarterly_eps_yoy.toFixed(1)}%）` : ''}</div>` : ''}
-    ${a.ai_analysis ? `<div class="ann-modal-analysis">${a.ai_analysis}</div>` : ''}
-    ${a.content ? `<hr class="ann-modal-divider"><pre class="ann-modal-content">${a.content}</pre>` : ''}
-  `;
-  document.getElementById('ann-modal').classList.remove('hidden');
-}
-
-function closeAnnModal() {
-  document.getElementById('ann-modal').classList.add('hidden');
-}
-
 /* ── Crawler status panel ── */
 document.getElementById('status-btn').addEventListener('click', () => {
   const panel = document.getElementById('status-panel');
@@ -1145,10 +1064,6 @@ async function loadTodayUpdates() {
       <div class="today-section">
         <div class="today-section-title">📊 季財報（${data.quarterly.length}）</div>
         ${_todayChips(data.quarterly)}
-      </div>
-      <div class="today-section">
-        <div class="today-section-title">📰 自結公告</div>
-        ${data.ann_count > 0 ? `<div>今日新增 ${data.ann_count} 筆</div>` : '<div class="today-empty">今日尚無新增</div>'}
       </div>
     `;
     el.querySelectorAll('.today-stock-chip').forEach(chip => {

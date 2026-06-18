@@ -144,27 +144,6 @@ class CrawlerLog(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
-class Announcement(Base):
-    __tablename__ = 'announcements'
-    __table_args__ = (UniqueConstraint('stock_code', 'seq_no'),)
-    id            = Column(Integer, primary_key=True, autoincrement=True)
-    stock_code    = Column(String(10), nullable=False)
-    seq_no        = Column(String(20), nullable=False)   # MOPS SEQ_NO for dedup
-    announce_date = Column(Date, nullable=False)
-    announce_time = Column(String(10))
-    subject       = Column(Text)
-    content       = Column(Text)
-    ai_rating     = Column(String(30))   # 🔴🟠🟡🟢 + label
-    ai_analysis   = Column(Text)
-    monthly_eps   = Column(Float)        # 真實月自結 EPS（非季EPS）
-    eps_yoy       = Column(Float)        # 月EPS 與去年同期增減%
-    estimated_pe  = Column(Float)
-    quarterly_eps     = Column(Float)    # 自結季EPS
-    quarterly_eps_yoy = Column(Float)    # 季EPS 與去年同期增減%
-    turnaround    = Column(Integer)      # 1 = 公告內容含「由虧轉盈/轉虧為盈」
-    created_at    = Column(DateTime, default=lambda: datetime.now(_TZ))
-
-
 def _migrate_q4_to_individual(conn):
     """Convert Q4 annual cumulative data to individual Q4 by subtracting Q1+Q2+Q3."""
     for field in ('eps', 'revenue', 'operating_income', 'net_income'):
@@ -246,26 +225,6 @@ def init_db():
               AND revenue IS NOT NULL
         '''))
         conn.commit()
-
-    # Migration: create announcements table
-    with engine.connect() as conn:
-        done = conn.execute(text(
-            "SELECT COUNT(*) FROM schema_migrations WHERE name='create_announcements'"
-        )).scalar()
-        if not done:
-            Base.metadata.tables['announcements'].create(engine, checkfirst=True)
-            conn.execute(text("INSERT INTO schema_migrations(name) VALUES('create_announcements')"))
-            conn.commit()
-
-    # Migration: add quarterly_eps / quarterly_eps_yoy / turnaround to announcements
-    with engine.connect() as conn:
-        for col, coltype in (('quarterly_eps', 'REAL'), ('quarterly_eps_yoy', 'REAL'),
-                              ('turnaround', 'INTEGER')):
-            try:
-                conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col} {coltype}'))
-                conn.commit()
-            except Exception:
-                pass  # Column already exists
 
     # Migration: fix Q4 annual EPS/revenue → individual Q4 (subtract Q1+Q2+Q3)
     with engine.connect() as conn:

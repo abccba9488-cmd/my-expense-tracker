@@ -79,46 +79,6 @@ def _quarterly_job(quarter):
         logger.error('Quarterly Q%d job failed: %s', quarter, e)
 
 
-def _announcements_job():
-    import crawler
-    try:
-        logger.info('Announcement job starting')
-        crawler.crawl_announcements()
-    except Exception as e:
-        logger.error('Announcement job failed: %s', e)
-
-
-def _announcements_watchdog():
-    """Every 30 min: if it's a weekday 05:00–10:00 Taipei and today's crawl is missing, run it."""
-    from database import SessionLocal
-    from sqlalchemy import text
-    now = datetime.now(_TZ)
-    if now.weekday() >= 5 or not (5 <= now.hour < 10):
-        return
-    # Target date: yesterday's trading day (skip weekends)
-    from datetime import timedelta
-    target = now.date() - timedelta(days=1)
-    while target.weekday() >= 5:
-        target -= timedelta(days=1)
-    target_str = target.strftime('%Y%m%d')
-    db = SessionLocal()
-    try:
-        done = db.execute(
-            text("SELECT 1 FROM crawler_logs WHERE task='announcements' AND status='success'"
-                 " AND message LIKE :pat LIMIT 1"),
-            {'pat': f'{target_str}:%'},
-        ).first()
-    finally:
-        db.close()
-    if not done:
-        logger.info('Ann watchdog: no crawl for %s — triggering', target_str)
-        import crawler
-        try:
-            crawler.crawl_announcements(target_str)
-        except Exception as e:
-            logger.error('Ann watchdog crawl failed: %s', e)
-
-
 def start():
     # Update stock list every Sunday at 01:00
     _scheduler.add_job(_stock_list_job, CronTrigger(day_of_week='sun', hour=1, minute=0))
@@ -133,12 +93,6 @@ def start():
 
     # Monthly revenue: every day at 23:00 (some companies publish late, keep retrying)
     _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))
-
-    # Announcements: weekdays at 05:00 (off-peak, prior-day post-close announcements)
-    _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=5, minute=0))
-    # Announcements watchdog: every 30 min, fires immediately on startup
-    _scheduler.add_job(_announcements_watchdog, 'interval', minutes=30,
-                       next_run_time=datetime.now(_TZ))
 
     # Quarterly financial reports — every day of the disclosure month at 23:00
     # Q1 (Jan–Mar): all of May (deadline May 15)

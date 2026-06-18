@@ -130,7 +130,6 @@
       <button class="page-tab active" data-tab="list">股票總覽</button>
       <button class="page-tab" data-tab="star">🔥 營收飆股</button>
       <button class="page-tab" data-tab="watchlist">⭐ 自選股</button>
-      <button class="page-tab" data-tab="ann">📰 自結公告</button>
     </div>
   </div>
 
@@ -268,33 +267,6 @@
     </div>
   </div>
 
-  <!-- 自結公告 -->
-  <div id="ann-view" class="view">
-    <div class="container">
-      <div class="toolbar">
-        <span class="stats-badge" id="ann-count"></span>
-      </div>
-      <div class="ann-legend">
-        <span class="ann-legend-item">🔴 強烈買進：PE≤20 + EPS年增 + 營收不衰退；或 PE>20 + 熱門題材 + EPS年增>30%</span>
-        <span class="ann-legend-item">🟠 建議買進：EPS/營收正成長 + PE≤30 + 基本面健康</span>
-        <span class="ann-legend-item">🟡 一般觀望：成長有限（年增&lt;10%）或 PE&gt;30 缺題材 或 虧損但收窄</span>
-        <span class="ann-legend-item">🟢 需要小心：營收/EPS 年減 或 虧轉盈 或 衰退&gt;30%</span>
-      </div>
-      <div id="ann-list" class="ann-list"></div>
-    </div>
-  </div>
-
-  <!-- 公告全文 Modal -->
-  <div id="ann-modal" class="ann-modal-overlay hidden" onclick="if(event.target===this)closeAnnModal()">
-    <div class="ann-modal">
-      <div class="ann-modal-hdr">
-        <span id="ann-modal-title"></span>
-        <button class="ann-modal-close" onclick="closeAnnModal()">✕</button>
-      </div>
-      <div id="ann-modal-body" class="ann-modal-body"></div>
-    </div>
-  </div>
-
   <!-- 個股詳情 -->
   <div id="detail-view" class="view">
     <div class="container">
@@ -401,7 +373,6 @@
     <button class="btn btn-sm admin-only hidden" id="quarterly-btn" onclick="runCrawler('quarterly')">更新季財報</button>
     <button class="btn btn-sm admin-only hidden" onclick="runCrawler('daily_price')">更新今日股價</button>
     <button class="btn btn-sm admin-only hidden" onclick="runCrawler('monthly_revenue')">更新月營收</button>
-    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('announcements')">更新自結公告</button>
   </div>
   <div id="status-logs" class="status-logs"></div>
 </div>
@@ -520,14 +491,6 @@
       <p>
         點擊「安裝 App」按鈕，可以把飆股網直接安裝在手機上面，方便查看。
       </p>
-
-      <h4>🤖 AI 評級標準</h4>
-      <ul class="about-rating-list">
-        <li>🔴 <b>強烈買進</b>：PE≤20 + EPS 年增 + 營收不衰退；或 PE>20 + 熱門題材 + EPS 年增>30%</li>
-        <li>🟠 <b>建議買進</b>：EPS／營收正成長 + PE≤30 + 基本面健康</li>
-        <li>🟡 <b>一般觀望</b>：成長有限（年增&lt;10%）或 PE&gt;30 缺題材 或 虧損但收窄</li>
-        <li>🟢 <b>需要小心</b>：營收／EPS 年減 或 虧轉盈 或 衰退&gt;30%</li>
-      </ul>
     </div>
   </div>
 </div>

@@ -18,7 +18,7 @@ import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message,
-    Announcement, init_db
+    init_db
 )
 
 logging.basicConfig(
@@ -223,17 +223,10 @@ def api_updates_today():
             .all()
         )
 
-        ann_count = (
-            db.query(Announcement)
-            .filter(text("date(created_at) = :today")).params(today=today_str)
-            .count()
-        )
-
         return jsonify({
             'price_date': price_date,
             'monthly_revenue': [{'code': c, 'name': n} for c, n in revenue_rows],
             'quarterly':       [{'code': c, 'name': n} for c, n in quarterly_rows],
-            'ann_count': ann_count,
         })
     finally:
         db.close()
@@ -462,138 +455,6 @@ def api_financials(code):
         db.close()
 
 
-# ── API: debug ───────────────────────────────────────────────────────────────
-
-@app.route('/api/test/ai')
-def api_test_ai():
-    """Debug: verify OpenRouter API key and connectivity."""
-    import os, requests as _req
-    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
-    if not api_key:
-        return jsonify({'ok': False, 'error': 'OPENROUTER_API_KEY not set'}), 500
-    model = os.environ.get('OPENROUTER_MODEL', 'google/gemini-3.1-flash-lite-preview')
-    try:
-        resp = _req.post(
-            'https://openrouter.ai/api/v1/chat/completions',
-            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
-            json={'model': model, 'messages': [{'role': 'user', 'content': '回覆 OK'}]},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        reply = resp.json()['choices'][0]['message']['content']
-        return jsonify({'ok': True, 'model': model, 'reply': reply})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-
-@app.route('/api/test/crawl')
-def api_test_crawl():
-    """Debug: test MOPS crawl for a given date (default: last business day)."""
-    from datetime import timedelta
-    import re
-    from bs4 import BeautifulSoup
-    date_str = request.args.get('date')
-    if date_str:
-        from datetime import datetime as _dt
-        dt = _dt.strptime(date_str, '%Y%m%d').date()
-    else:
-        dt = datetime.now(_TZ).date() - timedelta(days=1)
-        while dt.weekday() >= 5:
-            dt -= timedelta(days=1)
-    roc_year  = str(dt.year - 1911)
-    month_str = f'{dt.month:02d}'
-    day_str   = f'{dt.day:02d}'
-    try:
-        crawler._get(f'{crawler._ANN_BASE}/t05sr01_1', timeout=20)
-        resp = crawler._post_form(
-            f'{crawler._ANN_BASE}/ajax_t05st02',
-            data={'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
-                  'TYPEK': 'all', 'year': roc_year, 'month': month_str, 'day': day_str},
-            timeout=30,
-        )
-        resp.encoding = 'utf-8'
-        soup = BeautifulSoup(resp.text, 'lxml')
-        onclick_re = re.compile(
-            r'\.TYPEK\.value="([^"]+)".*?\.i\.value="([^"]+)".*?\.co_id\.value="([^"]+)"',
-            re.DOTALL)
-        links = [m.groups() for tag in soup.find_all(onclick=True)
-                 for m in [onclick_re.search(tag['onclick'])] if m]
-        # Collect sample onclick strings for debugging
-        all_onclicks = [(tag['onclick'][:150]) for tag in soup.find_all(onclick=True)][:5]
-        html_snippet = resp.text[:800]
-        return jsonify({
-            'date': str(dt),
-            'total_links': len(links),
-            'total_onclick_tags': len(all_onclicks),
-            'sample_onclicks': all_onclicks,
-            'html_preview': html_snippet,
-        })
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-
-# ── API: announcements ───────────────────────────────────────────────────────
-
-@app.route('/api/announcements/today')
-def api_announcements_today():
-    db = SessionLocal()
-    try:
-        from datetime import timedelta
-        since = datetime.now(_TZ).date() - timedelta(days=7)
-        rows = (
-            db.query(Announcement, Stock.name)
-            .outerjoin(Stock, Stock.code == Announcement.stock_code)
-            .filter(Announcement.announce_date >= since)
-            .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
-            .all()
-        )
-        return jsonify([{
-            'stock_code':   a.stock_code,
-            'name':         name or '',
-            'announce_date': str(a.announce_date),
-            'announce_time': a.announce_time or '',
-            'subject':      a.subject or '',
-            'content':      a.content or '',
-            'ai_rating':    a.ai_rating or '',
-            'ai_analysis':  a.ai_analysis or '',
-            'monthly_eps':  a.monthly_eps,
-            'eps_yoy':      a.eps_yoy,
-            'estimated_pe': a.estimated_pe,
-            'quarterly_eps':     a.quarterly_eps,
-            'quarterly_eps_yoy': a.quarterly_eps_yoy,
-            'turnaround':        bool(a.turnaround),
-        } for a, name in rows])
-    finally:
-        db.close()
-
-
-@app.route('/api/announcements/<code>')
-def api_announcements_stock(code):
-    db = SessionLocal()
-    try:
-        rows = (
-            db.query(Announcement)
-            .filter(Announcement.stock_code == code)
-            .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
-            .limit(20)
-            .all()
-        )
-        return jsonify([{
-            'announce_date': str(a.announce_date),
-            'announce_time': a.announce_time or '',
-            'subject':      a.subject or '',
-            'ai_rating':    a.ai_rating or '',
-            'ai_analysis':  a.ai_analysis or '',
-            'monthly_eps':  a.monthly_eps,
-            'eps_yoy':      a.eps_yoy,
-            'estimated_pe': a.estimated_pe,
-            'quarterly_eps':     a.quarterly_eps,
-            'quarterly_eps_yoy': a.quarterly_eps_yoy,
-            'turnaround':        bool(a.turnaround),
-        } for a in rows])
-    finally:
-        db.close()
-
 
 # ── API: crawler ──────────────────────────────────────────────────────────────
 
@@ -657,10 +518,6 @@ def api_run_crawler(task):
         y = int(request.args.get('year',  y))
         q = int(request.args.get('quarter', q))
         _run_bg(crawler.crawl_quarterly_financials, y, q)
-
-    elif task == 'announcements':
-        ann_date = request.args.get('date')  # optional YYYYMMDD override
-        _run_bg(crawler.crawl_announcements, ann_date)
 
     elif task == 'init':
         _run_bg(_initial_crawl)
