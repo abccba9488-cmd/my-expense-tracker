@@ -1070,6 +1070,8 @@ def crawl_announcements(date_str=None):
 
                     logger.info('DB content for %s: %s', code, content[:120])
 
+                    # Free-tier rate limit ~3 req/min; sleep before each AI call
+                    time.sleep(20)
                     # AI analysis
                     ai_rating, ai_analysis, monthly_eps, eps_yoy, estimated_pe = (
                         _analyze_with_ai(code, name, subject, content)
