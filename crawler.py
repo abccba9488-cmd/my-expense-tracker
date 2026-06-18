@@ -17,6 +17,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _session = requests.Session()
 _session.verify = False
 
+from sqlalchemy import text
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, Announcement
