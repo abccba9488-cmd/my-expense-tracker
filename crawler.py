@@ -982,12 +982,17 @@ def crawl_announcements(date_str=None):
         db = SessionLocal()
         saved = 0
 
+        eps_candidates = [it for it in links
+                          if any(kw in it.get('list_subject', '') for kw in _EPS_KEYWORDS)]
+        logger.info('Pre-filter: %d / %d links match EPS keywords for %s',
+                    len(eps_candidates), len(links), date_str)
+
+        if not eps_candidates:
+            _log('announcements', 'success', f'{date_str}: 0 EPS announcements (none in list)')
+            return 0
+
         try:
-            for idx, item in enumerate(links):
-                # Pre-filter using subject already available from the list page
-                list_subject = item.get('list_subject', '')
-                if not any(kw in list_subject for kw in _EPS_KEYWORDS):
-                    continue
+            for idx, item in enumerate(eps_candidates):
 
                 code = item.get('list_code', '')
                 name = item.get('list_name', '')
