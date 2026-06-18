@@ -864,7 +864,7 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
     api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
     if not api_key:
         return None, None, None, None, None
-    model = os.environ.get('OPENROUTER_MODEL', 'google/gemini-2.0-flash-exp:free')
+    model = os.environ.get('OPENROUTER_MODEL', 'meta-llama/llama-3.3-70b-instruct:free')
 
     user_msg = f'股票：{stock_name}（{stock_code}）\n主旨：{subject}\n\n公告說明：\n{content[:3000]}'
     try:
@@ -886,7 +886,10 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
             timeout=90,
         )
         resp.raise_for_status()
-        j = _json.loads(resp.json()['choices'][0]['message']['content'])
+        raw = resp.json()['choices'][0]['message']['content']
+        # strip markdown code fences if the model wraps the JSON
+        m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', raw)
+        j = _json.loads(m.group(1) if m else raw)
         return (
             j.get('ai_rating'),
             j.get('ai_analysis'),
@@ -957,11 +960,11 @@ def crawl_announcements(date_str=None):
                         list_time    = tds[1]
                         list_code    = tds[2]
                         list_name    = tds[3]
-                        list_subject = ' '.join(tds[4:])
+                        list_subject = tds[4]   # only the subject cell; joining extra cols causes false matches
                     elif len(tds) >= 3:
                         list_code    = tds[0]
                         list_name    = tds[1]
-                        list_subject = ' '.join(tds[2:])
+                        list_subject = tds[2]
                 links.append({
                     'seq_no':      f'{typek}_{idx}_{co_id}_{date_str}',
                     'typek':       typek,
@@ -1027,9 +1030,14 @@ def crawl_announcements(date_str=None):
                         if pre:
                             content = pre.get_text(' ', strip=True)
 
-                    logger.info('DIAG detail code=%s subj=%s content=%s html=%s',
-                                code, subject[:60], content[:80],
-                                detail_resp.text[:200].replace('\n', ' '))
+                    logger.info('DIAG detail code=%s subj=%s content=%s',
+                                code, subject[:60], content[:80])
+
+                    # Secondary filter: detail content must actually contain EPS data
+                    combined = subject + ' ' + content
+                    if not any(kw in combined for kw in _EPS_KEYWORDS):
+                        logger.info('Skip %s — no EPS keyword in detail content', code)
+                        continue
 
                     # AI analysis
                     ai_rating, ai_analysis, monthly_eps, eps_yoy, estimated_pe = (
