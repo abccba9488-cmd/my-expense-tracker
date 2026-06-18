@@ -933,6 +933,11 @@ def crawl_announcements(date_str=None):
             timeout=30,
         )
         list_resp.encoding = 'utf-8'
+        # Save MOPS session cookies: the 'i' index in onclick only has meaning
+        # within the server-side session created by this POST.  _get() clears
+        # cookies every 80 requests, which would invalidate the session before
+        # we finish fetching all the detail pages.
+        _mops_cookies = dict(_session.cookies)
         soup = BeautifulSoup(list_resp.text, 'lxml')
 
         # onclick format: document.sii_fm0.TYPEK.value="sii";.i.value="0";.co_id.value="2362"
@@ -1009,10 +1014,27 @@ def crawl_announcements(date_str=None):
 
                 _jitter(2)
                 try:
-                    # GET the static (non-ajax) detail page for 說明 content
+                    # Restore MOPS session cookies before every detail fetch.
+                    # _get() clears _session.cookies periodically, which would
+                    # break the server-side 'i'-index lookup.  Bypass _get()
+                    # here and call _session.get() directly so cookies survive.
+                    for _k, _v in _mops_cookies.items():
+                        _session.cookies.set(_k, _v)
                     detail_url = (f'{_ANN_BASE}/t05sr01_1'
                                   f'?TYPEK={item["typek"]}&i={item["i"]}&co_id={item["co_id"]}')
-                    detail_resp = _get(detail_url, timeout=30)
+                    detail_resp = _session.get(
+                        detail_url,
+                        headers={
+                            'User-Agent': _get_ua(),
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+                            'Accept-Encoding': 'gzip, deflate',
+                            'Referer': f'{_ANN_BASE}/t05sr01_1',
+                            'Connection': 'keep-alive',
+                        },
+                        timeout=30,
+                        verify=False,
+                    )
                     detail_resp.encoding = 'utf-8'
                     dsoup = BeautifulSoup(detail_resp.text, 'lxml')
 
