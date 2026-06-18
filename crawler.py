@@ -1029,49 +1029,41 @@ def crawl_announcements(date_str=None):
                     logger.warning('No stock code for seq %s', item['seq_no'])
                     continue
 
-                _jitter(2)
+                _jitter(3)
                 try:
-                    typek = item['typek']
-                    co_id = item['co_id']
-                    orig_i = item['i']  # original index from the 842-item session
+                    subject = item.get('list_subject', '')
 
-                    # Use the original session (ann_sess still holds the 842-item
-                    # result from the all-company POST) and the original 'i' index.
-                    detail_url = (f'{_ANN_BASE}/t05sr01_1'
-                                  f'?TYPEK={typek}&i={orig_i}&co_id={co_id}')
-                    detail_resp = ann_sess.get(
-                        detail_url,
-                        headers=_ann_headers(),
-                        timeout=30,
-                    )
-                    detail_resp.encoding = 'utf-8'
-                    logger.info('DIAG detail_raw code=%s i=%s html=%s',
-                                code, orig_i,
-                                detail_resp.text[:500].replace('\n', ' '))
-                    dsoup = BeautifulSoup(detail_resp.text, 'lxml')
+                    # MOPS detail pages reset the connection (bot protection).
+                    # Build content from our own DB instead: latest quarterly EPS,
+                    # monthly revenue, and close price are sufficient for AI rating.
+                    qf = db.execute(text(
+                        "SELECT eps, year, quarter FROM quarterly_financials"
+                        " WHERE stock_code=:c ORDER BY year DESC, quarter DESC LIMIT 1"
+                    ), {'c': code}).first()
+                    mr = db.execute(text(
+                        "SELECT revenue, revenue_yoy, year, month FROM monthly_revenue"
+                        " WHERE stock_code=:c ORDER BY year DESC, month DESC LIMIT 1"
+                    ), {'c': code}).first()
+                    dp = db.execute(text(
+                        "SELECT close FROM daily_prices"
+                        " WHERE stock_code=:c ORDER BY date DESC LIMIT 1"
+                    ), {'c': code}).first()
 
-                    def _get_field(label):
-                        th = dsoup.find('th', string=re.compile(label))
-                        if th:
-                            td = th.find_next_sibling('td')
-                            return td.get_text(' ', strip=True) if td else ''
-                        return ''
-
-                    subject = _get_field('主旨') or list_subject
-                    content = _get_field('說明')
-                    if not content:
-                        pre = dsoup.find('pre')
-                        if pre:
-                            content = pre.get_text(' ', strip=True)
-
-                    logger.info('DIAG detail code=%s subj=%s content=%s',
-                                code, subject[:60], content[:80])
-
-                    # Secondary filter: detail content must actually contain EPS data
-                    combined = subject + ' ' + content
-                    if not any(kw in combined for kw in _EPS_KEYWORDS):
-                        logger.info('Skip %s — no EPS keyword in detail content', code)
+                    if not qf:
+                        logger.info('Skip %s — not in DB', code)
                         continue
+
+                    content = (
+                        f"公司被 TWSE/TPEX 列入注意交易股票。\n"
+                        f"最新季EPS：{qf[0]} 元（{qf[1]}年Q{qf[2]}）\n"
+                    )
+                    if mr:
+                        content += (f"最新月營收：{mr[0]:,.0f} 千元"
+                                    f"（年增 {mr[1]:.1f}%，{mr[2]}年{mr[3]}月）\n")
+                    if dp:
+                        content += f"現收盤價：{dp[0]} 元\n"
+
+                    logger.info('DB content for %s: %s', code, content[:120])
 
                     # AI analysis
                     ai_rating, ai_analysis, monthly_eps, eps_yoy, estimated_pe = (
