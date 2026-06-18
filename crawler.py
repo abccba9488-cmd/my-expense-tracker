@@ -868,48 +868,43 @@ def _analyze_with_ai(stock_code, stock_name, subject, content):
     model = os.environ.get('OPENROUTER_MODEL', 'meta-llama/llama-3.3-70b-instruct:free')
 
     user_msg = f'股票：{stock_name}（{stock_code}）\n主旨：{subject}\n\n公告說明：\n{content[:3000]}'
-    for attempt in range(3):
-        try:
-            resp = requests.post(
-                'https://openrouter.ai/api/v1/chat/completions',
-                headers={
-                    'Authorization': f'Bearer {api_key}',
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': 'https://stock-market.zeabur.app',
-                },
-                json={
-                    'model': model,
-                    'messages': [
-                        {'role': 'system', 'content': _AI_SYSTEM_PROMPT},
-                        {'role': 'user',   'content': user_msg},
-                    ],
-                    'response_format': {'type': 'json_object'},
-                },
-                timeout=90,
-            )
-            if resp.status_code == 429:
-                wait = int(resp.headers.get('Retry-After', 60))
-                logger.warning('AI 429 rate limit for %s — waiting %ds (attempt %d)',
-                               stock_code, wait, attempt + 1)
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            raw = resp.json()['choices'][0]['message']['content']
-            # strip markdown code fences if the model wraps the JSON
-            m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', raw)
-            j = _json.loads(m.group(1) if m else raw)
-            return (
-                j.get('ai_rating'),
-                j.get('ai_analysis'),
-                _parse_num(str(j.get('monthly_eps', '') or '')),
-                _parse_num(str(j.get('eps_yoy', '') or '')),
-                _parse_num(str(j.get('estimated_pe', '') or '')),
-            )
-        except Exception as e:
-            logger.warning('AI analysis failed for %s: %s', stock_code, e)
+    try:
+        resp = requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'https://stock-market.zeabur.app',
+            },
+            json={
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': _AI_SYSTEM_PROMPT},
+                    {'role': 'user',   'content': user_msg},
+                ],
+                'response_format': {'type': 'json_object'},
+            },
+            timeout=90,
+        )
+        if resp.status_code == 429:
+            logger.warning('AI 429 rate limit for %s — skipping AI, announcement saved without rating',
+                           stock_code)
             return None, None, None, None, None
-    logger.warning('AI analysis gave up after 3 retries for %s', stock_code)
-    return None, None, None, None, None
+        resp.raise_for_status()
+        raw = resp.json()['choices'][0]['message']['content']
+        # strip markdown code fences if the model wraps the JSON
+        m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', raw)
+        j = _json.loads(m.group(1) if m else raw)
+        return (
+            j.get('ai_rating'),
+            j.get('ai_analysis'),
+            _parse_num(str(j.get('monthly_eps', '') or '')),
+            _parse_num(str(j.get('eps_yoy', '') or '')),
+            _parse_num(str(j.get('estimated_pe', '') or '')),
+        )
+    except Exception as e:
+        logger.warning('AI analysis failed for %s: %s', stock_code, e)
+        return None, None, None, None, None
 
 
 def crawl_announcements(date_str=None):
@@ -1080,7 +1075,9 @@ def crawl_announcements(date_str=None):
                         _analyze_with_ai(code, name, subject, content)
                     )
 
-                    # Insert (ignore duplicate)
+                    # Insert (ignore duplicate); if AI succeeded, also update
+                    # existing records that have NULL ai_rating (allows re-run to
+                    # fill in AI analysis saved without rating on first pass).
                     try:
                         db.execute(
                             Announcement.__table__.insert().prefix_with('OR IGNORE'),
@@ -1099,9 +1096,19 @@ def crawl_announcements(date_str=None):
                                 'created_at':    datetime.now(_TZ),
                             }],
                         )
+                        if ai_rating is not None:
+                            db.execute(
+                                text("UPDATE announcements SET ai_rating=:r, ai_analysis=:a,"
+                                     " monthly_eps=:me, eps_yoy=:ey, estimated_pe=:ep"
+                                     " WHERE stock_code=:c AND seq_no=:s AND ai_rating IS NULL"),
+                                {'r': ai_rating, 'a': ai_analysis, 'me': monthly_eps,
+                                 'ey': eps_yoy, 'ep': estimated_pe,
+                                 'c': code, 's': item['seq_no']},
+                            )
                         db.commit()
                         saved += 1
-                        logger.info('Saved announcement %s %s', code, subject[:40])
+                        logger.info('Saved announcement %s %s ai=%s',
+                                    code, subject[:40], ai_rating or 'none')
                     except Exception as e:
                         db.rollback()
                         logger.warning('DB insert skip %s seq %s: %s', code, item['seq_no'], e)
