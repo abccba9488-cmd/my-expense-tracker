@@ -981,7 +981,9 @@ def crawl_announcements(date_str=None):
                 row = tag.find_parent('tr')
                 list_code, list_name, list_subject, list_time = '', '', '', ''
                 if row:
-                    tds = [td.get_text(strip=True) for td in row.find_all('td')]
+                    tds = [re.sub(r'(?<=[^\x00-\x7F]) (?=[^\x00-\x7F])', '',
+                                   td.get_text(strip=True))
+                           for td in row.find_all('td')]
                     # Expected columns: ROC_date | time | code | name | subject | ...
                     if len(tds) >= 5:
                         list_time    = tds[1]
