@@ -937,29 +937,42 @@ def crawl_announcements(date_str=None):
             r'\.TYPEK\.value="([^"]+)".*?\.i\.value="([^"]+)".*?\.co_id\.value="([^"]+)"',
             re.DOTALL,
         )
+        _EPS_KEYWORDS = ('每股盈餘', '每股稅後盈餘', '每股稅前盈餘',
+                         '自結損益', '稅後純益', '稅後盈餘', 'EPS', '自結每股')
+
         links = []
         for tag in soup.find_all(onclick=True):
             m = onclick_re.search(tag['onclick'])
             if m:
                 typek, idx, co_id = m.groups()
-                # Try to extract subject hint from parent <tr>
+                # Parse code / name / subject from the parent <tr> cells
                 row = tag.find_parent('tr')
-                subject_hint = ''
+                list_code, list_name, list_subject, list_time = '', '', '', ''
                 if row:
-                    tds = row.find_all('td')
-                    subject_hint = ' | '.join(td.get_text(strip=True) for td in tds)[:300]
+                    tds = [td.get_text(strip=True) for td in row.find_all('td')]
+                    # Expected columns: ROC_date | time | code | name | subject | ...
+                    if len(tds) >= 5:
+                        list_time    = tds[1]
+                        list_code    = tds[2]
+                        list_name    = tds[3]
+                        list_subject = ' '.join(tds[4:])
+                    elif len(tds) >= 3:
+                        list_code    = tds[0]
+                        list_name    = tds[1]
+                        list_subject = ' '.join(tds[2:])
                 links.append({
-                    'seq_no':       f'{typek}_{idx}_{co_id}_{date_str}',
-                    'typek':        typek,
-                    'i':            idx,
-                    'co_id':        co_id,
-                    'subject_hint': subject_hint,
+                    'seq_no':      f'{typek}_{idx}_{co_id}_{date_str}',
+                    'typek':       typek,
+                    'i':           idx,
+                    'co_id':       co_id,
+                    'list_code':   list_code,
+                    'list_name':   list_name,
+                    'list_subject': list_subject,
+                    'list_time':   list_time,
                 })
-        # Diagnostic: show first 2 rows from the list page
         if links:
-            logger.info('LIST ROW [0]: %s', links[0].get('subject_hint', ''))
-            if len(links) > 1:
-                logger.info('LIST ROW [1]: %s', links[1].get('subject_hint', ''))
+            logger.info('LIST sample [0]: code=%s name=%s subj=%s',
+                        links[0]['list_code'], links[0]['list_name'], links[0]['list_subject'][:80])
 
         if not links:
             _log('announcements', 'success', f'{date_str}: no announcements found')
@@ -971,36 +984,28 @@ def crawl_announcements(date_str=None):
 
         try:
             for idx, item in enumerate(links):
+                # Pre-filter using subject already available from the list page
+                list_subject = item.get('list_subject', '')
+                if not any(kw in list_subject for kw in _EPS_KEYWORDS):
+                    continue
+
+                code = item.get('list_code', '')
+                name = item.get('list_name', '')
+                announce_time = item.get('list_time', '')
+
+                if not code:
+                    logger.warning('No stock code for seq %s', item['seq_no'])
+                    continue
+
                 _jitter(2)
-                # Re-init MOPS session every 50 requests to rotate cookies
-                if idx > 0 and idx % 50 == 0:
-                    logger.info('Re-initializing MOPS session at request %d', idx)
-                    _session.cookies.clear()
-                    _get(f'{_ANN_BASE}/t05sr01_1', timeout=20)
-                    _jitter(2)
                 try:
-                    # GET the static (non-ajax) detail page
+                    # GET the static (non-ajax) detail page for 說明 content
                     detail_url = (f'{_ANN_BASE}/t05sr01_1'
                                   f'?TYPEK={item["typek"]}&i={item["i"]}&co_id={item["co_id"]}')
                     detail_resp = _get(detail_url, timeout=30)
                     detail_resp.encoding = 'utf-8'
                     dsoup = BeautifulSoup(detail_resp.text, 'lxml')
 
-                    # Extract stock code and name
-                    code, name = '', ''
-                    comp_row = dsoup.find('tr', class_='compName')
-                    if comp_row:
-                        txt = comp_row.get_text(' ', strip=True)
-                        m = re.match(r'(\d{4,6})\s*[－\-\s]\s*(.+)', txt)
-                        if m:
-                            code, name = m.group(1).strip(), m.group(2).strip()
-
-                    if not code:
-                        h20 = dsoup.find('input', {'name': 'h20'})
-                        if h20:
-                            code = h20.get('value', '').strip()
-
-                    # Extract fields from th/td table
                     def _get_field(label):
                         th = dsoup.find('th', string=re.compile(label))
                         if th:
@@ -1008,30 +1013,16 @@ def crawl_announcements(date_str=None):
                             return td.get_text(' ', strip=True) if td else ''
                         return ''
 
-                    subject = _get_field('主旨')
+                    subject = _get_field('主旨') or list_subject
                     content = _get_field('說明')
                     if not content:
                         pre = dsoup.find('pre')
                         if pre:
                             content = pre.get_text(' ', strip=True)
-                    announce_time = _get_field('發言時間') or ''
 
-                    # Diagnostic: log first 3 items
-                    if idx < 3:
-                        logger.info('DIAG [%d] hint=%s code=%s subj=%s html=%s',
-                                    idx, item.get('subject_hint', '')[:80], code, subject[:60],
-                                    detail_resp.text[:300].replace('\n', ' '))
-
-                    # Keep EPS / self-reported-financials related announcements
-                    _EPS_KEYWORDS = ('每股盈餘', '每股稅後盈餘', '每股稅前盈餘',
-                                     '自結損益', '稅後純益', '稅後盈餘', 'EPS')
-                    combined = subject + content
-                    if not any(kw in combined for kw in _EPS_KEYWORDS):
-                        continue
-
-                    if not code:
-                        logger.warning('No stock code for seq %s', item['seq_no'])
-                        continue
+                    logger.info('DIAG detail code=%s subj=%s content=%s html=%s',
+                                code, subject[:60], content[:80],
+                                detail_resp.text[:200].replace('\n', ' '))
 
                     # AI analysis
                     ai_rating, ai_analysis, monthly_eps, eps_yoy, estimated_pe = (
