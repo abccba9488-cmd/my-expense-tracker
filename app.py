@@ -489,7 +489,7 @@ def api_announcements_today():
             db.query(Announcement, Stock.name)
             .outerjoin(Stock, Stock.code == Announcement.stock_code)
             .filter(Announcement.announce_date >= since)
-            .order_by(desc(Announcement.created_at))
+            .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
             .all()
         )
         return jsonify([{
@@ -497,7 +497,7 @@ def api_announcements_today():
             'stock_code':           a.stock_code,
             'name':                 name or '',
             'announce_date':        str(a.announce_date),
-            'created_at':           str(a.created_at),
+            'announce_time':        a.announce_time or '',
             'subject':              a.subject or '',
             'content':              a.content or '',
             'price_at_announce':    a.price_at_announce,

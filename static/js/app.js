@@ -1013,7 +1013,7 @@ function _annTruncate(s, n) {
 
 function renderAnnRow(a, i) {
   return `<tr>
-    <td>${_fmtCheckedTime(a.created_at) || a.announce_date}</td>
+    <td>${a.announce_date}${a.announce_time ? ' ' + a.announce_time.slice(0, 5) : ''}</td>
     <td><span class="stock-link" data-code="${a.stock_code}">${a.stock_code}</span></td>
     <td><span class="stock-link" data-code="${a.stock_code}">${a.name || ''}</span></td>
     <td><span class="ann-subject-link" data-idx="${i}">${_annTruncate(a.subject, 10)}</span></td>

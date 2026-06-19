@@ -141,7 +141,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 每日股價 | 週一〜五 14:00 與 15:00（各跑一次，避免單次失敗漏抓） |
 | 月營收 | 每天 23:00（爬上個月；部分公司公布較晚，每天重抓直到有資料） |
 | 自結公告 | 週一〜五 05:00（非尖峰，爬前一交易日的 MOPS 重大公告） |
-| 自結公告（測試用，**暫時性**） | 每 30 分鐘重爬「今天」的公告（`_announcements_test_job`），讓當日新公告不用等隔天 05:00。測試完畢要記得問使用者是否移除這個 job（`scheduler.py`） |
+| 自結公告（測試用，**暫時性，目前暫停**） | 每 30 分鐘重爬「今天」的公告（`_announcements_test_job`），讓當日新公告不用等隔天 05:00；2026-06-19 因假日無新公告暫停（`scheduler.py` 裡的 `add_job` 註解掉），要重新啟用或正式移除前先問使用者 |
 | Q1 | 5 月每天 23:00（公告期限 5/15） |
 | Q2 | 8 月每天 23:00（公告期限 8/14） |
 | Q3 | 11 月每天 23:00（公告期限 11/14） |
@@ -330,7 +330,7 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 **前端（`#ann-view`）：** 純表格（不用 DataTables），12 欄：公告日期／代號／名稱／公告主旨／公告時股價／單月EPS／去年同月EPS／月EPS年增率／轉虧為盈／預估全年EPS／預估本益比／AI分析。轉虧為盈欄位為真時顯示 🔥；預估本益比 `<= 0` 時前端顯示「—」（負本益比無意義，但後端仍照算存入 DB，不隱藏原始資料）。
 
-- **公告日期欄**：顯示的其實是 `created_at`（爬蟲實際抓到/寫入的時間，精確到分），不是 `announce_date` 本身——測試期間（30分鐘排程重爬同一天）方便看出資料是什麼時候進來的。API 排序也改成 `ORDER BY created_at DESC`。
+- **公告日期欄**：顯示 `announce_date` + `announce_time`（取 `HH:MM`，捨去秒數），也就是 MOPS 網站上的「發言日期」+「發言時間」，不是爬蟲抓取/寫入的時間。API 排序為 `ORDER BY announce_date DESC, announce_time DESC`。
 - **公告主旨**：表格內只顯示前 10 字（`_annTruncate()`），點擊開 `#ann-modal`（同頁彈出視窗，不開新分頁/新頁面）顯示完整主旨與內容（`a.content`，無內容時顯示「（無詳細內容）」）。全部公告資料先一次性存進 `_annData`（模組層級陣列），modal/AI按鈕都用 `data-idx` 對應陣列索引去查，不用再打 API。
 - **AI分析欄**：`<a class="btn btn-sm ann-ai-link" href="https://gemini.google.com" target="_blank">`，點擊時 `copyAnnForAI()` 把提示詞（「這則公告所代表的含義是什麼\n」+ 公告全文）複製到剪貼簿，同時連結本身會在新分頁開啟 Gemini（Gemini 網頁版不支援 URL 帶入提示詞，使用者需自行貼上），與既有 `copyStarForAI()`/`copyWlForAI()` 的「複製給AI」模式一致。
 - **今日更新面板**：`/api/updates/today` 多了 `ann_count`／`ann_last_checked`，今日有新公告就顯示「今日新增 N 筆」，否則顯示最後檢查時間。
