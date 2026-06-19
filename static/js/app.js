@@ -1040,11 +1040,19 @@ function closeTodayPanel() {
   document.getElementById('today-panel').classList.add('hidden');
 }
 
-function _todayChips(list) {
-  if (!list.length) return '<div class="today-empty">無</div>';
+function _todayChips(list, lastChecked) {
+  if (!list.length) {
+    return lastChecked
+      ? `<div class="today-empty">最後檢查：${_fmtCheckedTime(lastChecked)}</div>`
+      : '<div class="today-empty">無</div>';
+  }
   return `<div class="today-stock-list">${list.map(s =>
     `<span class="today-stock-chip" data-code="${s.code}">${s.code} ${s.name}</span>`
   ).join('')}</div>`;
+}
+
+function _fmtCheckedTime(t) {
+  return t ? t.slice(0, 16) : '';
 }
 
 async function loadTodayUpdates() {
@@ -1055,15 +1063,17 @@ async function loadTodayUpdates() {
     el.innerHTML = `
       <div class="today-section">
         <div class="today-section-title">📈 股價</div>
-        ${data.price_date ? `<div>${data.price_date} 股價已更新</div>` : '<div class="today-empty">尚未更新</div>'}
+        ${data.price_date ? `<div>${data.price_date} 股價已更新</div>`
+          : data.price_last_checked ? `<div class="today-empty">最後檢查：${_fmtCheckedTime(data.price_last_checked)}</div>`
+          : '<div class="today-empty">尚未更新</div>'}
       </div>
       <div class="today-section">
         <div class="today-section-title">💰 月營收（${data.monthly_revenue.length}）</div>
-        ${_todayChips(data.monthly_revenue)}
+        ${_todayChips(data.monthly_revenue, data.revenue_last_checked)}
       </div>
       <div class="today-section">
         <div class="today-section-title">📊 季財報（${data.quarterly.length}）</div>
-        ${_todayChips(data.quarterly)}
+        ${_todayChips(data.quarterly, data.quarterly_last_checked)}
       </div>
     `;
     el.querySelectorAll('.today-stock-chip').forEach(chip => {

@@ -195,6 +195,18 @@ def api_updates_today():
     try:
         today_str = datetime.now(_TZ).date().isoformat()
 
+        def _last_checked(task):
+            """Most recent crawler_logs entry for this task, regardless of
+            status/date — lets the UI show "last checked" when there's
+            nothing new today instead of looking like it never ran."""
+            log = (
+                db.query(CrawlerLog)
+                .filter(CrawlerLog.task == task)
+                .order_by(desc(CrawlerLog.created_at))
+                .first()
+            )
+            return str(log.created_at) if log else None
+
         # Latest successful daily_price log today → extract trade date from message
         price_log = (
             db.query(CrawlerLog)
@@ -225,8 +237,11 @@ def api_updates_today():
 
         return jsonify({
             'price_date': price_date,
+            'price_last_checked':     _last_checked('daily_price'),
             'monthly_revenue': [{'code': c, 'name': n} for c, n in revenue_rows],
+            'revenue_last_checked':   _last_checked('monthly_revenue'),
             'quarterly':       [{'code': c, 'name': n} for c, n in quarterly_rows],
+            'quarterly_last_checked': _last_checked('quarterly'),
         })
     finally:
         db.close()
