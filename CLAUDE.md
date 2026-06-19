@@ -141,6 +141,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 每日股價 | 週一〜五 14:00 與 15:00（各跑一次，避免單次失敗漏抓） |
 | 月營收 | 每天 23:00（爬上個月；部分公司公布較晚，每天重抓直到有資料） |
 | 自結公告 | 週一〜五 05:00（非尖峰，爬前一交易日的 MOPS 重大公告） |
+| 自結公告（測試用，**暫時性**） | 每 15 分鐘重爬「今天」的公告（`_announcements_test_job`），讓當日新公告不用等隔天 05:00。測試完畢要記得問使用者是否移除這個 job（`scheduler.py`） |
 | Q1 | 5 月每天 23:00（公告期限 5/15） |
 | Q2 | 8 月每天 23:00（公告期限 8/14） |
 | Q3 | 11 月每天 23:00（公告期限 11/14） |
@@ -161,7 +162,7 @@ GET  /api/stocks/<code>/financials 個股季財報
 GET  /api/stats                    DB 統計（stocks/prices/revenues/quarterly 筆數）
 GET  /api/crawler/status           最近 30 筆爬蟲 log
 POST /api/crawler/run/<task>       手動觸發爬蟲（僅限 localhost）
-GET  /api/updates/today            今日更新摘要（股價日期 + 月營收/季財報清單）
+GET  /api/updates/today            今日更新摘要（股價日期 + 月營收/季財報清單 + 自結公告今日新增筆數）
 
 GET  /api/auth/me                  取得目前登入使用者
 POST /api/auth/register            註冊（自動通過，建立 session）

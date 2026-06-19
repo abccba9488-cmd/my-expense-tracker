@@ -1155,6 +1155,12 @@ async function loadTodayUpdates() {
         <div class="today-section-title">📊 季財報（${data.quarterly.length}）</div>
         ${_todayChips(data.quarterly, data.quarterly_last_checked)}
       </div>
+      <div class="today-section">
+        <div class="today-section-title">📰 自結公告</div>
+        ${data.ann_count > 0 ? `<div>今日新增 ${data.ann_count} 筆</div>`
+          : data.ann_last_checked ? `<div class="today-empty">最後檢查：${_fmtCheckedTime(data.ann_last_checked)}</div>`
+          : '<div class="today-empty">尚未更新</div>'}
+      </div>
     `;
     el.querySelectorAll('.today-stock-chip').forEach(chip => {
       chip.addEventListener('click', () => {

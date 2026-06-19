@@ -235,6 +235,12 @@ def api_updates_today():
             .all()
         )
 
+        ann_count = (
+            db.query(Announcement)
+            .filter(text("date(created_at) = :today")).params(today=today_str)
+            .count()
+        )
+
         return jsonify({
             'price_date': price_date,
             'price_last_checked':     _last_checked('daily_price'),
@@ -242,6 +248,8 @@ def api_updates_today():
             'revenue_last_checked':   _last_checked('monthly_revenue'),
             'quarterly':       [{'code': c, 'name': n} for c, n in quarterly_rows],
             'quarterly_last_checked': _last_checked('quarterly'),
+            'ann_count':              ann_count,
+            'ann_last_checked':       _last_checked('announcements'),
         })
     finally:
         db.close()
