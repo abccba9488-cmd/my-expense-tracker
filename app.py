@@ -490,6 +490,7 @@ def api_announcements_today():
             'name':                 name or '',
             'announce_date':        str(a.announce_date),
             'subject':              a.subject or '',
+            'content':              a.content or '',
             'price_at_announce':    a.price_at_announce,
             'monthly_eps':          a.monthly_eps,
             'prior_year_eps':       a.prior_year_eps,
@@ -498,19 +499,6 @@ def api_announcements_today():
             'estimated_annual_eps': a.estimated_annual_eps,
             'estimated_pe':         a.estimated_pe,
         } for a, name in rows])
-    finally:
-        db.close()
-
-
-@app.route('/announcement/<int:ann_id>')
-def announcement_detail(ann_id):
-    db = SessionLocal()
-    try:
-        a = db.query(Announcement).filter_by(id=ann_id).first()
-        if not a:
-            return Response('找不到此公告', status=404)
-        stock = db.query(Stock).filter_by(code=a.stock_code).first()
-        return render_template('announcement.html', a=a, stock_name=(stock.name if stock else ''))
     finally:
         db.close()
 

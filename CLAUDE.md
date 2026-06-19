@@ -179,8 +179,7 @@ GET  /api/messages                 留言板列表（最新 100 筆，含 can_de
 POST /api/messages                 發表留言（需登入，內容上限 500 字）
 DELETE /api/messages/<id>          刪除留言（本人或 ADMIN_USERNAME）
 
-GET  /api/announcements/today      自結公告清單（近 7 天，依日期/時間降序）
-GET  /announcement/<id>            單筆公告詳情頁（伺服器渲染 HTML，非 JSON，給「開新分頁看全文」用）
+GET  /api/announcements/today      自結公告清單（近 7 天，依日期/時間降序，含 content 全文供前端 modal 使用）
 ```
 
 `ADMIN_USERNAME`（`app.py`）為留言板管理員帳號，可刪除任何人的留言。
@@ -274,7 +273,7 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 | `#list-view` | 完整股票列表（DataTables，預設代號升冪） |
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
 | `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
-| `#ann-view` | 自結公告：純表格（不用 DataTables），11 欄，見下方「自結公告」章節 |
+| `#ann-view` | 自結公告：純表格（不用 DataTables），12 欄，見下方「自結公告」章節 |
 | `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表） |
 
 分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' }`。
@@ -325,6 +324,7 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 6. `estimated_annual_eps = monthly_eps × 12`；`estimated_pe = round(price_at_announce / estimated_annual_eps, 1)`（任一缺值則留 None，`estimated_annual_eps <= 0` 也不計算）
 7. **即使解析不出單月EPS（例如純注意交易公告沒有財務表格），也會 INSERT**，相關欄位留 NULL；用 `Announcement.__table__.insert().prefix_with('OR IGNORE')` 以 `(stock_code, seq_no)` 去重
 
-**前端（`#ann-view`）：** 純表格（不用 DataTables），11 欄：公告日期／代號／名稱／公告主旨／公告時股價／單月EPS／去年同月EPS／月EPS年增率／轉虧為盈／預估全年EPS／預估本益比。點主旨開新分頁連到 `/announcement/<id>`（伺服器渲染的獨立頁面，顯示主旨+完整內容，**不連 MOPS 原始網址**，避免依賴 MOPS session/反爬蟲狀態）。轉虧為盈欄位為真時顯示 🔥；預估本益比 `<= 0` 時前端顯示「—」（負本益比無意義，但後端仍照算存入 DB，不隱藏原始資料）。
+**前端（`#ann-view`）：** 純表格（不用 DataTables），12 欄：公告日期／代號／名稱／公告主旨／公告時股價／單月EPS／去年同月EPS／月EPS年增率／轉虧為盈／預估全年EPS／預估本益比／AI分析。轉虧為盈欄位為真時顯示 🔥；預估本益比 `<= 0` 時前端顯示「—」（負本益比無意義，但後端仍照算存入 DB，不隱藏原始資料）。
 
-**`templates/announcement.html`**：獨立模板，引用 `static/css/style.css` 並讀 `localStorage.getItem('theme')` 套用深色/淺色主題；內容用 Jinja2 預設跳脫（不可加 `|safe`，因為內容是爬蟲文字非可信 HTML）。
+- **公告主旨**：表格內只顯示前 10 字（`_annTruncate()`），點擊開 `#ann-modal`（同頁彈出視窗，不開新分頁/新頁面）顯示完整主旨與內容（`a.content`，無內容時顯示「（無詳細內容）」）。全部公告資料先一次性存進 `_annData`（模組層級陣列），modal/AI按鈕都用 `data-idx` 對應陣列索引去查，不用再打 API。
+- **AI分析欄**：`<a class="btn btn-sm ann-ai-link" href="https://gemini.google.com" target="_blank">`，點擊時 `copyAnnForAI()` 把提示詞（「這則公告所代表的含義是什麼\n」+ 公告全文）複製到剪貼簿，同時連結本身會在新分頁開啟 Gemini（Gemini 網頁版不支援 URL 帶入提示詞，使用者需自行貼上），與既有 `copyStarForAI()`/`copyWlForAI()` 的「複製給AI」模式一致。

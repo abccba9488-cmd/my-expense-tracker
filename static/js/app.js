@@ -1004,12 +1004,19 @@ async function runCrawler(task) {
 }
 
 /* ── Announcement view ── */
-function renderAnnRow(a) {
+let _annData = [];
+
+function _annTruncate(s, n) {
+  if (!s) return '—';
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function renderAnnRow(a, i) {
   return `<tr>
     <td>${a.announce_date}</td>
     <td><span class="stock-link" data-code="${a.stock_code}">${a.stock_code}</span></td>
     <td><span class="stock-link" data-code="${a.stock_code}">${a.name || ''}</span></td>
-    <td><a href="/announcement/${a.id}" target="_blank" rel="noopener">${a.subject || '—'}</a></td>
+    <td><span class="ann-subject-link" data-idx="${i}">${_annTruncate(a.subject, 10)}</span></td>
     <td class="num">${fmt.price(a.price_at_announce)}</td>
     <td class="num">${fmt.eps(a.monthly_eps)}</td>
     <td class="num">${fmt.eps(a.prior_year_eps)}</td>
@@ -1017,26 +1024,60 @@ function renderAnnRow(a) {
     <td class="td-center">${a.turnaround ? '🔥' : '—'}</td>
     <td class="num">${fmt.eps(a.estimated_annual_eps)}</td>
     <td class="num">${a.estimated_pe != null && a.estimated_pe > 0 ? Number(a.estimated_pe).toFixed(1) : '—'}</td>
+    <td class="td-center"><a class="btn btn-sm ann-ai-link" href="https://gemini.google.com" target="_blank" rel="noopener" data-idx="${i}">🤖 AI分析</a></td>
   </tr>`;
 }
 
 async function loadAnnouncements() {
   const tbody = document.getElementById('ann-tbody');
   if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="11" class="ann-empty">載入中…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">載入中…</td></tr>';
   try {
-    const data = await fetch('/api/announcements/today').then(r => r.json());
+    _annData = await fetch('/api/announcements/today').then(r => r.json());
     const countEl = document.getElementById('ann-count');
-    if (countEl) countEl.textContent = `共 ${data.length} 筆`;
-    tbody.innerHTML = data.length
-      ? data.map(renderAnnRow).join('')
-      : '<tr><td colspan="11" class="ann-empty">近期無公告</td></tr>';
+    if (countEl) countEl.textContent = `共 ${_annData.length} 筆`;
+    tbody.innerHTML = _annData.length
+      ? _annData.map(renderAnnRow).join('')
+      : '<tr><td colspan="12" class="ann-empty">近期無公告</td></tr>';
     tbody.querySelectorAll('[data-code]').forEach(el => {
       el.addEventListener('click', () => loadStockDetail(el.dataset.code));
     });
+    tbody.querySelectorAll('.ann-subject-link').forEach(el => {
+      el.addEventListener('click', () => openAnnModal(+el.dataset.idx));
+    });
+    tbody.querySelectorAll('.ann-ai-link').forEach(el => {
+      el.addEventListener('click', () => copyAnnForAI(+el.dataset.idx));
+    });
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="11" class="ann-empty">載入失敗</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">載入失敗</td></tr>';
   }
+}
+
+function openAnnModal(i) {
+  const a = _annData[i];
+  if (!a) return;
+  document.getElementById('ann-modal-title').textContent = `${a.stock_code} ${a.name || ''}`;
+  document.getElementById('ann-modal-body').innerHTML = `
+    <div class="ann-modal-subject">${a.subject || ''}</div>
+    <div class="ann-modal-date">${a.announce_date}</div>
+    ${a.content
+      ? `<hr class="ann-modal-divider"><pre class="ann-modal-content">${a.content}</pre>`
+      : '<div class="ann-empty">（無詳細內容）</div>'}
+  `;
+  document.getElementById('ann-modal').classList.remove('hidden');
+}
+
+function closeAnnModal() {
+  document.getElementById('ann-modal').classList.add('hidden');
+}
+
+function copyAnnForAI(i) {
+  const a = _annData[i];
+  if (!a) return;
+  const prompt = `這則公告所代表的含義是什麼\n${a.content || a.subject || ''}`;
+  navigator.clipboard.writeText(prompt)
+    .then(() => showToast('已複製提示詞，貼到 Gemini 即可分析'))
+    .catch(() => showToast('複製失敗，請手動複製'));
 }
 
 /* ── Crawler status panel ── */

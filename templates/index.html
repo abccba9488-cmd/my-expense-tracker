@@ -281,13 +281,24 @@
               <tr>
                 <th>公告日期</th><th>代號</th><th>名稱</th><th>公告主旨</th>
                 <th>公告時股價</th><th>單月EPS</th><th>去年同月EPS</th><th>月EPS年增率</th>
-                <th>轉虧為盈</th><th>預估全年EPS</th><th>預估本益比</th>
+                <th>轉虧為盈</th><th>預估全年EPS</th><th>預估本益比</th><th>AI分析</th>
               </tr>
             </thead>
             <tbody id="ann-tbody"></tbody>
           </table>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- 公告全文 Modal -->
+  <div id="ann-modal" class="ann-modal-overlay hidden" onclick="if(event.target===this)closeAnnModal()">
+    <div class="ann-modal">
+      <div class="ann-modal-hdr">
+        <span id="ann-modal-title"></span>
+        <button class="ann-modal-close" onclick="closeAnnModal()">✕</button>
+      </div>
+      <div id="ann-modal-body" class="ann-modal-body"></div>
     </div>
   </div>
 
