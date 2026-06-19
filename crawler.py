@@ -945,7 +945,7 @@ def fetch_announcement_detail(sess, seq_no, spoke_time, spoke_date, company_id, 
         if attempt < retries:
             logger.warning('Detail mismatch for company_id=%s (got %r) — retry %d/%d',
                             company_id, got_code, attempt + 1, retries)
-            _jitter(5)
+            _jitter(2)
 
     raise requests.exceptions.RequestException(
         f'Detail page for company_id={company_id} returned empty/mismatched content after {retries + 1} attempts'
@@ -1074,7 +1074,11 @@ def crawl_announcements(date_str=None, limit=None):
                     logger.warning('No stock code for seq %s', item['seq_no'])
                     continue
 
-                _jitter(5)
+                # ajax_t05sr01_1 isn't the throttled endpoint t05sr01_1 was —
+                # the reference n8n workflow fetches all 800+/day through it
+                # in ~5 minutes total with no deliberate per-item delay. Keep
+                # a small jitter for politeness, not as an anti-block measure.
+                _jitter(0.3)
                 try:
                     subject = item.get('list_subject', '')
 
