@@ -74,7 +74,7 @@ def _announcements_job():
 
 
 def _announcements_test_job():
-    """TEMPORARY: crawl TODAY's announcements every 15 min so same-day
+    """TEMPORARY: crawl TODAY's announcements every 30 min so same-day
     self-disclosure filings show up without waiting for the 05:00 job
     (which only looks at the prior trading day). Remove once testing
     is done — ask before reverting to the daily-only schedule."""
@@ -118,9 +118,9 @@ def start():
     # Announcements: weekdays at 05:00 (off-peak, prior-day post-close announcements)
     _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=5, minute=0))
 
-    # TEMPORARY (testing): re-crawl TODAY's announcements every 15 min so
+    # TEMPORARY (testing): re-crawl TODAY's announcements every 30 min so
     # same-day filings show up quickly. Remove when testing is done.
-    _scheduler.add_job(_announcements_test_job, 'interval', minutes=15,
+    _scheduler.add_job(_announcements_test_job, 'interval', minutes=30,
                        next_run_time=datetime.now(_TZ))
 
     # Quarterly financial reports — every day of the disclosure month at 23:00

@@ -141,7 +141,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 每日股價 | 週一〜五 14:00 與 15:00（各跑一次，避免單次失敗漏抓） |
 | 月營收 | 每天 23:00（爬上個月；部分公司公布較晚，每天重抓直到有資料） |
 | 自結公告 | 週一〜五 05:00（非尖峰，爬前一交易日的 MOPS 重大公告） |
-| 自結公告（測試用，**暫時性**） | 每 15 分鐘重爬「今天」的公告（`_announcements_test_job`），讓當日新公告不用等隔天 05:00。測試完畢要記得問使用者是否移除這個 job（`scheduler.py`） |
+| 自結公告（測試用，**暫時性**） | 每 30 分鐘重爬「今天」的公告（`_announcements_test_job`），讓當日新公告不用等隔天 05:00。測試完畢要記得問使用者是否移除這個 job（`scheduler.py`） |
 | Q1 | 5 月每天 23:00（公告期限 5/15） |
 | Q2 | 8 月每天 23:00（公告期限 8/14） |
 | Q3 | 11 月每天 23:00（公告期限 11/14） |
@@ -315,17 +315,23 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 **爬蟲流程：**
 1. POST `ajax_t05st02`（帶 ROC 年月日）取得公告清單 HTML，解析 onclick 取得每筆的 `typek`/`i`/`co_id`
-2. 以 `_EPS_KEYWORDS` 對主旨做 pre-filter（含「每股盈餘」、「注意交易」等）
-3. 每筆候選 `_jitter(3)` 後呼叫 `fetch_announcement_detail()` GET 詳情頁（`t05sr01_1?TYPEK&i&co_id`，本機與 Zeabur 雲端皆已驗證可正常存取，個別失敗只跳過該筆不影響其他）
-4. `_parse_disclosure()` 解析「說明」欄的自結合併財務資訊表格，只取**單月**資料（不再解析季/累計）：
+2. 以 `_EPS_KEYWORDS` 對主旨做 pre-filter（含「每股盈餘」、「自結」、「注意交易」等；2026-06-19 把過窄的「自結損益」「自結每股」改成單純「自結」，因為常見主旨如「...自結合併財務報告...」根本不含「損益」或「每股」這兩個詞，太窄的關鍵字會讓真正的自結公告整批漏接）
+3. 每筆候選 `_jitter(5)` 後呼叫 `fetch_announcement_detail()` GET 詳情頁（`t05sr01_1?TYPEK&i&co_id`）
+4. **防爬蟲驗證**：MOPS 在短時間內被打太多次請求時，有時會回 HTTP 200 但整頁欄位全空（不是錯誤碼，是「看起來正常的空殼」，且不管帶哪個 `co_id` 都回同一份內容）。`fetch_announcement_detail()` 會比對抓回來的「公司代號」是否等於請求的 `co_id`，不符就視為被擋，`_jitter(8)` 後重試（預設 `retries=2`），重試完仍失敗才 raise，該筆會被當成抓取失敗跳過（不會誤判成「沒有財務表格」存空值）
+5. `_parse_disclosure()` 解析「說明」欄的自結合併財務資訊表格，只取**單月**資料（不再解析季/累計）：
    - A）TWSE「sii」單一表格，EPS 列 5 個數字（月值/月年增%/季值/季年增%/累計值），只用前兩個；**去年同月EPS 沒有直接給，用 `monthly_eps / (1 + eps_yoy/100)` 反推**（`eps_yoy == -100` 時無法反推，留空）
    - B）TPEX「otc」三段式 `(1)單月 (2)單季 (3)最近四季累計`，只看 `(1)單月` 區段，EPS 列 3 個數字（本期/去年同期/年增%），**去年同月EPS 是表格直接給的，不用反推**
    - 兩種版面都會偵測「由虧轉盈/轉虧為盈」字樣 → `turnaround=1`
-5. `_price_at_or_before()` 查 `daily_prices` 取得「公告日期當天，若非交易日則往前找最近一個交易日」的收盤價 → `price_at_announce`
-6. `estimated_annual_eps = monthly_eps × 12`；`estimated_pe = round(price_at_announce / estimated_annual_eps, 1)`（任一缺值則留 None，`estimated_annual_eps <= 0` 也不計算）
-7. **即使解析不出單月EPS（例如純注意交易公告沒有財務表格），也會 INSERT**，相關欄位留 NULL；用 `Announcement.__table__.insert().prefix_with('OR IGNORE')` 以 `(stock_code, seq_no)` 去重
+6. `_price_at_or_before()` 查 `daily_prices` 取得「公告日期當天，若非交易日則往前找最近一個交易日」的收盤價 → `price_at_announce`
+7. `estimated_annual_eps = monthly_eps × 12`；`estimated_pe = round(price_at_announce / estimated_annual_eps, 1)`（任一缺值則留 None，`estimated_annual_eps <= 0` 也不計算）
+8. **即使解析不出單月EPS（例如純注意交易公告沒有財務表格），也會 INSERT**，相關欄位留 NULL；用 `Announcement.__table__.insert().prefix_with('OR IGNORE')` 以 `(stock_code, seq_no)` 去重
+
+**除錯注意**：在 Zeabur 終端機貼含中文字的程式碼/heredoc 時，**終端機本身會在中文字之間插入空格**，不只是顯示問題，連貼上去的程式碼內容都會被改掉（例如 `re.compile('主旨')` 會變成 `re.compile('主 旨 ')` 導致比對失效）。之後要請使用者在終端機跑診斷用的 Python 腳本時，**程式碼裡絕對不要放新的中文字面值**，只能重用 `crawler.py` 裡已經部署好的常數/regex（如 `crawler._EPS_LABEL_RE`），或單純印出結構（不靠中文比對）讓人眼判讀。
 
 **前端（`#ann-view`）：** 純表格（不用 DataTables），12 欄：公告日期／代號／名稱／公告主旨／公告時股價／單月EPS／去年同月EPS／月EPS年增率／轉虧為盈／預估全年EPS／預估本益比／AI分析。轉虧為盈欄位為真時顯示 🔥；預估本益比 `<= 0` 時前端顯示「—」（負本益比無意義，但後端仍照算存入 DB，不隱藏原始資料）。
 
+- **公告日期欄**：顯示的其實是 `created_at`（爬蟲實際抓到/寫入的時間，精確到分），不是 `announce_date` 本身——測試期間（30分鐘排程重爬同一天）方便看出資料是什麼時候進來的。API 排序也改成 `ORDER BY created_at DESC`。
 - **公告主旨**：表格內只顯示前 10 字（`_annTruncate()`），點擊開 `#ann-modal`（同頁彈出視窗，不開新分頁/新頁面）顯示完整主旨與內容（`a.content`，無內容時顯示「（無詳細內容）」）。全部公告資料先一次性存進 `_annData`（模組層級陣列），modal/AI按鈕都用 `data-idx` 對應陣列索引去查，不用再打 API。
 - **AI分析欄**：`<a class="btn btn-sm ann-ai-link" href="https://gemini.google.com" target="_blank">`，點擊時 `copyAnnForAI()` 把提示詞（「這則公告所代表的含義是什麼\n」+ 公告全文）複製到剪貼簿，同時連結本身會在新分頁開啟 Gemini（Gemini 網頁版不支援 URL 帶入提示詞，使用者需自行貼上），與既有 `copyStarForAI()`/`copyWlForAI()` 的「複製給AI」模式一致。
+- **今日更新面板**：`/api/updates/today` 多了 `ann_count`／`ann_last_checked`，今日有新公告就顯示「今日新增 N 筆」，否則顯示最後檢查時間。
+- **網站說明（About modal）**：新增「📰 自結公告爬蟲」段落，說明 30 分鐘排程與 AI分析按鈕用法（`templates/index.html` 的 `#about-modal`）。

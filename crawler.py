@@ -885,31 +885,51 @@ def new_mops_session():
     return sess
 
 
-def fetch_announcement_detail(sess, typek, i, co_id):
+def fetch_announcement_detail(sess, typek, i, co_id, retries=2):
     """GET a MOPS 重大訊息 detail page and return (subject, content, parsed).
     parsed is the dict from _parse_disclosure() (empty if content unparseable).
-    Raises requests.exceptions.RequestException on connection failure."""
-    detail_url = f'{_ANN_BASE}/t05sr01_1?TYPEK={typek}&i={i}&co_id={co_id}'
-    resp = sess.get(detail_url, headers=_ann_headers(), timeout=30)
-    resp.encoding = 'utf-8'
-    dsoup = BeautifulSoup(resp.text, 'lxml')
 
-    def _get_field(label):
-        th = dsoup.find('th', string=re.compile(label))
-        if th:
-            td = th.find_next_sibling('td')
-            return td.get_text('\n', strip=True) if td else ''
-        return ''
+    Under repeated rapid requests MOPS sometimes returns a 200 with the
+    page shell but every field blank (soft anti-bot throttling, not an
+    HTTP error) — same response regardless of which co_id was requested.
+    Detect this by checking the returned 公司代號 actually matches what
+    we asked for; back off and retry rather than silently treating it as
+    "no financial table". Raises requests.exceptions.RequestException if
+    every attempt comes back empty/mismatched, or on connection failure.
+    """
+    for attempt in range(retries + 1):
+        detail_url = f'{_ANN_BASE}/t05sr01_1?TYPEK={typek}&i={i}&co_id={co_id}'
+        resp = sess.get(detail_url, headers=_ann_headers(), timeout=30)
+        resp.encoding = 'utf-8'
+        dsoup = BeautifulSoup(resp.text, 'lxml')
 
-    subject = _strip_cjk_spaces(_get_field('主旨'))
-    content = _get_field('說明')
-    if not content:
-        pre = dsoup.find('pre')
-        if pre:
-            content = pre.get_text('\n', strip=True)
-    content = _strip_cjk_spaces(content)
-    parsed = _parse_disclosure(content) if content else {}
-    return subject, content, parsed
+        def _get_field(label):
+            th = dsoup.find('th', string=re.compile(label))
+            if th:
+                td = th.find_next_sibling('td')
+                return td.get_text('\n', strip=True) if td else ''
+            return ''
+
+        got_code = _strip_cjk_spaces(_get_field('公司代號')).strip()
+        if got_code == str(co_id):
+            subject = _strip_cjk_spaces(_get_field('主旨'))
+            content = _get_field('說明')
+            if not content:
+                pre = dsoup.find('pre')
+                if pre:
+                    content = pre.get_text('\n', strip=True)
+            content = _strip_cjk_spaces(content)
+            parsed = _parse_disclosure(content) if content else {}
+            return subject, content, parsed
+
+        if attempt < retries:
+            logger.warning('Detail mismatch for co_id=%s (got %r) — retry %d/%d',
+                            co_id, got_code, attempt + 1, retries)
+            _jitter(8)
+
+    raise requests.exceptions.RequestException(
+        f'Detail page for co_id={co_id} returned empty/mismatched content after {retries + 1} attempts'
+    )
 
 
 def _price_at_or_before(db, stock_code, ann_date):
@@ -1028,7 +1048,7 @@ def crawl_announcements(date_str=None):
                     logger.warning('No stock code for seq %s', item['seq_no'])
                     continue
 
-                _jitter(3)
+                _jitter(5)
                 try:
                     subject = item.get('list_subject', '')
                     typek, idx_, co_id = item['typek'], item['i'], item['co_id']
