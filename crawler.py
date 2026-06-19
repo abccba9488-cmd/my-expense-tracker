@@ -20,7 +20,7 @@ _session.verify = False
 from sqlalchemy import text
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
-    QuarterlyFinancial, CrawlerLog
+    QuarterlyFinancial, CrawlerLog, Announcement
 )
 
 logger = logging.getLogger(__name__)
@@ -786,6 +786,314 @@ def crawl_quarterly_financials(year: int, quarter: int):
         raise
     finally:
         db.close()
+
+
+# ── announcements ─────────────────────────────────────────────────────────────
+
+_ANN_BASE = 'https://mopsov.twse.com.tw/mops/web'
+_TURNAROUND_RE = re.compile(r'由虧轉盈|轉虧為盈|虧轉盈')
+_EPS_LABEL_RE  = re.compile(r'每股盈餘|每股稅後盈餘|每股稅前盈餘|基本每股盈餘')
+
+
+def _strip_cjk_spaces(s):
+    """MOPS inserts a space between every CJK character in <td>/<th> text
+    (both list and detail pages). Strip it — leaves ASCII (numbers, units,
+    English) spacing untouched since the lookaround requires non-ASCII on
+    both sides."""
+    return re.sub(r'(?<=[^\x00-\x7F]) (?=[^\x00-\x7F])', '', s)
+
+
+def _extract_numbers(line):
+    """Pull numeric tokens from a table row, stripping thousand-separators
+    and trailing '(由虧轉盈)'-style annotations first."""
+    cleaned = re.sub(r'\([由轉虧盈為]+\)', '', line)
+    return [float(n.replace(',', '')) for n in re.findall(r'-?\d[\d,]*\.?\d*', cleaned)]
+
+
+def _parse_disclosure(body):
+    """Parse a MOPS 自結合併財務資訊 announcement body for the monthly EPS
+    figure, its year-ago comparison, and YoY%. Two known layouts:
+      A) TWSE 'sii' — single table, EPS row has 5 numbers (月值, 月年增%,
+         季值, 季年增%, 累計值). Only the first two matter; the prior-year
+         value isn't given directly so it's reverse-derived from the YoY%.
+      B) TPEX 'otc' — sections (1)單月 (2)單季 (3)最近四季累計, each with
+         3 numbers (本期值, 去年同期值, 年增%). Only (1)單月 matters — it
+         gives the prior-year value directly, no need to derive it.
+    Returns a dict with whatever fields were found (missing keys omitted)."""
+    result = {}
+    if _TURNAROUND_RE.search(body):
+        result['turnaround'] = 1
+
+    lines = [l for l in body.splitlines() if l.strip()]
+
+    # Format A
+    for i, line in enumerate(lines):
+        if _EPS_LABEL_RE.search(line):
+            nums = _extract_numbers(line)
+            if len(nums) < 5 and i + 1 < len(lines):
+                nums += _extract_numbers(lines[i + 1])
+            if len(nums) >= 5:
+                monthly_eps, yoy = nums[0], nums[1]
+                result['monthly_eps'] = monthly_eps
+                result['eps_yoy'] = yoy
+                denom = 1 + yoy / 100
+                if abs(denom) > 1e-9:
+                    result['prior_year_eps'] = round(monthly_eps / denom, 4)
+                return result
+
+    # Format B — only the 單月 section is needed
+    section_re = re.compile(r'\(1\)\s*單月|\(2\)\s*單季|\(3\)\s*(最近)?四季累計')
+    monthly_lines, in_monthly = [], False
+    for line in lines:
+        m = section_re.search(line)
+        if m:
+            if in_monthly:
+                break
+            in_monthly = '單月' in m.group(0)
+            continue
+        if in_monthly:
+            monthly_lines.append(line)
+    for line in monthly_lines:
+        if _EPS_LABEL_RE.search(line):
+            nums = _extract_numbers(line)
+            if len(nums) >= 3:
+                result['monthly_eps']    = nums[0]
+                result['prior_year_eps'] = nums[1]
+                result['eps_yoy']        = nums[2]
+            break
+
+    return result
+
+
+def _ann_headers():
+    return {
+        'User-Agent': _get_ua(),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate',
+        'Origin': 'https://mopsov.twse.com.tw',
+        'Referer': f'{_ANN_BASE}/t05sr01_1',
+        'Connection': 'keep-alive',
+    }
+
+
+def new_mops_session():
+    """Create + init a MOPS session (sets cookies) for repeated detail fetches."""
+    sess = requests.Session()
+    sess.verify = False
+    sess.get(f'{_ANN_BASE}/t05sr01_1', headers=_ann_headers(), timeout=20)
+    return sess
+
+
+def fetch_announcement_detail(sess, typek, i, co_id):
+    """GET a MOPS 重大訊息 detail page and return (subject, content, parsed).
+    parsed is the dict from _parse_disclosure() (empty if content unparseable).
+    Raises requests.exceptions.RequestException on connection failure."""
+    detail_url = f'{_ANN_BASE}/t05sr01_1?TYPEK={typek}&i={i}&co_id={co_id}'
+    resp = sess.get(detail_url, headers=_ann_headers(), timeout=30)
+    resp.encoding = 'utf-8'
+    dsoup = BeautifulSoup(resp.text, 'lxml')
+
+    def _get_field(label):
+        th = dsoup.find('th', string=re.compile(label))
+        if th:
+            td = th.find_next_sibling('td')
+            return td.get_text('\n', strip=True) if td else ''
+        return ''
+
+    subject = _strip_cjk_spaces(_get_field('主旨'))
+    content = _get_field('說明')
+    if not content:
+        pre = dsoup.find('pre')
+        if pre:
+            content = pre.get_text('\n', strip=True)
+    content = _strip_cjk_spaces(content)
+    parsed = _parse_disclosure(content) if content else {}
+    return subject, content, parsed
+
+
+def _price_at_or_before(db, stock_code, ann_date):
+    """Latest daily_prices.close on or before ann_date (handles non-trading days)."""
+    row = db.execute(text(
+        "SELECT close FROM daily_prices WHERE stock_code=:c AND date<=:d"
+        " ORDER BY date DESC LIMIT 1"
+    ), {'c': stock_code, 'd': ann_date}).first()
+    return row[0] if row else None
+
+
+def crawl_announcements(date_str=None):
+    """Crawl MOPS重大訊息 for self-disclosure (自結) EPS announcements.
+    Pure crawl + deterministic parsing — no AI involved."""
+    if date_str is None:
+        d = datetime.now(_TZ).date() - timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= timedelta(days=1)
+        date_str = d.strftime('%Y%m%d')
+
+    dt = datetime.strptime(date_str, '%Y%m%d').date()
+    roc_year  = str(dt.year - 1911)
+    month_str = f'{dt.month:02d}'
+    day_str   = f'{dt.day:02d}'
+
+    _log('announcements', 'running', date_str)
+    logger.info('Crawling announcements for %s', date_str)
+
+    ann_sess = requests.Session()
+    ann_sess.verify = False
+
+    def _ann_post(data, timeout=30):
+        return ann_sess.post(
+            f'{_ANN_BASE}/ajax_t05st02',
+            data=data,
+            headers={**_ann_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=timeout,
+        )
+
+    try:
+        ann_sess.get(f'{_ANN_BASE}/t05sr01_1', headers=_ann_headers(), timeout=20)
+        _jitter(1)
+
+        list_resp = _ann_post({
+            'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
+            'TYPEK': 'all',
+            'year': roc_year, 'month': month_str, 'day': day_str,
+        })
+        list_resp.encoding = 'utf-8'
+        soup = BeautifulSoup(list_resp.text, 'lxml')
+
+        onclick_re = re.compile(
+            r'\.TYPEK\.value="([^"]+)".*?\.i\.value="([^"]+)".*?\.co_id\.value="([^"]+)"',
+            re.DOTALL,
+        )
+        _EPS_KEYWORDS = ('每股盈餘', '每股稅後盈餘', '每股稅前盈餘',
+                         '自結損益', '稅後純益', '稅後盈餘', 'EPS', '自結每股',
+                         '注意交易', '達公佈注意', '注意股')
+
+        links = []
+        for tag in soup.find_all(onclick=True):
+            m = onclick_re.search(tag['onclick'])
+            if m:
+                typek, idx, co_id = m.groups()
+                row = tag.find_parent('tr')
+                list_code, list_name, list_subject, list_time = '', '', '', ''
+                if row:
+                    tds = [_strip_cjk_spaces(td.get_text(strip=True))
+                           for td in row.find_all('td')]
+                    if len(tds) >= 5:
+                        list_time    = tds[1]
+                        list_code    = tds[2]
+                        list_name    = tds[3]
+                        list_subject = tds[4]
+                    elif len(tds) >= 3:
+                        list_code    = tds[0]
+                        list_name    = tds[1]
+                        list_subject = tds[2]
+                links.append({
+                    'seq_no':      f'{typek}_{idx}_{co_id}_{date_str}',
+                    'typek':       typek,
+                    'i':           idx,
+                    'co_id':       co_id,
+                    'list_code':   list_code,
+                    'list_name':   list_name,
+                    'list_subject': list_subject,
+                    'list_time':   list_time,
+                })
+        if links:
+            logger.info('LIST sample [0]: code=%s name=%s subj=%s',
+                        links[0]['list_code'], links[0]['list_name'], links[0]['list_subject'][:80])
+
+        if not links:
+            _log('announcements', 'success', f'{date_str}: no announcements found')
+            return 0
+
+        logger.info('Found %d announcement links for %s', len(links), date_str)
+        db = SessionLocal()
+        saved = 0
+
+        eps_candidates = [it for it in links
+                          if any(kw in it.get('list_subject', '') for kw in _EPS_KEYWORDS)]
+        logger.info('Pre-filter: %d / %d links match EPS keywords for %s',
+                    len(eps_candidates), len(links), date_str)
+
+        if not eps_candidates:
+            _log('announcements', 'success', f'{date_str}: 0 EPS announcements (none in list)')
+            return 0
+
+        try:
+            for item in eps_candidates:
+                code = item.get('list_code', '')
+                announce_time = item.get('list_time', '')
+
+                if not code:
+                    logger.warning('No stock code for seq %s', item['seq_no'])
+                    continue
+
+                _jitter(3)
+                try:
+                    subject = item.get('list_subject', '')
+                    typek, idx_, co_id = item['typek'], item['i'], item['co_id']
+
+                    content, parsed = '', {}
+                    try:
+                        detail_subject, content, parsed = fetch_announcement_detail(
+                            ann_sess, typek, idx_, co_id)
+                        subject = detail_subject or subject
+                        if content:
+                            logger.info('Detail parsed %s seq %s: %s', code, item['seq_no'], parsed)
+                    except requests.exceptions.RequestException as e:
+                        logger.warning('Detail fetch failed for %s seq %s: %s',
+                                        code, item['seq_no'], e)
+
+                    monthly_eps    = parsed.get('monthly_eps')
+                    prior_year_eps = parsed.get('prior_year_eps')
+                    eps_yoy        = parsed.get('eps_yoy')
+                    turnaround     = parsed.get('turnaround')
+
+                    estimated_annual_eps = (round(monthly_eps * 12, 2)
+                                             if monthly_eps is not None else None)
+                    price_at_announce = _price_at_or_before(db, code, dt)
+                    estimated_pe = (round(price_at_announce / estimated_annual_eps, 1)
+                                    if price_at_announce is not None and estimated_annual_eps
+                                    else None)
+
+                    db.execute(
+                        Announcement.__table__.insert().prefix_with('OR IGNORE'),
+                        [{
+                            'stock_code':           code,
+                            'seq_no':               item['seq_no'],
+                            'announce_date':        dt,
+                            'announce_time':        announce_time[:10],
+                            'subject':              subject[:500],
+                            'content':              content[:5000],
+                            'price_at_announce':    price_at_announce,
+                            'monthly_eps':          monthly_eps,
+                            'prior_year_eps':       prior_year_eps,
+                            'eps_yoy':              eps_yoy,
+                            'turnaround':           turnaround,
+                            'estimated_annual_eps': estimated_annual_eps,
+                            'estimated_pe':         estimated_pe,
+                            'created_at':           datetime.now(_TZ),
+                        }],
+                    )
+                    db.commit()
+                    saved += 1
+                    logger.info('Saved announcement %s %s monthly_eps=%s pe=%s',
+                                code, subject[:40], monthly_eps, estimated_pe)
+
+                except Exception as e:
+                    db.rollback()
+                    logger.warning('Processing failed seq %s: %s', item['seq_no'], e)
+
+        finally:
+            db.close()
+
+        _log('announcements', 'success', f'{date_str}: {saved} announcements saved')
+        return saved
+
+    except Exception as e:
+        _log('announcements', 'failed', str(e))
+        logger.exception('crawl_announcements failed for %s', date_str)
+        raise
 
 
 # ── convenience ───────────────────────────────────────────────────────────────

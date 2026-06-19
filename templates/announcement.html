@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ a.stock_code }} {{ stock_name }} — 公告詳情｜飆股網</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script>
+    document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+  </script>
+</head>
+<body>
+<main>
+  <div class="container" style="max-width:760px;">
+    <div class="card">
+      <h2 style="margin:0 0 4px;">{{ a.stock_code }} {{ stock_name }}</h2>
+      <p style="color:var(--text2);font-size:13px;margin:0 0 16px;">{{ a.announce_date }}{{ ' ' + a.announce_time if a.announce_time else '' }}</p>
+      <h3 style="margin:0 0 12px;">{{ a.subject or '（無主旨）' }}</h3>
+      <pre style="white-space:pre-wrap;font-family:inherit;color:var(--text);font-size:14px;line-height:1.7;margin:0;">{{ a.content or '（無詳細內容）' }}</pre>
+    </div>
+  </div>
+</main>
+</body>
+</html>

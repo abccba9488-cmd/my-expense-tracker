@@ -18,7 +18,7 @@ import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message,
-    init_db
+    Announcement, init_db
 )
 
 logging.basicConfig(
@@ -470,6 +470,50 @@ def api_financials(code):
         db.close()
 
 
+# ── API: announcements ───────────────────────────────────────────────────────
+
+@app.route('/api/announcements/today')
+def api_announcements_today():
+    db = SessionLocal()
+    try:
+        since = datetime.now(_TZ).date() - timedelta(days=7)
+        rows = (
+            db.query(Announcement, Stock.name)
+            .outerjoin(Stock, Stock.code == Announcement.stock_code)
+            .filter(Announcement.announce_date >= since)
+            .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
+            .all()
+        )
+        return jsonify([{
+            'id':                   a.id,
+            'stock_code':           a.stock_code,
+            'name':                 name or '',
+            'announce_date':        str(a.announce_date),
+            'subject':              a.subject or '',
+            'price_at_announce':    a.price_at_announce,
+            'monthly_eps':          a.monthly_eps,
+            'prior_year_eps':       a.prior_year_eps,
+            'eps_yoy':              a.eps_yoy,
+            'turnaround':           bool(a.turnaround),
+            'estimated_annual_eps': a.estimated_annual_eps,
+            'estimated_pe':         a.estimated_pe,
+        } for a, name in rows])
+    finally:
+        db.close()
+
+
+@app.route('/announcement/<int:ann_id>')
+def announcement_detail(ann_id):
+    db = SessionLocal()
+    try:
+        a = db.query(Announcement).filter_by(id=ann_id).first()
+        if not a:
+            return Response('找不到此公告', status=404)
+        stock = db.query(Stock).filter_by(code=a.stock_code).first()
+        return render_template('announcement.html', a=a, stock_name=(stock.name if stock else ''))
+    finally:
+        db.close()
+
 
 # ── API: crawler ──────────────────────────────────────────────────────────────
 
@@ -533,6 +577,10 @@ def api_run_crawler(task):
         y = int(request.args.get('year',  y))
         q = int(request.args.get('quarter', q))
         _run_bg(crawler.crawl_quarterly_financials, y, q)
+
+    elif task == 'announcements':
+        ann_date = request.args.get('date')  # optional YYYYMMDD override
+        _run_bg(crawler.crawl_announcements, ann_date)
 
     elif task == 'init':
         _run_bg(_initial_crawl)

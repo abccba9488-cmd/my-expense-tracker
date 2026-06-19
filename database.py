@@ -144,6 +144,26 @@ class CrawlerLog(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
+class Announcement(Base):
+    __tablename__ = 'announcements'
+    __table_args__ = (UniqueConstraint('stock_code', 'seq_no'),)
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code    = Column(String(10), nullable=False)
+    seq_no        = Column(String(20), nullable=False)   # MOPS SEQ_NO for dedup
+    announce_date = Column(Date, nullable=False)
+    announce_time = Column(String(10))
+    subject       = Column(Text)
+    content       = Column(Text)
+    price_at_announce    = Column(Float)   # 公告日（或往前最近交易日）收盤價
+    monthly_eps          = Column(Float)   # 單月EPS
+    prior_year_eps       = Column(Float)   # 去年同月EPS
+    eps_yoy              = Column(Float)   # 月EPS年增率 %
+    turnaround           = Column(Integer) # 1 = 公告內容含「由虧轉盈/轉虧為盈」
+    estimated_annual_eps = Column(Float)   # monthly_eps × 12
+    estimated_pe         = Column(Float)   # price_at_announce / estimated_annual_eps，取小數點後1位
+    created_at    = Column(DateTime, default=lambda: datetime.now(_TZ))
+
+
 def _migrate_q4_to_individual(conn):
     """Convert Q4 annual cumulative data to individual Q4 by subtracting Q1+Q2+Q3."""
     for field in ('eps', 'revenue', 'operating_income', 'net_income'):
@@ -234,4 +254,26 @@ def init_db():
         if not done:
             _migrate_q4_to_individual(conn)
             conn.execute(text("INSERT INTO schema_migrations(name) VALUES('q4_annual_to_individual')"))
+            conn.commit()
+
+    # Migration: add new announcements columns (redesigned, AI-free crawler)
+    with engine.connect() as conn:
+        for col, coltype in (('price_at_announce', 'REAL'), ('prior_year_eps', 'REAL'),
+                              ('estimated_annual_eps', 'REAL')):
+            try:
+                conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col} {coltype}'))
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
+    # Migration: one-time wipe of announcements rows written by the old
+    # AI-rating design (different schema semantics, e.g. estimated_pe was
+    # computed from today's price instead of the announce-date price).
+    with engine.connect() as conn:
+        done = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name='clear_old_announcements'"
+        )).scalar()
+        if not done:
+            conn.execute(text('DELETE FROM announcements'))
+            conn.execute(text("INSERT INTO schema_migrations(name) VALUES('clear_old_announcements')"))
             conn.commit()

@@ -482,8 +482,10 @@ document.querySelectorAll('.page-tab').forEach(btn => {
     document.getElementById('list-view').classList.toggle('active', state.activeTab === 'list');
     document.getElementById('star-view').classList.toggle('active', state.activeTab === 'star');
     document.getElementById('watchlist-view').classList.toggle('active', state.activeTab === 'watchlist');
+    document.getElementById('ann-view').classList.toggle('active', state.activeTab === 'ann');
     if (state.activeTab === 'star') renderStarTable();
     if (state.activeTab === 'watchlist') renderWatchlistView();
+    if (state.activeTab === 'ann') loadAnnouncements();
   });
 });
 
@@ -701,6 +703,7 @@ function showDetailView() {
   document.getElementById('list-view').classList.remove('active');
   document.getElementById('star-view').classList.remove('active');
   document.getElementById('watchlist-view').classList.remove('active');
+  document.getElementById('ann-view').classList.remove('active');
   document.getElementById('detail-view').classList.add('active');
   document.getElementById('page-tabs-bar').classList.add('hidden');
   window.scrollTo(0, 0);
@@ -709,7 +712,7 @@ function showDetailView() {
 function showListView() {
   document.getElementById('detail-view').classList.remove('active');
   document.getElementById('page-tabs-bar').classList.remove('hidden');
-  const viewMap = { star: 'star-view', watchlist: 'watchlist-view' };
+  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' };
   document.getElementById(viewMap[state.activeTab] || 'list-view').classList.add('active');
   state.currentCode = null;
 }
@@ -1000,6 +1003,42 @@ async function runCrawler(task) {
   }
 }
 
+/* ── Announcement view ── */
+function renderAnnRow(a) {
+  return `<tr>
+    <td>${a.announce_date}</td>
+    <td><span class="stock-link" data-code="${a.stock_code}">${a.stock_code}</span></td>
+    <td><span class="stock-link" data-code="${a.stock_code}">${a.name || ''}</span></td>
+    <td><a href="/announcement/${a.id}" target="_blank" rel="noopener">${a.subject || '—'}</a></td>
+    <td class="num">${fmt.price(a.price_at_announce)}</td>
+    <td class="num">${fmt.eps(a.monthly_eps)}</td>
+    <td class="num">${fmt.eps(a.prior_year_eps)}</td>
+    <td class="num ${pctClass(a.eps_yoy)}">${fmt.pct(a.eps_yoy)}</td>
+    <td class="td-center">${a.turnaround ? '🔥' : '—'}</td>
+    <td class="num">${fmt.eps(a.estimated_annual_eps)}</td>
+    <td class="num">${a.estimated_pe != null && a.estimated_pe > 0 ? Number(a.estimated_pe).toFixed(1) : '—'}</td>
+  </tr>`;
+}
+
+async function loadAnnouncements() {
+  const tbody = document.getElementById('ann-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="11" class="ann-empty">載入中…</td></tr>';
+  try {
+    const data = await fetch('/api/announcements/today').then(r => r.json());
+    const countEl = document.getElementById('ann-count');
+    if (countEl) countEl.textContent = `共 ${data.length} 筆`;
+    tbody.innerHTML = data.length
+      ? data.map(renderAnnRow).join('')
+      : '<tr><td colspan="11" class="ann-empty">近期無公告</td></tr>';
+    tbody.querySelectorAll('[data-code]').forEach(el => {
+      el.addEventListener('click', () => loadStockDetail(el.dataset.code));
+    });
+  } catch (_) {
+    tbody.innerHTML = '<tr><td colspan="11" class="ann-empty">載入失敗</td></tr>';
+  }
+}
+
 /* ── Crawler status panel ── */
 document.getElementById('status-btn').addEventListener('click', () => {
   const panel = document.getElementById('status-panel');
@@ -1091,6 +1130,7 @@ const TASK_LABEL = {
   daily_price:     '今日股價更新',
   monthly_revenue: '月營收更新',
   quarterly:       '季財報更新',
+  announcements:   '自結公告更新',
   init:            '初始化',
 };
 

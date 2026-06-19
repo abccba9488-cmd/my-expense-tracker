@@ -130,6 +130,7 @@
       <button class="page-tab active" data-tab="list">股票總覽</button>
       <button class="page-tab" data-tab="star">🔥 營收飆股</button>
       <button class="page-tab" data-tab="watchlist">⭐ 自選股</button>
+      <button class="page-tab" data-tab="ann">📰 自結公告</button>
     </div>
   </div>
 
@@ -267,6 +268,29 @@
     </div>
   </div>
 
+  <!-- 自結公告 -->
+  <div id="ann-view" class="view">
+    <div class="container">
+      <div class="toolbar">
+        <span class="stats-badge" id="ann-count"></span>
+      </div>
+      <div class="card">
+        <div class="ann-table-wrap">
+          <table id="ann-table" class="ann-table">
+            <thead>
+              <tr>
+                <th>公告日期</th><th>代號</th><th>名稱</th><th>公告主旨</th>
+                <th>公告時股價</th><th>單月EPS</th><th>去年同月EPS</th><th>月EPS年增率</th>
+                <th>轉虧為盈</th><th>預估全年EPS</th><th>預估本益比</th>
+              </tr>
+            </thead>
+            <tbody id="ann-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 個股詳情 -->
   <div id="detail-view" class="view">
     <div class="container">
@@ -373,6 +397,7 @@
     <button class="btn btn-sm admin-only hidden" id="quarterly-btn" onclick="runCrawler('quarterly')">更新季財報</button>
     <button class="btn btn-sm admin-only hidden" onclick="runCrawler('daily_price')">更新今日股價</button>
     <button class="btn btn-sm admin-only hidden" onclick="runCrawler('monthly_revenue')">更新月營收</button>
+    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('announcements')">更新自結公告</button>
   </div>
   <div id="status-logs" class="status-logs"></div>
 </div>

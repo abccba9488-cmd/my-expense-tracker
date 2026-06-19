@@ -84,6 +84,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `watchlist_stocks` | `(watchlist_id, stock_code)` | 自選股關聯表 |
 | `messages` | `id` | 全站留言板；`user_id`/`username`/`content`/`created_at` |
 | `crawler_logs` | `id` | status: running \| success \| failed |
+| `announcements` | `id` | UniqueConstraint(`stock_code`, `seq_no`)；自結公告爬蟲結果，見下方「自結公告」章節 |
 | `schema_migrations` | `name` | 記錄已執行的 migration，防止重複執行 |
 
 `monthly_revenue` / `quarterly_financials` 皆有 `updated_at`（`onupdate=datetime.now`），爬蟲在資料**實際變動**時才手動更新此欄位（用於 `/api/updates/today` 判斷「今日更新」清單）。
@@ -93,6 +94,8 @@ data/stocks.db         SQLite 資料庫（自動建立）
 2. 補填歷史 `start_price` 空值
 3. `q4_annual_to_individual`：將 Q4 從年累計值減去 Q1+Q2+Q3，還原為個別季數值
 4. `ALTER TABLE monthly_revenue / quarterly_financials ADD COLUMN updated_at DATETIME`
+5. `ALTER TABLE announcements ADD COLUMN price_at_announce / prior_year_eps / estimated_annual_eps REAL`
+6. `clear_old_announcements`：一次性清空舊版 AI 評級設計留下的 `announcements` 資料（schema 語意不同，只清資料不動欄位）
 
 ## _SUMMARY_SQL 欄位索引（r[0]–r[16]）
 
@@ -113,6 +116,8 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | TPEX 每日股價 | `tpex.org.tw/.../stk_wn1430_result.php?se=AL` | JSON `tables[0].data`（2025+ 新格式）；volume 單位為股 |
 | 月營收 | `mops.twse.com.tw/mops/api/t05st10_ifrs` | POST JSON；per-company；`data[0][1]`=當月營收，`data[3][1]`=年增率 |
 | 季財報 EPS | `mops.twse.com.tw/mops/api/t164sb04` | POST JSON；`reportList` 陣列，關鍵字比對列標籤取值 |
+| 自結公告清單 | `mopsov.twse.com.tw/mops/web/ajax_t05st02` | POST form（TYPEK=all, year/month/day ROC）→ HTML；onclick 格式 `.TYPEK.value="sii"`, `.i.value="0"`, `.co_id.value="2362"` |
+| 自結公告詳情 | `mopsov.twse.com.tw/mops/web/t05sr01_1?TYPEK&i&co_id` | GET HTML；解析 `<th>` 標籤對應的 `<td>` 取主旨/說明 |
 
 **SSL 注意**：TWSE/TPEX/MOPS 憑證有問題，`crawler.py` 用 `_session.verify = False` 統一處理。所有請求必須走 `_get()` / `_post()` 包裝函式，不可直接呼叫 `_session.get/post` 或裸的 `requests`。
 
@@ -135,6 +140,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 股票清單 | 每週日 01:00 |
 | 每日股價 | 週一〜五 14:00 與 15:00（各跑一次，避免單次失敗漏抓） |
 | 月營收 | 每天 23:00（爬上個月；部分公司公布較晚，每天重抓直到有資料） |
+| 自結公告 | 週一〜五 05:00（非尖峰，爬前一交易日的 MOPS 重大公告） |
 | Q1 | 5 月每天 23:00（公告期限 5/15） |
 | Q2 | 8 月每天 23:00（公告期限 8/14） |
 | Q3 | 11 月每天 23:00（公告期限 11/14） |
@@ -142,7 +148,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 **注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
-手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋。
+手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期。
 
 ## REST API
 
@@ -172,6 +178,9 @@ DELETE /api/watchlists/<id>/stocks/<code>  移除股票
 GET  /api/messages                 留言板列表（最新 100 筆，含 can_delete 旗標）
 POST /api/messages                 發表留言（需登入，內容上限 500 字）
 DELETE /api/messages/<id>          刪除留言（本人或 ADMIN_USERNAME）
+
+GET  /api/announcements/today      自結公告清單（近 7 天，依日期/時間降序）
+GET  /announcement/<id>            單筆公告詳情頁（伺服器渲染 HTML，非 JSON，給「開新分頁看全文」用）
 ```
 
 `ADMIN_USERNAME`（`app.py`）為留言板管理員帳號，可刪除任何人的留言。
@@ -258,16 +267,17 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 `state.allData` 存放 `/api/market/summary` 的完整資料，篩選（上市/上櫃、飆股）皆在前端計算，不重新呼叫 API。
 
-### 四個視圖
+### 五個視圖
 
 | 視圖 | 說明 |
 |------|------|
 | `#list-view` | 完整股票列表（DataTables，預設代號升冪） |
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
 | `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
+| `#ann-view` | 自結公告：純表格（不用 DataTables），11 欄，見下方「自結公告」章節 |
 | `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表） |
 
-分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view' }`。
+分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' }`。
 
 ### 主表格欄位（16 欄，index 0–15）
 
@@ -298,3 +308,23 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 - `#status-panel`（⚙ 爬蟲狀態）、`#today-panel`（🆕 今日更新，呼叫 `/api/updates/today`）：右下／左下角浮動面板，`.hidden` 切換顯示。
 - `#msg-panel`（💬 留言板）：右側滑出抽屜（`.msg-drawer.open` 切換），`loadMessages()` 載入、`sendMessage()` 發表、依 `can_delete` 顯示刪除按鈕。
+
+## 自結公告（純爬蟲，無 AI）
+
+`crawl_announcements(date_str=None)` 於 `crawler.py`，預設爬取前一個交易日的 MOPS 重大訊息。這是第二次實作（第一版含 AI 評級已於 2026-06-18 移除，原因是 AI 分析品質不穩且公告型態混淆）；這版**完全不呼叫 AI**，純粹爬蟲 + 決定性解析 + 數學計算。
+
+**爬蟲流程：**
+1. POST `ajax_t05st02`（帶 ROC 年月日）取得公告清單 HTML，解析 onclick 取得每筆的 `typek`/`i`/`co_id`
+2. 以 `_EPS_KEYWORDS` 對主旨做 pre-filter（含「每股盈餘」、「注意交易」等）
+3. 每筆候選 `_jitter(3)` 後呼叫 `fetch_announcement_detail()` GET 詳情頁（`t05sr01_1?TYPEK&i&co_id`，本機與 Zeabur 雲端皆已驗證可正常存取，個別失敗只跳過該筆不影響其他）
+4. `_parse_disclosure()` 解析「說明」欄的自結合併財務資訊表格，只取**單月**資料（不再解析季/累計）：
+   - A）TWSE「sii」單一表格，EPS 列 5 個數字（月值/月年增%/季值/季年增%/累計值），只用前兩個；**去年同月EPS 沒有直接給，用 `monthly_eps / (1 + eps_yoy/100)` 反推**（`eps_yoy == -100` 時無法反推，留空）
+   - B）TPEX「otc」三段式 `(1)單月 (2)單季 (3)最近四季累計`，只看 `(1)單月` 區段，EPS 列 3 個數字（本期/去年同期/年增%），**去年同月EPS 是表格直接給的，不用反推**
+   - 兩種版面都會偵測「由虧轉盈/轉虧為盈」字樣 → `turnaround=1`
+5. `_price_at_or_before()` 查 `daily_prices` 取得「公告日期當天，若非交易日則往前找最近一個交易日」的收盤價 → `price_at_announce`
+6. `estimated_annual_eps = monthly_eps × 12`；`estimated_pe = round(price_at_announce / estimated_annual_eps, 1)`（任一缺值則留 None，`estimated_annual_eps <= 0` 也不計算）
+7. **即使解析不出單月EPS（例如純注意交易公告沒有財務表格），也會 INSERT**，相關欄位留 NULL；用 `Announcement.__table__.insert().prefix_with('OR IGNORE')` 以 `(stock_code, seq_no)` 去重
+
+**前端（`#ann-view`）：** 純表格（不用 DataTables），11 欄：公告日期／代號／名稱／公告主旨／公告時股價／單月EPS／去年同月EPS／月EPS年增率／轉虧為盈／預估全年EPS／預估本益比。點主旨開新分頁連到 `/announcement/<id>`（伺服器渲染的獨立頁面，顯示主旨+完整內容，**不連 MOPS 原始網址**，避免依賴 MOPS session/反爬蟲狀態）。轉虧為盈欄位為真時顯示 🔥；預估本益比 `<= 0` 時前端顯示「—」（負本益比無意義，但後端仍照算存入 DB，不隱藏原始資料）。
+
+**`templates/announcement.html`**：獨立模板，引用 `static/css/style.css` 並讀 `localStorage.getItem('theme')` 套用深色/淺色主題；內容用 Jinja2 預設跳脫（不可加 `|safe`，因為內容是爬蟲文字非可信 HTML）。

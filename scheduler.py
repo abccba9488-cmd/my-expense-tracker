@@ -65,6 +65,14 @@ def _monthly_revenue_job():
         logger.error('Monthly revenue job failed: %s', e)
 
 
+def _announcements_job():
+    import crawler
+    try:
+        crawler.crawl_announcements()
+    except Exception as e:
+        logger.error('Announcements job failed: %s', e)
+
+
 def _quarterly_job(quarter):
     import crawler
     now = datetime.now(_TZ)
@@ -93,6 +101,9 @@ def start():
 
     # Monthly revenue: every day at 23:00 (some companies publish late, keep retrying)
     _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))
+
+    # Announcements: weekdays at 05:00 (off-peak, prior-day post-close announcements)
+    _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=5, minute=0))
 
     # Quarterly financial reports — every day of the disclosure month at 23:00
     # Q1 (Jan–Mar): all of May (deadline May 15)

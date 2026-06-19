@@ -300,6 +300,26 @@ table.dataTable tbody td {
 }
 .admin-user-del:hover { color: var(--neg); }
 
+/* ── Announcement view ── */
+.ann-empty { color: var(--text2); padding: 24px 0; text-align: center; font-size: 13px; }
+.ann-table-wrap { overflow-x: auto; }
+.ann-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ann-table th {
+  background: var(--bg2); color: var(--text2);
+  font-weight: 600; font-size: 12px;
+  padding: 8px 10px; text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ann-table td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  vertical-align: middle; white-space: nowrap;
+}
+.ann-table tr:last-child td { border-bottom: none; }
+.ann-table tr:hover td { background: var(--bg2); }
+.ann-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ann-table .td-center { text-align: center; }
+
 /* ── Today updates panel ── */
 .today-panel { left: 16px; right: auto; }
 .today-section { margin-bottom: 10px; }
