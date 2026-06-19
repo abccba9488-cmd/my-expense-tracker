@@ -116,8 +116,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | TPEX 每日股價 | `tpex.org.tw/.../stk_wn1430_result.php?se=AL` | JSON `tables[0].data`（2025+ 新格式）；volume 單位為股 |
 | 月營收 | `mops.twse.com.tw/mops/api/t05st10_ifrs` | POST JSON；per-company；`data[0][1]`=當月營收，`data[3][1]`=年增率 |
 | 季財報 EPS | `mops.twse.com.tw/mops/api/t164sb04` | POST JSON；`reportList` 陣列，關鍵字比對列標籤取值 |
-| 自結公告清單 | `mopsov.twse.com.tw/mops/web/ajax_t05st02` | POST form（TYPEK=all, year/month/day ROC）→ HTML；onclick 格式 `.TYPEK.value="sii"`, `.i.value="0"`, `.co_id.value="2362"` |
-| 自結公告詳情 | `mopsov.twse.com.tw/mops/web/ajax_t05sr01_1?SEQ_NO&SPOKE_TIME&SPOKE_DATE&COMPANY_ID` | GET HTML；解析 `<th>` 標籤對應的 `<td>` 取主旨/說明。**不要用 `t05sr01_1?TYPEK&i&co_id`**，那個會被雲端 IP 長期擋（細節見「自結公告」章節） |
+| 自結公告 | `mopsov.twse.com.tw/mops/web/ajax_t05st02` | POST form（TYPEK=all, year/month/day ROC）→ HTML；單次回應即含當天全部公告的完整主旨/說明（藏在隱藏 `<input>` 欄位裡），**不需要、也不要額外發詳情頁請求**（細節見「自結公告」章節） |
 
 **SSL 注意**：TWSE/TPEX/MOPS 憑證有問題，`crawler.py` 用 `_session.verify = False` 統一處理。所有請求必須走 `_get()` / `_post()` 包裝函式，不可直接呼叫 `_session.get/post` 或裸的 `requests`。
 
@@ -149,7 +148,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 **注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
-手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只抓清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告）。
+手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。
 
 ## REST API
 
@@ -313,19 +312,18 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 `crawl_announcements(date_str=None)` 於 `crawler.py`，預設爬取前一個交易日的 MOPS 重大訊息。**完全不呼叫 AI**，純粹爬蟲 + 決定性解析 + 數學計算（前一版含 AI 評級因分析品質不穩且公告型態混淆已棄用，詳見 git log）。
 
-**爬蟲流程：**
-1. POST `ajax_t05st02`（帶 ROC 年月日）取得公告清單 HTML，解析 onclick 取得每筆的 `SEQ_NO`/`SPOKE_TIME`/`SPOKE_DATE`/`COMPANY_ID`
-2. **無主旨 pre-filter**——對清單裡**每一筆**都呼叫 `fetch_announcement_detail()`（`_jitter(0.3)` 間隔，刻意調很小——`ajax_t05sr01_1` 不是被擋的那個端點，參考的 n8n 實作對全部 800+ 筆都沒有刻意延遲，整套（含 AI 分析）約 5 分鐘跑完，所以這裡不需要像其他 MOPS 端點那樣保守），抓到內容後才依內容篩選：說明含「每股盈餘」，或主旨/說明含「注意交易資訊」，符合任一才繼續處理、否則跳過不存。這個篩選時機（先抓全部詳情、抓完才篩）刻意對齊參考實作，確保抓到的公告範圍一致；仍建議背景執行（`nohup ... &`），不要同步等待
-3. `fetch_announcement_detail()` GET 詳情頁。**務必用 `ajax_t05sr01_1?SEQ_NO&SPOKE_TIME&SPOKE_DATE&COMPANY_ID`，不要用 `t05sr01_1?TYPEK&i&co_id`**——後者是給瀏覽器導覽用的一般頁面，從雲端 IP 會被擋（HTTP 200 但整頁欄位全空，不管帶哪個 `co_id` 都回同一份內容，且等多久都不會解封，已實測過 3 小時無效，推測是雲端機房 IP 被長期標記，不是短期限速）；`ajax_t05sr01_1` 是給程式化存取用的 AJAX 端點，不受此限制。`i` 也只是「這次清單查詢裡的第幾筆」這種會話相關的相對索引，並非穩定識別碼；`SEQ_NO` 才是 MOPS 真正的全域唯一序號，所以 `seq_no` 去重鍵也改用這個真實值，不再用 `{typek}_{i}_{co_id}_{date}` 這種自製組合
-4. **防爬蟲驗證**：`fetch_announcement_detail()` 會比對抓回來的「公司代號」是否等於請求的 `COMPANY_ID`，不符就 `_jitter(5)` 後重試（預設 `retries=2`），重試完仍失敗才 raise，該筆直接跳過（不存、不當成「無財務表格」處理，因為連內容都拿不到，無法判斷是否相關）
-5. `_parse_disclosure()` 解析「說明」欄的自結合併財務資訊表格，只取**單月**資料（不再解析季/累計）：
+**爬蟲流程（無詳情頁請求，單一 POST 取得當天全部資料）：**
+1. POST `ajax_t05st02`（帶 ROC 年月日）取得當天公告清單的完整 HTML 回應
+2. **`_parse_announcement_rows()` 直接從這份清單 HTML 的隱藏 `<input>` 欄位解析出每一筆的完整主旨與說明全文**——MOPS 在清單頁裡，每筆公告會內嵌一組 `h{base+0}`...`h{base+8}`（`base = 該筆序號 × 10`）的隱藏欄位：`+0`公司名稱、`+1`公司代號、`+2`發言日期（YYYYMMDD西元）、`+3`發言時間（HHMMSS）、`+4`主旨、`+8`說明全文。**完全不需要對單筆公告額外發 GET 請求**，所以也沒有「詳情頁被雲端 IP 擋」這個問題（這是這個功能第三次重寫才找到的根本解法；前兩版分別試過 `t05sr01_1?TYPEK&i&co_id` 和 `ajax_t05sr01_1?SEQ_NO&...`，都需要逐筆詳情頁請求，已被棄用，詳見 git log）。比對依據：一個已驗證可長期穩定運作的參考實作（n8n 工作流程）採用同樣的隱藏欄位解析法
+3. **無主旨 pre-filter**，直接對每一筆的內容做篩選：說明含「每股盈餘」，或主旨/說明含「注意交易資訊」，符合任一才繼續處理，否則跳過不存。篩選條件刻意對齊參考實作
+4. `_parse_disclosure()` 解析說明全文裡的自結合併財務資訊表格，只取**單月**資料（不再解析季/累計）：
    - A）TWSE「sii」單一表格，EPS 列 5 個數字（月值/月年增%/季值/季年增%/累計值），只用前兩個；**去年同月EPS 沒有直接給，用 `monthly_eps / (1 + eps_yoy/100)` 反推**（`eps_yoy == -100` 時無法反推，留空）
    - B）TPEX「otc」三段式 `(1)單月 (2)單季 (3)最近四季累計`，只看 `(1)單月` 區段，EPS 列 3 個數字（本期/去年同期/年增%），**去年同月EPS 是表格直接給的，不用反推**
    - 兩種版面都會偵測「由虧轉盈/轉虧為盈」字樣 → `turnaround=1`
-6. `_price_at_or_before()` 查 `daily_prices` 取得「公告日期當天，若非交易日則往前找最近一個交易日」的收盤價 → `price_at_announce`
-7. `estimated_annual_eps = monthly_eps × 12`；`estimated_pe = round(price_at_announce / estimated_annual_eps, 1)`（任一缺值則留 None，`estimated_annual_eps <= 0` 也不計算）
-8. **內容相關但解析不出單月EPS的（例如注意交易公告沒有財務表格），也會 INSERT**，相關欄位留 NULL；用 `Announcement.__table__.insert().prefix_with('OR IGNORE')` 以 `(stock_code, seq_no)` 去重
-9. `_log('announcements', 'success', ...)` 訊息格式為 `"{saved} saved / {checked} detail-fetched / {total} total"`，方便從 log 一眼看出篩選後留存比例
+5. `_price_at_or_before()` 查 `daily_prices` 取得「公告日期當天，若非交易日則往前找最近一個交易日」的收盤價 → `price_at_announce`
+6. `estimated_annual_eps = monthly_eps × 12`；`estimated_pe = round(price_at_announce / estimated_annual_eps, 1)`（任一缺值則留 None，`estimated_annual_eps <= 0` 也不計算）
+7. **內容相關但解析不出單月EPS的（例如注意交易公告沒有財務表格），也會 INSERT**，相關欄位留 NULL；用 `Announcement.__table__.insert().prefix_with('OR IGNORE')` 以 `seq_no`（合成鍵 `{date8}_{time6}_{code}`，MOPS 清單頁本身不提供全域唯一序號）去重
+8. `_log('announcements', 'success', ...)` 訊息格式為 `"{saved} saved / {total} rows parsed"`
 
 **除錯注意**：在 Zeabur 終端機貼含中文字的程式碼/heredoc 時，**終端機本身會在中文字之間插入空格**，不只是顯示問題，連貼上去的程式碼內容都會被改掉（例如 `re.compile('主旨')` 會變成 `re.compile('主 旨 ')` 導致比對失效）。之後要請使用者在終端機跑診斷用的 Python 腳本時，**程式碼裡絕對不要放新的中文字面值**，只能重用 `crawler.py` 裡已經部署好的常數/regex（如 `crawler._EPS_LABEL_RE`），或單純印出結構（不靠中文比對）讓人眼判讀。
 

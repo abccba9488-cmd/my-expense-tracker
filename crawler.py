@@ -888,68 +888,44 @@ def _ann_headers():
     }
 
 
-def new_mops_session():
-    """Create + init a MOPS session (sets cookies) for repeated detail fetches."""
-    sess = requests.Session()
-    sess.verify = False
-    sess.get(f'{_ANN_BASE}/t05sr01_1', headers=_ann_headers(), timeout=20)
-    return sess
+_HIDDEN_FIELD_RE = re.compile(
+    r"<input[^>]*type=['\"]hidden['\"][^>]*name=['\"]h(\d+)['\"][^>]*value=['\"]([^'\"]*)['\"]",
+    re.IGNORECASE,
+)
 
 
-def fetch_announcement_detail(sess, seq_no, spoke_time, spoke_date, company_id, retries=2):
-    """GET a MOPS 重大訊息 detail page via the `ajax_t05sr01_1` endpoint and
-    return (subject, content, parsed). parsed is the dict from
-    _parse_disclosure() (empty if content unparseable).
+def _parse_announcement_rows(html):
+    """Extract every row's full 主旨/說明 directly from the list response's
+    hidden <input> fields — no separate detail-page fetch needed at all.
 
-    `t05sr01_1` (the plain page, keyed by TYPEK/i/co_id — `i` being a
-    session-relative list index, not a stable id) gets blocked from cloud
-    IPs: HTTP 200 but every field blank, identically regardless of which
-    co_id was requested. `ajax_t05sr01_1`, keyed by the real MOPS SEQ_NO
-    + SPOKE_TIME + SPOKE_DATE + COMPANY_ID, does not have this problem —
-    confirmed against a known-working reference (n8n workflow using this
-    exact endpoint to fetch every announcement of the day without issue).
+    The list page (ajax_t05st02) embeds one row's full data per group of
+    hidden inputs named h{base+0}..h{base+9} (base = row_index*10):
+    +0 company name, +1 company code, +2 announce date (YYYYMMDD, AD),
+    +3 announce time (HHMMSS), +4 subject, +6 clause no., +7 fact date,
+    +8 full description. Confirmed against a known-working n8n reference
+    that parses MOPS announcements the same way, and verified directly
+    against this project's own list response.
 
-    Still validates the returned 公司代號 matches company_id and retries
-    with backoff on mismatch, in case of an occasional bad response (the
-    reference workflow itself retries up to 5x). Raises
-    requests.exceptions.RequestException if every attempt comes back
-    empty/mismatched, or on connection failure.
+    Returns a list of dicts: code, name, date8, time6, subject, content.
     """
-    detail_url = (f'{_ANN_BASE}/ajax_t05sr01_1?firstin=true&stp=1&step=1'
-                   f'&SEQ_NO={seq_no}&SPOKE_TIME={spoke_time}&SPOKE_DATE={spoke_date}'
-                   f'&COMPANY_ID={company_id}')
-    for attempt in range(retries + 1):
-        resp = sess.get(detail_url, headers=_ann_headers(), timeout=30)
-        resp.encoding = 'utf-8'
-        dsoup = BeautifulSoup(resp.text, 'lxml')
+    fields = {}
+    for numstr, value in _HIDDEN_FIELD_RE.findall(html):
+        fields[int(numstr)] = value
 
-        def _get_field(label):
-            th = dsoup.find('th', string=re.compile(label))
-            if th:
-                td = th.find_next_sibling('td')
-                return td.get_text('\n', strip=True) if td else ''
-            return ''
-
-        got_code = _strip_cjk_spaces(_get_field('公司代號')).strip()
-        if got_code == str(company_id):
-            subject = _strip_cjk_spaces(_get_field('主旨'))
-            content = _get_field('說明')
-            if not content:
-                pre = dsoup.find('pre')
-                if pre:
-                    content = pre.get_text('\n', strip=True)
-            content = _strip_cjk_spaces(content)
-            parsed = _parse_disclosure(content) if content else {}
-            return subject, content, parsed
-
-        if attempt < retries:
-            logger.warning('Detail mismatch for company_id=%s (got %r) — retry %d/%d',
-                            company_id, got_code, attempt + 1, retries)
-            _jitter(2)
-
-    raise requests.exceptions.RequestException(
-        f'Detail page for company_id={company_id} returned empty/mismatched content after {retries + 1} attempts'
-    )
+    rows = []
+    for base in sorted(n for n in fields if n % 10 == 0):
+        code = (fields.get(base + 1) or '').strip()
+        if not code:
+            continue
+        rows.append({
+            'code':    code,
+            'name':    _strip_cjk_spaces(fields.get(base, '') or ''),
+            'date8':   fields.get(base + 2, '') or '',
+            'time6':   (fields.get(base + 3, '') or '').zfill(6),
+            'subject': _strip_cjk_spaces(fields.get(base + 4, '') or ''),
+            'content': _strip_cjk_spaces(fields.get(base + 8, '') or ''),
+        })
+    return rows
 
 
 def _price_at_or_before(db, stock_code, ann_date):
@@ -963,9 +939,15 @@ def _price_at_or_before(db, stock_code, ann_date):
 
 def crawl_announcements(date_str=None, limit=None):
     """Crawl MOPS重大訊息 for self-disclosure (自結) EPS announcements.
-    Pure crawl + deterministic parsing — no AI involved. `limit` caps how
-    many of the day's links get a detail fetch (testing only — a full day
-    is 800+ links and can take over an hour; leave None in production)."""
+    Pure crawl + deterministic parsing — no AI involved.
+
+    The full 主旨/說明 for every announcement of the day comes straight out
+    of the single list-page response's hidden form fields (see
+    _parse_announcement_rows) — no per-item detail-page fetch at all, so
+    none of the old anti-bot/endpoint problems apply. `limit` caps how
+    many parsed rows get processed (testing only; leave None in
+    production).
+    """
     if date_str is None:
         d = datetime.now(_TZ).date() - timedelta(days=1)
         while d.weekday() >= 5:
@@ -983,123 +965,60 @@ def crawl_announcements(date_str=None, limit=None):
     ann_sess = requests.Session()
     ann_sess.verify = False
 
-    def _ann_post(data, timeout=30):
-        return ann_sess.post(
-            f'{_ANN_BASE}/ajax_t05st02',
-            data=data,
-            headers={**_ann_headers(), 'Content-Type': 'application/x-www-form-urlencoded',
-                     'Origin': 'https://mopsov.twse.com.tw'},
-            timeout=timeout,
-        )
-
     try:
         ann_sess.get(f'{_ANN_BASE}/t05sr01_1', headers=_ann_headers(), timeout=20)
         _jitter(1)
 
-        list_resp = _ann_post({
-            'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
-            'TYPEK': 'all',
-            'year': roc_year, 'month': month_str, 'day': day_str,
-        })
-        list_resp.encoding = 'utf-8'
-        soup = BeautifulSoup(list_resp.text, 'lxml')
-
-        # Real MOPS SEQ_NO (+ SPOKE_TIME/SPOKE_DATE/COMPANY_ID) — a stable,
-        # globally-unique identifier, unlike the old TYPEK/i/co_id approach
-        # where `i` was just a position in this particular list response
-        # and the corresponding detail page (t05sr01_1) gets blocked from
-        # cloud IPs anyway. This pattern + the ajax_t05sr01_1 endpoint are
-        # lifted from a known-working reference (n8n workflow).
-        onclick_re = re.compile(
-            r"SEQ_NO\.value='(\d+)'.*?SPOKE_TIME\.value='(\d+)'.*?SPOKE_DATE\.value='(\d+)'.*?COMPANY_ID\.value='([^']+)'",
-            re.DOTALL,
+        list_resp = ann_sess.post(
+            f'{_ANN_BASE}/ajax_t05st02',
+            data={'firstin': 'true', 'off': '1', 'step': '1', 'step00': '0',
+                  'TYPEK': 'all', 'year': roc_year, 'month': month_str, 'day': day_str},
+            headers={**_ann_headers(), 'Content-Type': 'application/x-www-form-urlencoded',
+                     'Origin': 'https://mopsov.twse.com.tw'},
+            timeout=30,
         )
-        links = []
-        for tag in soup.find_all(onclick=True):
-            m = onclick_re.search(tag['onclick'])
-            if m:
-                seq_no, spoke_time, spoke_date, company_id = m.groups()
-                row = tag.find_parent('tr')
-                list_code, list_name, list_subject, list_time = '', '', '', ''
-                if row:
-                    tds = [_strip_cjk_spaces(td.get_text(strip=True))
-                           for td in row.find_all('td')]
-                    if len(tds) >= 5:
-                        list_time    = tds[1]
-                        list_code    = tds[2]
-                        list_name    = tds[3]
-                        list_subject = tds[4]
-                    elif len(tds) >= 3:
-                        list_code    = tds[0]
-                        list_name    = tds[1]
-                        list_subject = tds[2]
-                links.append({
-                    'seq_no':      seq_no,
-                    'spoke_time':  spoke_time,
-                    'spoke_date':  spoke_date,
-                    'company_id':  company_id,
-                    'list_code':   list_code,
-                    'list_name':   list_name,
-                    'list_subject': list_subject,
-                    'list_time':   list_time,
-                })
-        if links:
-            logger.info('LIST sample [0]: code=%s name=%s subj=%s',
-                        links[0]['list_code'], links[0]['list_name'], links[0]['list_subject'][:80])
+        list_resp.encoding = 'utf-8'
 
-        if not links:
+        rows = _parse_announcement_rows(list_resp.text)
+        if rows:
+            logger.info('Row sample [0]: code=%s name=%s subj=%s',
+                        rows[0]['code'], rows[0]['name'], rows[0]['subject'][:80])
+
+        if not rows:
             _log('announcements', 'success', f'{date_str}: no announcements found')
             return 0
 
-        logger.info('Found %d announcement links for %s', len(links), date_str)
+        logger.info('Found %d announcement rows for %s', len(rows), date_str)
         if limit is not None:
-            links = links[:limit]
-            logger.info('limit=%d — only fetching the first %d links', limit, len(links))
+            rows = rows[:limit]
+            logger.info('limit=%d — only processing the first %d rows', limit, len(rows))
+
         db = SessionLocal()
-        saved = checked = 0
+        saved = 0
 
-        # No subject pre-filter — fetch every announcement's detail and
-        # filter on the actual content afterwards, matching the reference
-        # n8n workflow exactly: keep it if 說明 mentions 每股盈餘, or
-        # 主旨/說明 mentions 注意交易資訊. This trades request volume
-        # (every item gets a detail fetch) for not missing genuine
-        # self-disclosure announcements whose subject text doesn't happen
-        # to contain any of our old prefilter keywords.
+        # No detail fetch needed — filter directly on the row's own
+        # content, matching the reference n8n workflow's criteria exactly:
+        # keep it if 說明 mentions 每股盈餘, or 主旨/說明 mentions 注意交易資訊.
         try:
-            for item in links:
-                code = item.get('list_code', '')
-                announce_time = item.get('list_time', '')
+            for row in rows:
+                code = row['code']
+                subject = row['subject']
+                content = row['content']
 
-                if not code:
-                    logger.warning('No stock code for seq %s', item['seq_no'])
+                is_relevant = ('每股盈餘' in content
+                               or '注意交易資訊' in subject
+                               or '注意交易資訊' in content)
+                if not is_relevant:
                     continue
 
-                # ajax_t05sr01_1 isn't the throttled endpoint t05sr01_1 was —
-                # the reference n8n workflow fetches all 800+/day through it
-                # in ~5 minutes total with no deliberate per-item delay. Keep
-                # a small jitter for politeness, not as an anti-block measure.
-                _jitter(0.3)
+                time6 = row['time6']
+                announce_time = (f'{time6[0:2]}:{time6[2:4]}:{time6[4:6]}'
+                                  if len(time6) == 6 else '')
+                seq_no = f'{row["date8"] or date_str}_{time6}_{code}'
+
                 try:
-                    subject = item.get('list_subject', '')
-
-                    try:
-                        detail_subject, content, parsed = fetch_announcement_detail(
-                            ann_sess, item['seq_no'], item['spoke_time'],
-                            item['spoke_date'], item['company_id'])
-                        subject = detail_subject or subject
-                    except requests.exceptions.RequestException as e:
-                        logger.warning('Detail fetch failed for %s seq %s: %s — skipped',
-                                        code, item['seq_no'], e)
-                        continue
-
-                    checked += 1
-                    is_relevant = ('每股盈餘' in content
-                                   or '注意交易資訊' in subject
-                                   or '注意交易資訊' in content)
-                    if not is_relevant:
-                        continue
-
-                    logger.info('Detail parsed %s seq %s: %s', code, item['seq_no'], parsed)
+                    parsed = _parse_disclosure(content) if content else {}
+                    logger.info('Row parsed %s %s: %s', code, seq_no, parsed)
 
                     monthly_eps    = parsed.get('monthly_eps')
                     prior_year_eps = parsed.get('prior_year_eps')
@@ -1117,9 +1036,9 @@ def crawl_announcements(date_str=None, limit=None):
                         Announcement.__table__.insert().prefix_with('OR IGNORE'),
                         [{
                             'stock_code':           code,
-                            'seq_no':               item['seq_no'],
+                            'seq_no':               seq_no,
                             'announce_date':        dt,
-                            'announce_time':        announce_time[:10],
+                            'announce_time':        announce_time,
                             'subject':              subject[:500],
                             'content':              content[:5000],
                             'price_at_announce':    price_at_announce,
@@ -1139,13 +1058,13 @@ def crawl_announcements(date_str=None, limit=None):
 
                 except Exception as e:
                     db.rollback()
-                    logger.warning('Processing failed seq %s: %s', item['seq_no'], e)
+                    logger.warning('Processing failed for %s seq %s: %s', code, seq_no, e)
 
         finally:
             db.close()
 
         _log('announcements', 'success',
-             f'{date_str}: {saved} saved / {checked} detail-fetched / {len(links)} total')
+             f'{date_str}: {saved} saved / {len(rows)} rows parsed')
         return saved
 
     except Exception as e:
