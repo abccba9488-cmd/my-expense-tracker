@@ -961,9 +961,11 @@ def _price_at_or_before(db, stock_code, ann_date):
     return row[0] if row else None
 
 
-def crawl_announcements(date_str=None):
+def crawl_announcements(date_str=None, limit=None):
     """Crawl MOPS重大訊息 for self-disclosure (自結) EPS announcements.
-    Pure crawl + deterministic parsing — no AI involved."""
+    Pure crawl + deterministic parsing — no AI involved. `limit` caps how
+    many of the day's links get a detail fetch (testing only — a full day
+    is 800+ links and can take over an hour; leave None in production)."""
     if date_str is None:
         d = datetime.now(_TZ).date() - timedelta(days=1)
         while d.weekday() >= 5:
@@ -1050,6 +1052,9 @@ def crawl_announcements(date_str=None):
             return 0
 
         logger.info('Found %d announcement links for %s', len(links), date_str)
+        if limit is not None:
+            links = links[:limit]
+            logger.info('limit=%d — only fetching the first %d links', limit, len(links))
         db = SessionLocal()
         saved = checked = 0
 

@@ -577,7 +577,8 @@ def api_run_crawler(task):
 
     elif task == 'announcements':
         ann_date = request.args.get('date')  # optional YYYYMMDD override
-        _run_bg(crawler.crawl_announcements, ann_date)
+        ann_limit = request.args.get('limit', type=int)  # optional, testing only
+        _run_bg(crawler.crawl_announcements, ann_date, ann_limit)
 
     elif task == 'init':
         _run_bg(_initial_crawl)
