@@ -966,7 +966,7 @@ def crawl_announcements(date_str=None):
             re.DOTALL,
         )
         _EPS_KEYWORDS = ('每股盈餘', '每股稅後盈餘', '每股稅前盈餘',
-                         '自結損益', '稅後純益', '稅後盈餘', 'EPS', '自結每股',
+                         '自結', '稅後純益', '稅後盈餘', 'EPS',
                          '注意交易', '達公佈注意', '注意股')
 
         links = []
