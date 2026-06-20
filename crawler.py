@@ -804,9 +804,14 @@ def _strip_cjk_spaces(s):
 
 
 def _extract_numbers(line):
-    """Pull numeric tokens from a table row, stripping thousand-separators
-    and trailing '(由虧轉盈)'-style annotations first."""
-    cleaned = re.sub(r'\([由轉虧盈為]+\)', '', line)
+    """Pull numeric tokens from a table row. Strip purely-textual
+    parenthetical annotations first (units like '(元)', turnaround notes
+    like '(由虧轉盈)' — anything with no digits inside), then convert
+    MOPS' accounting-style negative parens around a plain number — e.g.
+    '(25.23)' meaning -25.23 — into an explicit minus sign before
+    extracting (otherwise a loss/decline row reads as a positive)."""
+    cleaned = re.sub(r'\([^0-9\-]*\)', '', line)
+    cleaned = re.sub(r'\(\s*(\d[\d,]*\.?\d*)\s*\)', r'-\1', cleaned)
     return [float(n.replace(',', '')) for n in re.findall(r'-?\d[\d,]*\.?\d*', cleaned)]
 
 
@@ -816,9 +821,11 @@ def _parse_disclosure(body):
       A) TWSE 'sii' — single table, EPS row has 5 numbers (月值, 月年增%,
          季值, 季年增%, 累計值). Only the first two matter; the prior-year
          value isn't given directly so it's reverse-derived from the YoY%.
-      B) TPEX 'otc' — sections (1)單月 (2)單季 (3)最近四季累計, each with
-         3 numbers (本期值, 去年同期值, 年增%). Only (1)單月 matters — it
-         gives the prior-year value directly, no need to derive it.
+      B) TPEX 'otc' — sections 單月/單季/最近四季累計 (numbered either
+         (1)(2)(3) or (一)(二)(三) depending on the company), each with
+         3 numbers (本期值, 去年同期值, 年增%). Only the 單月 section
+         matters — it gives the prior-year value directly, no need to
+         derive it.
     Returns a dict with whatever fields were found (missing keys omitted)."""
     result = {}
     if _TURNAROUND_RE.search(body):
@@ -841,15 +848,17 @@ def _parse_disclosure(body):
                     result['prior_year_eps'] = round(monthly_eps / denom, 4)
                 return result
 
-    # Format B — only the 單月 section is needed
-    section_re = re.compile(r'\(1\)\s*單月|\(2\)\s*單季|\(3\)\s*(最近)?四季累計')
+    # Format B/C — sections may be numbered with Arabic (1)(2)(3) or
+    # Chinese (一)(二)(三) numerals depending on the company; only the
+    # 單月 section is needed.
+    section_re = re.compile(r'[（(][一二三123][）)]\s*(單月|單季|(?:最近)?四季累計)')
     monthly_lines, in_monthly = [], False
     for line in lines:
         m = section_re.search(line)
         if m:
             if in_monthly:
                 break
-            in_monthly = '單月' in m.group(0)
+            in_monthly = (m.group(1) == '單月')
             continue
         if in_monthly:
             monthly_lines.append(line)
@@ -1026,15 +1035,26 @@ def crawl_announcements(date_str=None, limit=None):
         saved = 0
 
         # No detail fetch needed — filter directly on the row's own
-        # content, matching the reference n8n workflow's criteria exactly:
-        # keep it if 說明 mentions 每股盈餘, or 主旨/說明 mentions 注意交易資訊.
+        # content. Originally this matched the reference n8n workflow's
+        # criterion exactly (説明 contains 每股盈餘), but that's a naive
+        # substring check: many unrelated announcement types (e.g. 限制
+        # 員工權利新股/庫藏股/可轉債) are legally required to include an
+        # "對公司每股盈餘稀釋情形" dilution disclosure, which contains the
+        # same 4 characters without being a genuine 自結 financial table.
+        # Parse first and require an actual extracted monthly_eps instead
+        # — that only succeeds against the real tabular formats handled
+        # by _parse_disclosure(), not prose mentioning EPS in passing.
+        # 注意交易資訊 announcements are still kept even without EPS (per
+        # their own keyword check) since they're a separate, deliberately
+        # kept category that often lacks a financial table altogether.
         try:
             for row in rows:
                 code = row['code']
                 subject = row['subject']
                 content = row['content']
 
-                is_relevant = ('每股盈餘' in content
+                parsed = _parse_disclosure(content) if content else {}
+                is_relevant = ('monthly_eps' in parsed
                                or '注意交易資訊' in subject
                                or '注意交易資訊' in content)
                 if not is_relevant:
@@ -1046,7 +1066,6 @@ def crawl_announcements(date_str=None, limit=None):
                 seq_no = f'{row["date8"] or date_str}_{time6}_{code}'
 
                 try:
-                    parsed = _parse_disclosure(content) if content else {}
                     logger.info('Row parsed %s %s: %s', code, seq_no, parsed)
 
                     monthly_eps    = parsed.get('monthly_eps')
