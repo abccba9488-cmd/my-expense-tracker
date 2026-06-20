@@ -1053,12 +1053,13 @@ def crawl_announcements(date_str=None, limit=None):
         # 員工權利新股/庫藏股/可轉債) are legally required to include an
         # "對公司每股盈餘稀釋情形" dilution disclosure, which contains the
         # same 4 characters without being a genuine 自結 financial table.
-        # Parse first and require an actual extracted monthly_eps instead
-        # — that only succeeds against the real tabular formats handled
-        # by _parse_disclosure(), not prose mentioning EPS in passing.
-        # 注意交易資訊 announcements are still kept even without EPS (per
-        # their own keyword check) since they're a separate, deliberately
-        # kept category that often lacks a financial table altogether.
+        # An earlier version also kept any 注意交易資訊-flagged announcement
+        # even without EPS, but that let irrelevant noise through too (e.g.
+        # a convertible-bond price-trigger notice that happens to use the
+        # same phrase but has nothing to do with the company's own EPS).
+        # Now the sole inclusion criterion is an actual extracted
+        # monthly_eps — that only succeeds against the real tabular
+        # self-disclosure formats handled by _parse_disclosure().
         try:
             for row in rows:
                 code = row['code']
@@ -1066,10 +1067,7 @@ def crawl_announcements(date_str=None, limit=None):
                 content = row['content']
 
                 parsed = _parse_disclosure(content) if content else {}
-                is_relevant = ('monthly_eps' in parsed
-                               or '注意交易資訊' in subject
-                               or '注意交易資訊' in content)
-                if not is_relevant:
+                if 'monthly_eps' not in parsed:
                     continue
 
                 time6 = row['time6']
