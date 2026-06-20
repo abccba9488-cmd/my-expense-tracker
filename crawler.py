@@ -821,11 +821,14 @@ def _parse_disclosure(body):
       A) TWSE 'sii' — single table, EPS row has 5 numbers (月值, 月年增%,
          季值, 季年增%, 累計值). Only the first two matter; the prior-year
          value isn't given directly so it's reverse-derived from the YoY%.
-      B) TPEX 'otc' — sections 單月/單季/最近四季累計 (numbered either
-         (1)(2)(3) or (一)(二)(三) depending on the company), each with
-         3 numbers (本期值, 去年同期值, 年增%). Only the 單月 section
+      B) TPEX 'otc' — sections 單月/單季/(最近四季)累計, each with 2-3
+         numbers (本期值, 去年同期值, [年增%]). Only the 單月 section
          matters — it gives the prior-year value directly, no need to
-         derive it.
+         derive it. Every company seems to write its own numbering
+         convention around these section headers — (1)/(2)/(3),
+         (一)/(二)/(三), A./B., or no prefix at all (just "單月(註1)") —
+         so section boundaries are detected on the bare keywords "單月"/
+         "單季" themselves rather than any particular numbering style.
     Returns a dict with whatever fields were found (missing keys omitted)."""
     result = {}
     if _TURNAROUND_RE.search(body):
@@ -833,12 +836,15 @@ def _parse_disclosure(body):
 
     lines = [l for l in body.splitlines() if l.strip()]
 
-    # Format A
-    for i, line in enumerate(lines):
+    # Format A — all 5 numbers must be on the EPS row's own line. (A
+    # look-ahead-to-next-line fallback used to live here for rows that
+    # might wrap, but it could accidentally pull in unrelated numbers
+    # from the next section's header line — e.g. "115年第1季" contributes
+    # stray digits — turning a Format B/C row into a false Format A
+    # match. No confirmed real case needs the fallback, so it's gone.)
+    for line in lines:
         if _EPS_LABEL_RE.search(line):
             nums = _extract_numbers(line)
-            if len(nums) < 5 and i + 1 < len(lines):
-                nums += _extract_numbers(lines[i + 1])
             if len(nums) >= 5:
                 monthly_eps, yoy = nums[0], nums[1]
                 result['monthly_eps'] = monthly_eps
@@ -848,27 +854,33 @@ def _parse_disclosure(body):
                     result['prior_year_eps'] = round(monthly_eps / denom, 4)
                 return result
 
-    # Format B/C — sections may be numbered with Arabic (1)(2)(3) or
-    # Chinese (一)(二)(三) numerals depending on the company; only the
-    # 單月 section is needed.
-    section_re = re.compile(r'[（(][一二三123][）)]\s*(單月|單季|(?:最近)?四季累計)')
-    monthly_lines, in_monthly = [], False
+    # Format B — keyword-based section detection (see docstring for why
+    # numbering-style matching was abandoned). Only look for the "單月"
+    # trigger ONCE, before entering the section — a company's column
+    # sub-header right under "單月" often repeats the word (e.g. "最近
+    # 一月單月"), which would otherwise be mistaken for hitting a second
+    # section and end capture immediately. Once inside, only "單季"
+    # (the next section) is treated as the end boundary.
+    monthly_lines, started = [], False
     for line in lines:
-        m = section_re.search(line)
-        if m:
-            if in_monthly:
-                break
-            in_monthly = (m.group(1) == '單月')
+        if not started:
+            if '單月' in line:
+                started = True
             continue
-        if in_monthly:
-            monthly_lines.append(line)
+        if '單季' in line or '四季累計' in line:
+            break
+        monthly_lines.append(line)
     for line in monthly_lines:
         if _EPS_LABEL_RE.search(line):
             nums = _extract_numbers(line)
-            if len(nums) >= 3:
+            # Usually 3 numbers (本期/去年同期/年增%), but the YoY column
+            # is sometimes qualitative text instead of a number (e.g.
+            # "虧轉盈", "持續虧損") — still take the two real values then.
+            if len(nums) >= 2:
                 result['monthly_eps']    = nums[0]
                 result['prior_year_eps'] = nums[1]
-                result['eps_yoy']        = nums[2]
+                if len(nums) >= 3:
+                    result['eps_yoy'] = nums[2]
             break
 
     return result
