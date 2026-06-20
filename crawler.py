@@ -937,6 +937,35 @@ def _price_at_or_before(db, stock_code, ann_date):
     return row[0] if row else None
 
 
+def _backfill_announcement_prices(db):
+    """Re-attempt price_at_announce for rows saved before daily_prices had
+    a close price for that date yet. INSERT OR IGNORE means a re-crawl of
+    the same announcement never updates an already-saved row, so without
+    this, a row that missed its price once stays NULL forever even after
+    the price data catches up. Recomputes estimated_pe alongside when
+    possible. Safe to call every run — only touches rows still missing
+    price_at_announce."""
+    rows = db.execute(text(
+        "SELECT id, stock_code, announce_date, estimated_annual_eps"
+        " FROM announcements WHERE price_at_announce IS NULL"
+    )).fetchall()
+    updated = 0
+    for ann_id, code, announce_date, estimated_annual_eps in rows:
+        price = _price_at_or_before(db, code, announce_date)
+        if price is None:
+            continue
+        estimated_pe = (round(price / estimated_annual_eps, 1)
+                         if estimated_annual_eps else None)
+        db.execute(text(
+            "UPDATE announcements SET price_at_announce=:p, estimated_pe=:pe WHERE id=:id"
+        ), {'p': price, 'pe': estimated_pe, 'id': ann_id})
+        updated += 1
+    if updated:
+        db.commit()
+        logger.info('Backfilled price_at_announce for %d announcements', updated)
+    return updated
+
+
 def crawl_announcements(date_str=None, limit=None):
     """Crawl MOPS重大訊息 for self-disclosure (自結) EPS announcements.
     Pure crawl + deterministic parsing — no AI involved.
@@ -1060,11 +1089,13 @@ def crawl_announcements(date_str=None, limit=None):
                     db.rollback()
                     logger.warning('Processing failed for %s seq %s: %s', code, seq_no, e)
 
+            backfilled = _backfill_announcement_prices(db)
+
         finally:
             db.close()
 
         _log('announcements', 'success',
-             f'{date_str}: {saved} saved / {len(rows)} rows parsed')
+             f'{date_str}: {saved} saved / {backfilled} backfilled / {len(rows)} rows parsed')
         return saved
 
     except Exception as e:
