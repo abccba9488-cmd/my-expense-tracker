@@ -119,11 +119,11 @@ def start():
     _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=5, minute=0))
 
     # TEMPORARY (testing): re-crawl TODAY's announcements every 30 min so
-    # same-day filings show up quickly. Remove when testing is done.
-    # PAUSED at user's request (holiday, no new MOPS filings expected) —
-    # ask before re-enabling.
-    # _scheduler.add_job(_announcements_test_job, 'interval', minutes=30,
-    #                    next_run_time=datetime.now(_TZ))
+    # same-day filings show up quickly. Remove when testing is done — ask
+    # before removing (re-enabled 2026-06-20 after the no-detail-fetch
+    # rewrite made each run ~2-3s instead of 1h+).
+    _scheduler.add_job(_announcements_test_job, 'interval', minutes=30,
+                       next_run_time=datetime.now(_TZ))
 
     # Quarterly financial reports — every day of the disclosure month at 23:00
     # Q1 (Jan–Mar): all of May (deadline May 15)
