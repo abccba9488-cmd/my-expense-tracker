@@ -1035,20 +1035,21 @@ function renderAnnRow(a, i) {
     <td class="num">${a.estimated_pe != null && a.estimated_pe > 0 ? Number(a.estimated_pe).toFixed(1) : '—'}</td>
     <td class="td-center"><span class="ann-rating-link" data-idx="${i}">${_annRatingDot(a.ai_rating)}</span></td>
     <td class="td-center"><a class="btn btn-sm ann-ai-link" href="https://gemini.google.com" target="_blank" rel="noopener" data-idx="${i}">🤖 AI分析</a></td>
+    <td class="td-center"><button class="btn btn-sm ann-wl-add-btn" data-idx="${i}">⭐ 加入自選</button></td>
   </tr>`;
 }
 
 async function loadAnnouncements() {
   const tbody = document.getElementById('ann-tbody');
   if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">載入中…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="14" class="ann-empty">載入中…</td></tr>';
   try {
     _annData = await fetch('/api/announcements/today').then(r => r.json());
     const countEl = document.getElementById('ann-count');
     if (countEl) countEl.textContent = `共 ${_annData.length} 筆`;
     tbody.innerHTML = _annData.length
       ? _annData.map(renderAnnRow).join('')
-      : '<tr><td colspan="13" class="ann-empty">近期無公告</td></tr>';
+      : '<tr><td colspan="14" class="ann-empty">近期無公告</td></tr>';
     tbody.querySelectorAll('[data-code]').forEach(el => {
       el.addEventListener('click', () => loadStockDetail(el.dataset.code));
     });
@@ -1058,9 +1059,23 @@ async function loadAnnouncements() {
     tbody.querySelectorAll('.ann-ai-link').forEach(el => {
       el.addEventListener('click', () => copyAnnForAI(+el.dataset.idx));
     });
+    tbody.querySelectorAll('.ann-wl-add-btn').forEach(el => {
+      el.addEventListener('click', () => addAnnToWatchlist(+el.dataset.idx));
+    });
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">載入失敗</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="14" class="ann-empty">載入失敗</td></tr>';
   }
+}
+
+function addAnnToWatchlist(i) {
+  const a = _annData[i];
+  if (!a) return;
+  if (!state.user) { showToast('請先登入才能使用自選股'); return; }
+  const wl = wlActive();
+  if (!wl) { showToast('請先建立一個自選股清單'); return; }
+  if (wl.codes.includes(a.stock_code)) { showToast(`${a.stock_code} 已在自選股中`); return; }
+  wlAddStock(a.stock_code);
+  showToast(`已加入 ${a.stock_code} ${a.name || ''}`);
 }
 
 function openAnnModal(i) {

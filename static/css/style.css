@@ -323,6 +323,7 @@ table.dataTable tbody td {
 .ann-subject-link:hover { color: var(--primary); text-decoration: underline; }
 .ann-rating-link { cursor: pointer; display: inline-block; }
 .ann-ai-link { background: #1a73e8; color: #fff; white-space: nowrap; }
+.ann-wl-add-btn { white-space: nowrap; }
 .ann-dot { font-size: 16px; }
 .ann-dot-empty { color: var(--text2); font-size: 13px; }
 
