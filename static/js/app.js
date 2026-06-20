@@ -1074,7 +1074,32 @@ function closeAnnModal() {
 function copyAnnForAI(i) {
   const a = _annData[i];
   if (!a) return;
-  const prompt = `這則公告所代表的含義是什麼\n${a.content || a.subject || ''}`;
+  const stock = state.allData.find(s => s.code === a.stock_code);
+  const priceLine = (stock && stock.close != null)
+    ? `目前股價（資料庫最新收盤價，${stock.price_date || '—'}）：${stock.close} 元`
+    : '目前股價：資料庫無此股票最新價格資料';
+  const prompt = `你是一位擁有20年經驗，精通估值法的基金經理人。你的看法專業、深入、有獨特見解，你的專長是從海量且碎片化的資訊中，拼湊出供應鏈的真實、正確且有邏輯的樣貌。如果我給你股票代碼跟名稱以及重大公告資訊。重大公告資訊所代表的含義，並幫我分析這檔股票是否適合投資？今年目標價。
+請執行以下自動化步驟:
+步驟一:錨點搜尋(Auto-Anchor) 請聯網搜尋並列出同業競爭者目前的『預估本益比』。
+步驟二:獲利探勘(EPS Mining) 請搜尋各大外資(如 Morgan Stanley) 對這檔股票今年全年的EPS預估值。
+步驟三:定價計算 (The Pricing) 請設定20%的折價(Discount)作為安全邊際, 並依據公式算出:
+便宜價(Burry 防線)
+合理價(法人共識)
+昂貴價(瘋狂價)
+輸出要求:
+請給我一個清晰的表格,標註目前的股價位於哪個區間
+同時分析這檔股票近3個月的法人籌碼流向（外資與主力是否在暗中佈局），以及最近1個月是否有重大新聞影響其股價
+由於我的投資是以中長期為主，請幫我用週線搭配日線的方式分析
+分析他近期的營收是一次性獲利還是漲價或是缺貨或是其他原因
+訂單量是否有實際增長
+分析這檔股票有沒有與他相同產業或是與他相關的產業還沒上漲或是還有機會補漲的股票
+
+股票代碼：${a.stock_code}
+股票名稱：${a.name || ''}
+${priceLine}
+
+重大公告資訊：
+${a.content || a.subject || ''}`;
   navigator.clipboard.writeText(prompt)
     .then(() => showToast('已複製提示詞，貼到 Gemini 即可分析'))
     .catch(() => showToast('複製失敗，請手動複製'));
