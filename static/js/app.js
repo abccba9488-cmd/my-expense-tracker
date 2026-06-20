@@ -1011,6 +1011,15 @@ function _annTruncate(s, n) {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
+function _annRatingDot(rating) {
+  if (!rating) return '<span class="ann-dot-empty">—</span>';
+  const cls = rating.includes('強烈') ? 'red' : rating.includes('建議') ? 'orange'
+            : rating.includes('一般') ? 'yellow' : 'green';
+  const emoji = rating.includes('強烈') ? '🔴' : rating.includes('建議') ? '🟠'
+              : rating.includes('一般') ? '🟡' : '🟢';
+  return `<span class="ann-dot ann-dot-${cls}" title="${rating}">${emoji}</span>`;
+}
+
 function renderAnnRow(a, i) {
   return `<tr>
     <td>${a.announce_date}${a.announce_time ? ' ' + a.announce_time.slice(0, 5) : ''}</td>
@@ -1024,6 +1033,7 @@ function renderAnnRow(a, i) {
     <td class="td-center">${a.turnaround ? '🔥' : '—'}</td>
     <td class="num">${fmt.eps(a.estimated_annual_eps)}</td>
     <td class="num">${a.estimated_pe != null && a.estimated_pe > 0 ? Number(a.estimated_pe).toFixed(1) : '—'}</td>
+    <td class="td-center"><span class="ann-rating-link" data-idx="${i}">${_annRatingDot(a.ai_rating)}</span></td>
     <td class="td-center"><a class="btn btn-sm ann-ai-link" href="https://gemini.google.com" target="_blank" rel="noopener" data-idx="${i}">🤖 AI分析</a></td>
   </tr>`;
 }
@@ -1031,25 +1041,25 @@ function renderAnnRow(a, i) {
 async function loadAnnouncements() {
   const tbody = document.getElementById('ann-tbody');
   if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">載入中…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">載入中…</td></tr>';
   try {
     _annData = await fetch('/api/announcements/today').then(r => r.json());
     const countEl = document.getElementById('ann-count');
     if (countEl) countEl.textContent = `共 ${_annData.length} 筆`;
     tbody.innerHTML = _annData.length
       ? _annData.map(renderAnnRow).join('')
-      : '<tr><td colspan="12" class="ann-empty">近期無公告</td></tr>';
+      : '<tr><td colspan="13" class="ann-empty">近期無公告</td></tr>';
     tbody.querySelectorAll('[data-code]').forEach(el => {
       el.addEventListener('click', () => loadStockDetail(el.dataset.code));
     });
-    tbody.querySelectorAll('.ann-subject-link').forEach(el => {
+    tbody.querySelectorAll('.ann-subject-link, .ann-rating-link').forEach(el => {
       el.addEventListener('click', () => openAnnModal(+el.dataset.idx));
     });
     tbody.querySelectorAll('.ann-ai-link').forEach(el => {
       el.addEventListener('click', () => copyAnnForAI(+el.dataset.idx));
     });
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">載入失敗</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">載入失敗</td></tr>';
   }
 }
 
@@ -1060,6 +1070,8 @@ function openAnnModal(i) {
   document.getElementById('ann-modal-body').innerHTML = `
     <div class="ann-modal-subject">${a.subject || ''}</div>
     <div class="ann-modal-date">${a.announce_date}</div>
+    ${a.ai_rating ? `<div class="ann-modal-rating">${_annRatingDot(a.ai_rating)} ${a.ai_rating}</div>` : ''}
+    ${a.ai_analysis ? `<div class="ann-modal-analysis">${a.ai_analysis}</div>` : ''}
     ${a.content
       ? `<hr class="ann-modal-divider"><pre class="ann-modal-content">${a.content}</pre>`
       : '<div class="ann-empty">（無詳細內容）</div>'}

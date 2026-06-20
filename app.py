@@ -507,6 +507,8 @@ def api_announcements_today():
             'turnaround':           bool(a.turnaround),
             'estimated_annual_eps': a.estimated_annual_eps,
             'estimated_pe':         a.estimated_pe,
+            'ai_rating':            a.ai_rating or '',
+            'ai_analysis':          a.ai_analysis or '',
         } for a, name in rows])
     finally:
         db.close()

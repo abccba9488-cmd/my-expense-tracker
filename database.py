@@ -161,6 +161,8 @@ class Announcement(Base):
     turnaround           = Column(Integer) # 1 = 公告內容含「由虧轉盈/轉虧為盈」
     estimated_annual_eps = Column(Float)   # monthly_eps × 12
     estimated_pe         = Column(Float)   # price_at_announce / estimated_annual_eps，取小數點後1位
+    ai_rating     = Column(String(30))   # 🔴🟠🟡🟢 + label
+    ai_analysis   = Column(Text)
     created_at    = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
@@ -260,6 +262,17 @@ def init_db():
     with engine.connect() as conn:
         for col, coltype in (('price_at_announce', 'REAL'), ('prior_year_eps', 'REAL'),
                               ('estimated_annual_eps', 'REAL')):
+            try:
+                conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col} {coltype}'))
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
+    # Migration: add back ai_rating / ai_analysis (AI re-introduced,
+    # this time enriching deterministically-parsed rows instead of
+    # inventing the numbers itself)
+    with engine.connect() as conn:
+        for col, coltype in (('ai_rating', 'VARCHAR(30)'), ('ai_analysis', 'TEXT')):
             try:
                 conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col} {coltype}'))
                 conn.commit()

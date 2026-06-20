@@ -987,9 +987,107 @@ def _backfill_announcement_prices(db):
     return updated
 
 
+_AI_SYSTEM_PROMPT = """你是一位專業的台灣股票分析師，請根據提供的資料與你取得的最新網路資訊，進行簡潔明確的投資評分與風險提示。
+
+【即時搜尋要求】
+1. 你必須搜尋並引用該公司與其所屬產業的最新新聞與產業動態，不得只依賴使用者提供的公告內容。
+2. 若找不到相關新聞，必須在分析中明確說明「未能取得最新新聞，以下評估僅根據現有財務與公告資料」。
+3. 當預估本益比 > 20 時，必須特別搜尋產業與個股熱度，由你自行判斷是否屬於當前市場熱門題材。
+
+【已知數據 — 直接採用，不要自己重新計算】
+使用者輸入中的「系統已計算數據」區塊（單月EPS、去年同月EPS、EPS年增率、是否由虧轉盈、預估全年EPS、預估本益比）皆為系統已從公告原文解析計算完成，請直接採用這些數值進行評級判斷，不要自行重算或質疑其正確性。
+
+【評級標準 — 依優先順序綜合判斷，請嚴格執行】
+🔴 強烈買進（路徑A或路徑B任一即可）：
+  路徑A：預估本益比 ≤ 20 + EPS年增 > 0%（含由虧轉盈）+ 營收不衰退
+  路徑B：預估本益比 > 20 + 有熱門題材支撐 + （EPS年增 > 30% 或 EPS成長率大幅優於營收成長率）
+🟠 建議買進：EPS或營收正成長 + 預估本益比 ≤ 30，不需要強烈題材支撐
+🟡 一般觀望：成長有限（年增 < 10%）或本益比 > 30 缺題材，或虧損但收窄中
+🟢 需要小心：營收或EPS年減、財務惡化、由盈轉虧或衰退 > 30%
+
+【輸出格式 — 嚴格遵守】
+只輸出一個純 JSON 物件，不要任何 JSON 以外的文字，不要加 markdown 標記或反引號。
+{
+  "ai_rating": "🔴 強烈買進",
+  "ai_analysis": "4段分析文字：評級理由+數據、成長動能分析、產業熱度與風險、結論，段落間用\\n分隔"
+}
+
+規則：
+- ai_rating 只能是 🔴 強烈買進／🟠 建議買進／🟡 一般觀望／🟢 需要小心 四種之一
+- 禁用 [1][2][3] 等引用標記，不可出現「根據來源」等字樣
+- 全部使用繁體中文，專有名詞可保留英文縮寫
+- ai_analysis 為純文字，段落間用\\n分隔，不使用任何 HTML 標籤"""
+
+
+def _analyze_with_ai(stock_code, stock_name, subject, content, parsed,
+                      estimated_annual_eps, estimated_pe):
+    """Call OpenRouter to rate + write an analysis for a self-disclosure
+    announcement. All numeric fields (monthly_eps etc.) are already
+    deterministically parsed by _parse_disclosure()/crawl_announcements()
+    — AI is explicitly told to use them as given, not recompute, mirroring
+    the reference n8n workflow's "系統預算值" instruction. Returns
+    (ai_rating, ai_analysis), both None if no API key is configured or
+    the call fails for any reason (never raises — a failed analysis
+    should not block saving the deterministic numeric fields)."""
+    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    if not api_key:
+        return None, None
+    model = os.environ.get('OPENROUTER_MODEL', 'perplexity/sonar')
+
+    known = (
+        f"單月EPS：{parsed.get('monthly_eps')}\n"
+        f"去年同月EPS：{parsed.get('prior_year_eps')}\n"
+        f"EPS年增率：{parsed.get('eps_yoy')}%\n"
+        f"是否由虧轉盈：{'是' if parsed.get('turnaround') else '否'}\n"
+        f"預估全年EPS：{estimated_annual_eps}\n"
+        f"預估本益比：{estimated_pe}"
+    )
+    user_msg = (
+        f"股票：{stock_name}（{stock_code}）\n主旨：{subject}\n\n"
+        f"【系統已計算數據】\n{known}\n\n公告說明：\n{content[:3000]}"
+    )
+    try:
+        resp = requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'https://stock-market.zeabur.app',
+            },
+            json={
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': _AI_SYSTEM_PROMPT},
+                    {'role': 'user',   'content': user_msg},
+                ],
+                'response_format': {'type': 'json_object'},
+            },
+            timeout=90,
+        )
+        if resp.status_code == 429:
+            logger.warning('AI 429 rate limit for %s — skipping', stock_code)
+            return None, None
+        resp.raise_for_status()
+        raw = resp.json()['choices'][0]['message']['content']
+        m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', raw)
+        text_to_parse = m.group(1) if m else raw
+        if not text_to_parse.strip().startswith('{'):
+            bm = re.search(r'\{[\s\S]+\}', text_to_parse)
+            if bm:
+                text_to_parse = bm.group(0)
+        try:
+            j = _json.loads(text_to_parse)
+        except _json.JSONDecodeError:
+            logger.warning('AI JSON parse failed for %s — raw: %s', stock_code, raw[:500])
+            return None, None
+        return j.get('ai_rating'), j.get('ai_analysis')
+    except Exception as e:
+        logger.warning('AI analysis failed for %s: %s', stock_code, e)
+        return None, None
+
+
 def crawl_announcements(date_str=None, limit=None):
     """Crawl MOPS重大訊息 for self-disclosure (自結) EPS announcements.
-    Pure crawl + deterministic parsing — no AI involved.
 
     The full 主旨/說明 for every announcement of the day comes straight out
     of the single list-page response's hidden form fields (see
@@ -997,6 +1095,14 @@ def crawl_announcements(date_str=None, limit=None):
     none of the old anti-bot/endpoint problems apply. `limit` caps how
     many parsed rows get processed (testing only; leave None in
     production).
+
+    All numeric fields are computed deterministically, never by AI. If
+    OPENROUTER_API_KEY is set, each row that passes the monthly_eps filter
+    also gets an AI rating + analysis (_analyze_with_ai) — inline, one
+    call per row, mirroring the reference n8n workflow's logic and
+    pacing. This means a day with many candidates can take a while; if
+    no API key is set, AI is skipped entirely and this stays as fast as
+    before.
     """
     if date_str is None:
         d = datetime.now(_TZ).date() - timedelta(days=1)
@@ -1090,6 +1196,19 @@ def crawl_announcements(date_str=None, limit=None):
                                     if price_at_announce is not None and estimated_annual_eps
                                     else None)
 
+                    ai_rating, ai_analysis = None, None
+                    if os.environ.get('OPENROUTER_API_KEY', '').strip():
+                        # Inline, one call per saved candidate — matches the
+                        # reference n8n workflow's pacing (it paces every AI
+                        # call too, to stay under its model's rate limit).
+                        # This means a day with many candidates can take much
+                        # longer than the few seconds the rest of the crawl
+                        # takes; that's expected, not a bug.
+                        time.sleep(20)
+                        ai_rating, ai_analysis = _analyze_with_ai(
+                            code, row['name'], subject, content, parsed,
+                            estimated_annual_eps, estimated_pe)
+
                     db.execute(
                         Announcement.__table__.insert().prefix_with('OR IGNORE'),
                         [{
@@ -1106,13 +1225,15 @@ def crawl_announcements(date_str=None, limit=None):
                             'turnaround':           turnaround,
                             'estimated_annual_eps': estimated_annual_eps,
                             'estimated_pe':         estimated_pe,
+                            'ai_rating':            ai_rating,
+                            'ai_analysis':          ai_analysis,
                             'created_at':           datetime.now(_TZ),
                         }],
                     )
                     db.commit()
                     saved += 1
-                    logger.info('Saved announcement %s %s monthly_eps=%s pe=%s',
-                                code, subject[:40], monthly_eps, estimated_pe)
+                    logger.info('Saved announcement %s %s monthly_eps=%s pe=%s rating=%s',
+                                code, subject[:40], monthly_eps, estimated_pe, ai_rating)
 
                 except Exception as e:
                     db.rollback()

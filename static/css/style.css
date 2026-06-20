@@ -321,7 +321,10 @@ table.dataTable tbody td {
 .ann-table .td-center { text-align: center; }
 .ann-subject-link { cursor: pointer; }
 .ann-subject-link:hover { color: var(--primary); text-decoration: underline; }
+.ann-rating-link { cursor: pointer; display: inline-block; }
 .ann-ai-link { background: #1a73e8; color: #fff; white-space: nowrap; }
+.ann-dot { font-size: 16px; }
+.ann-dot-empty { color: var(--text2); font-size: 13px; }
 
 /* modal */
 .ann-modal-overlay {
@@ -352,6 +355,11 @@ table.dataTable tbody td {
 }
 .ann-modal-subject { font-size: 13px; color: var(--text); font-weight: 600; }
 .ann-modal-date { font-size: 12px; color: var(--text2); }
+.ann-modal-rating { font-size: 14px; font-weight: 600; }
+.ann-modal-analysis {
+  font-size: 13px; color: var(--text); white-space: pre-wrap;
+  background: var(--bg2); border-radius: 8px; padding: 10px 12px; line-height: 1.7;
+}
 .ann-modal-divider { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
 .ann-modal-content {
   font-size: 13px; color: var(--text); white-space: pre-wrap;
