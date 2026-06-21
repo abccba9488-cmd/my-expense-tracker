@@ -538,6 +538,19 @@
   </div>
 </div>
 
+<!-- Watchlist Picker Modal -->
+<div id="wl-pick-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeWlPickModal()">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span style="padding:14px 22px;font-weight:600;">選擇自選股清單</span>
+      <button class="modal-close" onclick="closeWlPickModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="wl-pick-list"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ── SCRIPTS ── -->
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>

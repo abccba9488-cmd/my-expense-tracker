@@ -763,18 +763,27 @@ async function wlRename(id, name) {
   } catch { wl.name = prev; renderWatchlistView(); showToast('更名失敗'); }
 }
 
-async function wlAddStock(code) {
-  if (!state.user) return;
-  const wl = wlActive();
-  if (!wl || wl.codes.includes(code)) return;
+async function _wlAddStockTo(wl, code) {
+  if (!wl || wl.codes.includes(code)) return false;
   wl.codes.push(code);
-  renderWlTable();
+  if (wl.id === state.activeWlId) renderWlTable();
   try {
     await fetch(`/api/watchlists/${wl.id}/stocks`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({code}),
     });
-  } catch { wl.codes = wl.codes.filter(c => c !== code); renderWlTable(); showToast('新增失敗'); }
+    return true;
+  } catch {
+    wl.codes = wl.codes.filter(c => c !== code);
+    if (wl.id === state.activeWlId) renderWlTable();
+    showToast('新增失敗');
+    return false;
+  }
+}
+
+async function wlAddStock(code) {
+  if (!state.user) return;
+  await _wlAddStockTo(wlActive(), code);
 }
 
 async function wlRemoveStock(code) {
@@ -1067,16 +1076,50 @@ async function loadAnnouncements() {
   }
 }
 
+let _wlPickCode = null, _wlPickName = '';
+
 function addAnnToWatchlist(i) {
   const a = _annData[i];
   if (!a) return;
   if (!state.user) { showToast('請先登入才能使用自選股'); return; }
-  const wl = wlActive();
-  if (!wl) { showToast('請先建立一個自選股清單'); return; }
-  if (wl.codes.includes(a.stock_code)) { showToast(`${a.stock_code} 已在自選股中`); return; }
-  wlAddStock(a.stock_code);
-  showToast(`已加入 ${a.stock_code} ${a.name || ''}`);
+  if (!state.watchlists.length) { showToast('請先建立一個自選股清單'); return; }
+  if (state.watchlists.length === 1) {
+    _addStockToWatchlist(state.watchlists[0], a.stock_code, a.name);
+    return;
+  }
+  _wlPickCode = a.stock_code;
+  _wlPickName = a.name || '';
+  openWlPickModal();
 }
+
+async function _addStockToWatchlist(wl, code, name) {
+  if (wl.codes.includes(code)) { showToast(`${code} 已在「${wl.name}」中`); return; }
+  const ok = await _wlAddStockTo(wl, code);
+  if (ok) showToast(`已加入 ${code} ${name || ''} 到「${wl.name}」`);
+}
+
+function openWlPickModal() {
+  document.getElementById('wl-pick-list').innerHTML = state.watchlists.map(wl => `
+    <div class="wl-pick-item" data-wl-id="${wl.id}">
+      <span class="wl-pick-name">${wl.name}</span>
+      <span class="wl-pick-meta">${wl.codes.includes(_wlPickCode) ? '已在清單中' : `${wl.codes.length} 支`}</span>
+    </div>
+  `).join('');
+  document.getElementById('wl-pick-modal').classList.remove('hidden');
+}
+
+function closeWlPickModal() {
+  document.getElementById('wl-pick-modal').classList.add('hidden');
+}
+
+document.getElementById('wl-pick-list').addEventListener('click', (e) => {
+  const item = e.target.closest('.wl-pick-item');
+  if (!item) return;
+  const wl = state.watchlists.find(w => w.id === +item.dataset.wlId);
+  if (!wl) return;
+  _addStockToWatchlist(wl, _wlPickCode, _wlPickName);
+  closeWlPickModal();
+});
 
 function openAnnModal(i) {
   const a = _annData[i];

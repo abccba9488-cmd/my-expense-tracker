@@ -562,6 +562,13 @@ table.dataTable tbody td {
 .wl-si-code { font-weight: 600; color: var(--primary); min-width: 44px; }
 .wl-si-name { flex: 1; }
 .wl-si-ind  { font-size: 12px; color: var(--text2); }
+.wl-pick-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-radius: 8px; cursor: pointer; transition: background .1s;
+}
+.wl-pick-item:hover { background: var(--bg3); }
+.wl-pick-name { font-weight: 600; }
+.wl-pick-meta { font-size: 12px; color: var(--text2); }
 .wl-remove-btn {
   background: none; border: none; color: var(--text2);
   font-size: 13px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
