@@ -20,7 +20,7 @@ _session.verify = False
 from sqlalchemy import text
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
-    QuarterlyFinancial, CrawlerLog, Announcement
+    QuarterlyFinancial, CrawlerLog, Announcement, StockAiAnalysis
 )
 
 logger = logging.getLogger(__name__)
@@ -1252,6 +1252,184 @@ def crawl_announcements(date_str=None, limit=None):
         _log('announcements', 'failed', str(e))
         logger.exception('crawl_announcements failed for %s', date_str)
         raise
+
+
+# ── on-demand AI stock analysis (admin-only, never automatic/bulk) ─────────────
+
+_STOCK_AI_SYSTEM_PROMPT = """你是一位擁有20年經驗、精通估值法的基金經理人。你的看法專業、深入、有獨特見解。
+
+【任務】根據提供的個股財務數據（已從本站資料庫算好，直接採用不要重算）與你即時搜尋到的市場資訊，評估這檔股票是否適合中長期投資，並給出目標價區間。
+
+【即時搜尋要求】
+1. 搜尋並列出同業競爭者目前的「預估本益比」。
+2. 搜尋各大外資對這檔股票今年全年EPS的預估值。
+3. 搜尋近1-3個月是否有重大新聞影響股價（訂單、產能、價格、客戶集中度等）。
+4. 搜尋近3個月法人（外資/投信/自營商）籌碼是否在累積或出脫。
+5. 若以上搜尋不到，於分析中明確說明「未搜尋到相關資訊」，不可編造。
+
+【定價計算】設定20%折價作為安全邊際：
+便宜價 = min(本站EPS估值, 外資EPS估值) × 同業平均本益比 × (1-20%)
+合理價 = EPS共識 × 同業平均本益比
+昂貴價 = 樂觀EPS情境 × 同業本益比上緣
+若EPS為負或本益比無法計算，三個目標價請回傳 null，改用文字描述成長性與轉機題材。
+
+【輸出格式】只輸出一個純JSON物件，不要任何JSON以外文字、不要markdown標記：
+{
+  "ai_rating": "🔴 強烈買進",
+  "target_cheap": 100.0,
+  "target_fair": 120.0,
+  "target_expensive": 140.0,
+  "ai_analysis": "4段分析文字：評級理由+數據、成長動能、產業熱度與風險、結論，段落間用\\n分隔"
+}
+
+規則：
+- ai_rating 只能是「🔴 強烈買進」「🟠 建議買進」「🟡 一般觀望」「🟢 需要小心」四種之一
+- 禁用 [1][2][3] 引用標記，不可出現「根據來源」字樣
+- 全部使用繁體中文
+- ai_analysis 為純文字，段落間用\\n分隔，不使用任何HTML標籤"""
+
+
+def analyze_stock_with_ai(code):
+    """On-demand, admin-triggered AI valuation analysis for one stock —
+    never called automatically or in bulk (each call is a paid OpenRouter
+    request the admin explicitly asked for). Pulls objective numbers
+    straight from this site's own DB (current price, PE — same formula as
+    _SUMMARY_SQL, revenue/EPS trend, the site's own 營收預估股價 momentum
+    metric — same formula as static/js/app.js's calcEst()), feeds them to
+    AI as "already computed, use as given", and lets AI fill in only what
+    the DB can't: peer PE, analyst EPS estimates, news, institutional flow.
+
+    Always upserts a stock_ai_analysis row, even if the AI call itself
+    fails (ai_rating left NULL in that case, logged as 'failed') — only
+    raises for a genuinely bad input (unknown code / no price data at
+    all), since those mean there's nothing sensible to analyze."""
+    api_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('OPENROUTER_API_KEY not configured')
+
+    db = SessionLocal()
+    try:
+        stock = db.query(Stock).filter_by(code=code).first()
+        if not stock:
+            raise ValueError(f'Unknown stock code {code}')
+
+        price = (db.query(DailyPrice).filter_by(stock_code=code)
+                  .order_by(DailyPrice.date.desc()).first())
+        if not price:
+            raise ValueError(f'{code} has no price data')
+
+        revenues = (db.query(MonthlyRevenue).filter_by(stock_code=code)
+                     .order_by(MonthlyRevenue.year.desc(), MonthlyRevenue.month.desc())
+                     .limit(6).all())
+        quarters = (db.query(QuarterlyFinancial).filter_by(stock_code=code)
+                     .order_by(QuarterlyFinancial.year.desc(), QuarterlyFinancial.quarter.desc())
+                     .limit(8).all())
+        latest_q = quarters[0] if quarters else None
+        latest_r = revenues[0] if revenues else None
+
+        # PE — same formula as _SUMMARY_SQL: Q4 uses the year's summed
+        # EPS, Q1-Q3 annualizes the single quarter.
+        pe = None
+        if latest_q and latest_q.eps is not None:
+            if latest_q.quarter == 4:
+                year_eps = sum(q.eps for q in quarters
+                               if q.year == latest_q.year and q.eps is not None)
+                if year_eps > 0:
+                    pe = round(price.close / year_eps, 1)
+            elif latest_q.eps > 0:
+                pe = round(price.close / (latest_q.eps / latest_q.quarter * 4.0), 1)
+
+        # 營收預估股價 — same formula as calcEst() in static/js/app.js
+        est_price = None
+        if (latest_r and latest_r.revenue and latest_q and latest_q.revenue
+                and latest_q.revenue > 0 and latest_q.eps and latest_q.eps > 0):
+            est_price = round((latest_r.revenue / latest_q.revenue) * latest_q.eps * 240, 1)
+
+        revenue_trend = '；'.join(
+            f"{r.year}/{r.month:02d} YoY {r.revenue_yoy:+.1f}%" if r.revenue_yoy is not None
+            else f"{r.year}/{r.month:02d} 無資料"
+            for r in revenues
+        ) or '無月營收資料'
+        eps_trend = '；'.join(
+            f"{q.year}Q{q.quarter} EPS {q.eps}" if q.eps is not None
+            else f"{q.year}Q{q.quarter} 無資料"
+            for q in quarters
+        ) or '無季財報資料'
+
+        known = (
+            f"目前股價：{price.close} 元（{price.date}）\n"
+            f"本站本益比：{pe if pe is not None else '無法計算'}\n"
+            f"最新季EPS：{latest_q.eps if latest_q else '無資料'}\n"
+            f"近期月營收年增率走勢：{revenue_trend}\n"
+            f"近期季EPS走勢：{eps_trend}\n"
+            f"營收預估股價（本站動能指標）：{est_price if est_price is not None else '無法計算'}"
+        )
+        user_msg = (
+            f"股票：{stock.name}（{code}，{stock.market}，{stock.industry or ''}）\n\n"
+            f"【本站已計算數據】\n{known}"
+        )
+
+        model = os.environ.get('OPENROUTER_MODEL', 'perplexity/sonar')
+        ai_rating = ai_analysis = target_cheap = target_fair = target_expensive = None
+        try:
+            resp = requests.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://stock-market.zeabur.app',
+                },
+                json={
+                    'model': model,
+                    'messages': [
+                        {'role': 'system', 'content': _STOCK_AI_SYSTEM_PROMPT},
+                        {'role': 'user',   'content': user_msg},
+                    ],
+                    'response_format': {'type': 'json_object'},
+                },
+                timeout=90,
+            )
+            resp.raise_for_status()
+            raw = resp.json()['choices'][0]['message']['content']
+            m = re.search(r'```(?:json)?\s*([\s\S]+?)\s*```', raw)
+            text_to_parse = m.group(1) if m else raw
+            if not text_to_parse.strip().startswith('{'):
+                bm = re.search(r'\{[\s\S]+\}', text_to_parse)
+                if bm:
+                    text_to_parse = bm.group(0)
+            j = _json.loads(text_to_parse)
+            ai_rating        = j.get('ai_rating')
+            ai_analysis      = j.get('ai_analysis')
+            target_cheap     = _parse_num(str(j.get('target_cheap', '') or ''))
+            target_fair      = _parse_num(str(j.get('target_fair', '') or ''))
+            target_expensive = _parse_num(str(j.get('target_expensive', '') or ''))
+        except Exception as e:
+            logger.warning('Stock AI analysis failed for %s: %s', code, e)
+
+        existing = db.query(StockAiAnalysis).filter_by(stock_code=code).first()
+        if existing:
+            existing.ai_rating        = ai_rating
+            existing.target_cheap     = target_cheap
+            existing.target_fair      = target_fair
+            existing.target_expensive = target_expensive
+            existing.ai_analysis      = ai_analysis
+        else:
+            db.add(StockAiAnalysis(
+                stock_code=code, ai_rating=ai_rating,
+                target_cheap=target_cheap, target_fair=target_fair,
+                target_expensive=target_expensive, ai_analysis=ai_analysis,
+            ))
+        db.commit()
+        _log('stock_ai_analysis', 'success' if ai_rating else 'failed',
+             f'{code}: rating={ai_rating}')
+
+        return {
+            'stock_code': code, 'ai_rating': ai_rating, 'ai_analysis': ai_analysis,
+            'target_cheap': target_cheap, 'target_fair': target_fair,
+            'target_expensive': target_expensive,
+        }
+    finally:
+        db.close()
 
 
 # ── convenience ───────────────────────────────────────────────────────────────

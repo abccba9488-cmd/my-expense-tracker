@@ -18,7 +18,7 @@ import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message,
-    Announcement, init_db
+    Announcement, StockAiAnalysis, init_db
 )
 
 logging.basicConfig(
@@ -476,6 +476,47 @@ def api_financials(code):
         } for f in rows])
     finally:
         db.close()
+
+
+@app.route('/api/stocks/<code>/ai-analysis')
+def api_stock_ai_analysis_get(code):
+    """Return the cached latest AI analysis for this stock, if any —
+    never triggers a new (paid) AI call. Visible to anyone, same as the
+    rest of the read-only stock data; only *triggering* a new analysis
+    is admin-only (see the POST route below)."""
+    db = SessionLocal()
+    try:
+        a = db.query(StockAiAnalysis).filter_by(stock_code=code).first()
+        if not a:
+            return jsonify(None)
+        return jsonify({
+            'stock_code':       a.stock_code,
+            'ai_rating':        a.ai_rating or '',
+            'ai_analysis':      a.ai_analysis or '',
+            'target_cheap':     a.target_cheap,
+            'target_fair':      a.target_fair,
+            'target_expensive': a.target_expensive,
+            'updated_at':       str(a.updated_at) if a.updated_at else None,
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/stocks/<code>/ai-analysis', methods=['POST'])
+def api_stock_ai_analysis_run(code):
+    """Admin-only: trigger a fresh (paid OpenRouter) AI analysis for this
+    stock. Synchronous — the admin is actively waiting on this one click,
+    unlike the batch crawler tasks which run in the background."""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    try:
+        result = crawler.analyze_stock_with_ai(code)
+        return jsonify(result)
+    except (ValueError, RuntimeError) as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception('Stock AI analysis request failed for %s', code)
+        return jsonify({'error': str(e)}), 500
 
 
 # ── API: announcements ───────────────────────────────────────────────────────

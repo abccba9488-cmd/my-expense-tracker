@@ -255,6 +255,61 @@ async function loadStockDetail(code) {
   renderRevenueTable(revenues);
   renderEpsChart(financials);
   renderQuarterlyTable(financials);
+
+  if (state.user && state.user.is_admin) loadStockAiAnalysis(code);
+}
+
+/* ── AI 個股分析（admin only） ── */
+function renderStockAiAnalysis(a) {
+  const body = document.getElementById('stock-ai-body');
+  if (!a || !a.ai_rating) {
+    body.innerHTML = '尚無分析，點擊「重新分析」開始';
+    return;
+  }
+  const targets = [
+    a.target_cheap     != null ? `便宜價 ${a.target_cheap}` : null,
+    a.target_fair       != null ? `合理價 ${a.target_fair}` : null,
+    a.target_expensive  != null ? `昂貴價 ${a.target_expensive}` : null,
+  ].filter(Boolean).join(' ｜ ');
+  body.innerHTML = `
+    <div class="ann-modal-rating">${_annRatingDot(a.ai_rating)} ${a.ai_rating}</div>
+    ${targets ? `<div class="stock-ai-targets">${targets}</div>` : ''}
+    <div class="ann-modal-analysis">${a.ai_analysis || ''}</div>
+    <div class="stock-ai-updated">最後分析時間：${a.updated_at ? a.updated_at.slice(0, 16) : '—'}</div>
+  `;
+}
+
+async function loadStockAiAnalysis(code) {
+  try {
+    const a = await fetch(`/api/stocks/${code}/ai-analysis`).then(r => r.json());
+    renderStockAiAnalysis(a);
+  } catch (_) {
+    document.getElementById('stock-ai-body').innerHTML = '載入失敗';
+  }
+}
+
+async function runStockAiAnalysis() {
+  if (!state.currentCode) return;
+  const btn = document.getElementById('stock-ai-btn');
+  const body = document.getElementById('stock-ai-body');
+  btn.disabled = true;
+  body.innerHTML = '分析中，請稍候（即時搜尋通常需要數十秒）…';
+  try {
+    const resp = await fetch(`/api/stocks/${state.currentCode}/ai-analysis`, {method: 'POST'});
+    const data = await resp.json();
+    if (!resp.ok) {
+      body.innerHTML = `分析失敗：${data.error || '未知錯誤'}`;
+    } else if (!data.ai_rating) {
+      body.innerHTML = 'AI 分析失敗（可能是 API 限速或暫時無法連線），請稍後再試一次';
+    } else {
+      renderStockAiAnalysis(data);
+      showToast('分析完成');
+    }
+  } catch (_) {
+    body.innerHTML = '分析失敗，請稍後再試';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 /* ── Days selector ── */
@@ -1328,6 +1383,7 @@ const TASK_LABEL = {
   monthly_revenue: '月營收更新',
   quarterly:       '季財報更新',
   announcements:   '自結公告更新',
+  stock_ai_analysis: 'AI個股分析',
   init:            '初始化',
 };
 

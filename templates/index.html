@@ -327,6 +327,15 @@
         </div>
       </div>
 
+      <!-- AI 個股分析（僅管理員可見） -->
+      <div class="card admin-only hidden" id="stock-ai-card">
+        <div class="card-header">
+          <h3>🤖 AI 個股分析</h3>
+          <button class="btn btn-sm" id="stock-ai-btn" onclick="runStockAiAnalysis()">重新分析（會產生 API 費用）</button>
+        </div>
+        <div id="stock-ai-body" class="stock-ai-body">尚無分析，點擊「重新分析」開始</div>
+      </div>
+
       <!-- 股價圖 -->
       <div class="card">
         <div class="card-header">

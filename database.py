@@ -166,6 +166,22 @@ class Announcement(Base):
     created_at    = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
+class StockAiAnalysis(Base):
+    """On-demand AI valuation analysis for a single stock, admin-triggered
+    only (never run automatically/in bulk — each row is an OpenRouter call
+    the admin explicitly paid for). One row per stock_code, overwritten on
+    each re-analysis — no history kept, this is a "latest snapshot" cache
+    so repeat page views don't re-trigger a paid AI call."""
+    __tablename__ = 'stock_ai_analysis'
+    stock_code       = Column(String(10), primary_key=True)
+    ai_rating        = Column(String(30))   # 🔴🟠🟡🟢 + label
+    target_cheap     = Column(Float)        # 便宜價
+    target_fair      = Column(Float)        # 合理價
+    target_expensive = Column(Float)        # 昂貴價
+    ai_analysis      = Column(Text)
+    updated_at       = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
+
+
 def _migrate_q4_to_individual(conn):
     """Convert Q4 annual cumulative data to individual Q4 by subtracting Q1+Q2+Q3."""
     for field in ('eps', 'revenue', 'operating_income', 'net_income'):
