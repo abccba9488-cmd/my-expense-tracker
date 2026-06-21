@@ -1056,25 +1056,80 @@ async function loadAnnouncements() {
     _annData = await fetch('/api/announcements/today').then(r => r.json());
     const countEl = document.getElementById('ann-count');
     if (countEl) countEl.textContent = `共 ${_annData.length} 筆`;
-    tbody.innerHTML = _annData.length
-      ? _annData.map(renderAnnRow).join('')
-      : '<tr><td colspan="14" class="ann-empty">近期無公告</td></tr>';
-    tbody.querySelectorAll('[data-code]').forEach(el => {
-      el.addEventListener('click', () => loadStockDetail(el.dataset.code));
-    });
-    tbody.querySelectorAll('.ann-subject-link, .ann-rating-link').forEach(el => {
-      el.addEventListener('click', () => openAnnModal(+el.dataset.idx));
-    });
-    tbody.querySelectorAll('.ann-ai-link').forEach(el => {
-      el.addEventListener('click', () => copyAnnForAI(+el.dataset.idx));
-    });
-    tbody.querySelectorAll('.ann-wl-add-btn').forEach(el => {
-      el.addEventListener('click', () => addAnnToWatchlist(+el.dataset.idx));
-    });
+    renderAnnTable();
   } catch (_) {
     tbody.innerHTML = '<tr><td colspan="14" class="ann-empty">載入失敗</td></tr>';
   }
 }
+
+function renderAnnTable() {
+  const tbody = document.getElementById('ann-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = _annData.length
+    ? _annData.map(renderAnnRow).join('')
+    : '<tr><td colspan="14" class="ann-empty">近期無公告</td></tr>';
+  tbody.querySelectorAll('[data-code]').forEach(el => {
+    el.addEventListener('click', () => loadStockDetail(el.dataset.code));
+  });
+  tbody.querySelectorAll('.ann-subject-link, .ann-rating-link').forEach(el => {
+    el.addEventListener('click', () => openAnnModal(+el.dataset.idx));
+  });
+  tbody.querySelectorAll('.ann-ai-link').forEach(el => {
+    el.addEventListener('click', () => copyAnnForAI(+el.dataset.idx));
+  });
+  tbody.querySelectorAll('.ann-wl-add-btn').forEach(el => {
+    el.addEventListener('click', () => addAnnToWatchlist(+el.dataset.idx));
+  });
+  document.querySelectorAll('#ann-table .ann-sortable').forEach(th => {
+    const arrow = th.querySelector('.ann-sort-arrow');
+    if (arrow) arrow.textContent = th.dataset.sort === _annSortField ? (_annSortDir > 0 ? ' ▲' : ' ▼') : '';
+  });
+}
+
+/* ── Announcement table sorting ── */
+let _annSortField = null, _annSortDir = 1;
+
+function _annRatingRank(r) {
+  if (!r) return null;
+  if (r.includes('強烈')) return 4;
+  if (r.includes('建議')) return 3;
+  if (r.includes('一般')) return 2;
+  return 1;
+}
+
+const _ANN_SORT_GETTERS = {
+  date:        a => `${a.announce_date || ''} ${a.announce_time || ''}`,
+  code:        a => a.stock_code,
+  name:        a => a.name || '',
+  price:       a => a.price_at_announce,
+  monthly_eps: a => a.monthly_eps,
+  prior_eps:   a => a.prior_year_eps,
+  yoy:         a => a.eps_yoy,
+  turnaround:  a => a.turnaround ? 1 : 0,
+  annual_eps:  a => a.estimated_annual_eps,
+  pe:          a => (a.estimated_pe != null && a.estimated_pe > 0) ? a.estimated_pe : null,
+  rating:      a => _annRatingRank(a.ai_rating),
+};
+
+function sortAnnTable(field) {
+  const getter = _ANN_SORT_GETTERS[field];
+  if (!getter) return;
+  _annSortDir = (_annSortField === field) ? -_annSortDir : 1;
+  _annSortField = field;
+  _annData.sort((x, y) => {
+    const vx = getter(x), vy = getter(y);
+    const vxNull = vx == null || vx === '';
+    const vyNull = vy == null || vy === '';
+    if (vxNull || vyNull) return vxNull === vyNull ? 0 : (vxNull ? 1 : -1);
+    if (typeof vx === 'string') return vx.localeCompare(vy) * _annSortDir;
+    return (vx - vy) * _annSortDir;
+  });
+  renderAnnTable();
+}
+
+document.querySelectorAll('#ann-table thead .ann-sortable').forEach(th => {
+  th.addEventListener('click', () => sortAnnTable(th.dataset.sort));
+});
 
 let _wlPickCode = null, _wlPickName = '';
 

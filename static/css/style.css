@@ -311,6 +311,9 @@ table.dataTable tbody td {
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
+.ann-table th.ann-sortable { cursor: pointer; user-select: none; }
+.ann-table th.ann-sortable:hover { color: var(--text); }
+.ann-sort-arrow { color: var(--primary); font-size: 10px; }
 .ann-table td {
   padding: 8px 10px; border-bottom: 1px solid var(--border);
   vertical-align: middle; white-space: nowrap;

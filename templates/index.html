@@ -279,9 +279,20 @@
           <table id="ann-table" class="ann-table">
             <thead>
               <tr>
-                <th>公告日期</th><th>代號</th><th>名稱</th><th>公告主旨</th>
-                <th>公告時股價</th><th>單月EPS</th><th>去年同月EPS</th><th>月EPS年增率</th>
-                <th>轉虧為盈</th><th>預估全年EPS</th><th>預估本益比</th><th>AI評級</th><th>AI分析</th><th>自選股</th>
+                <th class="ann-sortable" data-sort="date">公告日期<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="code">代號<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="name">名稱<span class="ann-sort-arrow"></span></th>
+                <th>公告主旨</th>
+                <th class="ann-sortable" data-sort="price">公告時股價<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="monthly_eps">單月EPS<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="prior_eps">去年同月EPS<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="yoy">月EPS年增率<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="turnaround">轉虧為盈<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="annual_eps">預估全年EPS<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="pe">預估本益比<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="rating">AI評級<span class="ann-sort-arrow"></span></th>
+                <th>AI分析</th>
+                <th>自選股</th>
               </tr>
             </thead>
             <tbody id="ann-tbody"></tbody>
