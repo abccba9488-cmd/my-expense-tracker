@@ -8,5 +8,6 @@ data/
 # ngrok binary
 ngrok.exe
 
-# Claude Code local settings
-.claude/
+# Claude Code local settings (skills are shared, kept out of this ignore)
+.claude/*
+!.claude/skills/
