@@ -45,6 +45,18 @@ function pctClass(v) {
   return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neutral';
 }
 
+// Highlights the cell when price is within ±3% of the 20-day MA (potential
+// support/resistance test signal).
+function ma20Cell(s) {
+  if (s.ma20 == null) return '—';
+  const val = fmt.price(s.ma20);
+  if (s.close == null) return val;
+  const near = Math.abs(s.close - s.ma20) / s.ma20 <= 0.03;
+  if (!near) return val;
+  const fill = 'display:block;margin:-9px -12px;padding:9px 12px;font-weight:600;';
+  return `<span style="${fill}background:#eab308;color:#000">🔔 ${val}</span>`;
+}
+
 function showToast(msg, ms = 2500) {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -169,6 +181,7 @@ function renderStockTable() {
     s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
     (s.eps_year && s.eps_quarter) ? `${s.eps_year}Q${s.eps_quarter}` : '—',
     s.price_date || '—',
+    ma20Cell(s),
   ]);
 
   if (mainDt) {
@@ -181,7 +194,7 @@ function renderStockTable() {
       order:      [[0, 'asc']],
       language:   dtLang(),
       columnDefs: [
-        { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
+        { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 16], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 8, 14, 15], className: 'dt-left' },
       ],
     });
@@ -728,6 +741,7 @@ function renderStarTable() {
       s.revenue_yoy != null ? `<span class="${pctClass(s.revenue_yoy)}">${fmt.pct(s.revenue_yoy)}</span>` : '—',
       s.eps != null ? `<span class="${pctClass(s.eps)}">${fmt.eps(s.eps)}</span>` : '—',
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
+      ma20Cell(s),
     ];
   });
 
@@ -741,7 +755,7 @@ function renderStarTable() {
       order: [[7, 'desc']],
       language: dtLang(),
       columnDefs: [
-        { targets: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
+        { targets: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 9], className: 'dt-left' },
       ],
     });
@@ -886,7 +900,7 @@ function renderWlTable() {
   const rows = wl.codes.map(code => {
     const s = state.allData.find(d => d.code === code);
     const rmBtn = `<button class="wl-remove-btn" data-rm-code="${code}" title="移除">✕</button>`;
-    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
+    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
     const est = calcEst(s);
     const ratio = (est != null && s.close) ? est / s.close : null;
     let estCell = '—';
@@ -915,6 +929,7 @@ function renderWlTable() {
       s.eps != null ? `<span class="${pctClass(s.eps)}">${fmt.eps(s.eps)}</span>` : '—',
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
       s.price_date || '—',
+      ma20Cell(s),
     ];
   });
 
@@ -925,7 +940,7 @@ function renderWlTable() {
       data: rows, pageLength: 25, order: [], language: dtLang(), destroy: true,
       columnDefs: [
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
-        { targets: [4,5,6,7,8,9,11,12,13,14], className: 'dt-right', type: 'num-cell' },
+        { targets: [4,5,6,7,8,9,11,12,13,14,16], className: 'dt-right', type: 'num-cell' },
         { targets: [1,2,3,10,15],             className: 'dt-left' },
       ],
     });

@@ -99,15 +99,17 @@ data/stocks.db         SQLite 資料庫（自動建立）
 6. `ALTER TABLE announcements ADD COLUMN ai_rating VARCHAR(30) / ai_analysis TEXT`
 7. `clear_old_announcements`：一次性清空舊版 AI 評級設計留下的 `announcements` 資料（schema 語意不同，只清資料不動欄位）
 
-## _SUMMARY_SQL 欄位索引（r[0]–r[16]）
+## _SUMMARY_SQL 欄位索引（r[0]–r[17]）
 
 ```
 0=code, 1=name, 2=market, 3=industry,
 4=close, 5=change_pct, 6=price_date,
 7=revenue, 8=revenue_yoy, 9=rev_year, 10=rev_month,
 11=eps, 12=eps_year, 13=eps_quarter,
-14=qf_revenue, 15=pe_ratio, 16=start_price
+14=qf_revenue, 15=pe_ratio, 16=start_price, 17=ma20
 ```
+
+`ma20`：以相關子查詢取該股最近 20 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT 20`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端三個表格（主表格／飆股清單／自選股）最後一欄「20日均」皆呼叫 `app.js` 的 `ma20Cell(s)` 顯示此值，股價落在 `ma20` 上下 3% 內時儲存格變色＋🔔 圖示提示。
 
 ## 爬蟲資料來源
 
