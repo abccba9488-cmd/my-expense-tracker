@@ -1,6 +1,7 @@
 import gzip as _gzip
 import json as _json
 import logging
+import os
 import re
 import threading
 import time as _time
@@ -127,6 +128,25 @@ def compress_response(response):
 
 
 # ── views ─────────────────────────────────────────────────────────────────────
+
+@app.context_processor
+def inject_asset_version():
+    """Cache-busting query param for static/js/app.js & static/css/style.css,
+    derived from each file's mtime. Without this, the service worker's
+    cache-first strategy can serve a stale cached JS/CSS alongside the
+    freshly-fetched index.html right after a deploy (column-count mismatch,
+    DataTables "unknown parameter" warnings etc.) until the browser happens
+    to reload again. A versioned URL makes that mismatch impossible — the
+    new HTML always points at a URL the old cache has never seen, so it's
+    always a fresh network fetch, no manual CACHE_NAME bump needed."""
+    def asset_version(filename):
+        path = os.path.join(app.static_folder, filename)
+        try:
+            return int(os.path.getmtime(path))
+        except OSError:
+            return 0
+    return dict(asset_version=asset_version)
+
 
 @app.route('/')
 def index():
