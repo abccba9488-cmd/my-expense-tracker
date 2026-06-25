@@ -112,7 +112,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 `ma20`：以相關子查詢取該股最近 20 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT 20`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端三個表格（主表格／飆股清單／自選股）最後一欄「20日均」皆呼叫 `app.js` 的 `ma20Cell(s)` 顯示此值，股價落在 `ma20` 上下 3% 內時儲存格變色＋🔔 圖示提示。
 
-`turnaround_signal`：**不是即時計算，是 `crawl_monthly_revenue()`（`crawler.py`）每次爬到新月營收時直接算好存進 `monthly_revenue` 表的**。邏輯：該股最新一季 `quarterly_financials.eps < 0`（還在虧損）**且**本月 `revenue_yoy >= 20`（跟營收飆股用同一個門檻）→ 寫入 1，否則 0；每次爬蟲都重算覆寫（不像 `start_price` 只在新增時寫一次）。前端 `app.js` 的 `turnaroundCell(s)` 為真時顯示 🔥 圖示、假則顯示「—」，**純圖示不塗滿底色**（跟 `ma20Cell` 的變色不同）。**飆股清單表格（`#star-table`）故意不加這欄**——`calcEst()` 要求 `eps > 0` 才會回傳值，飆股清單本身的篩選邏輯已排除所有虧損股，這欄放在那裡永遠是空的。
+`turnaround_signal`：**不是即時計算，是 `crawl_monthly_revenue()`（`crawler.py`）每次爬到新月營收時直接算好存進 `monthly_revenue` 表的**。邏輯：該股最新一季 `quarterly_financials.eps < 0`（還在虧損）**且**本月 `revenue_yoy >= 20`（跟營收飆股用同一個門檻）→ 寫入 1，否則 0；每次爬蟲都重算覆寫（不像 `start_price` 只在新增時寫一次）。前端 `app.js` 的 `turnaroundCell(s)` 為真時顯示 🔥 圖示、假則顯示「—」，**純圖示不塗滿底色**（跟 `ma20Cell` 的變色不同）。三個表格（主表格／飆股清單／自選股）都有這欄；**飆股清單表格（`#star-table`）這欄會永遠顯示「—」**——`calcEst()` 要求 `eps > 0` 才會回傳值，飆股清單本身的篩選邏輯已排除所有虧損股，使用者要求三表一致才加上，不是邏輯漏洞。內容只有「—」/🔥 太窄，三個表格的這一欄都用 `columnDefs` 的 `width: '64px'` 固定寬度，避免 DataTables 自動欄寬把標題擠出欄位（曾經發生過對不齊的問題）。
 
 ## 爬蟲資料來源
 
@@ -303,7 +303,7 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 **本益比**計算：Q1–Q3 用 `close / (eps / quarter × 4)`（年化）；Q4 用 `close / year_eps`（`yeps` CTE 全年加總）。
 
-自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**、**價差%**、**20日均**、**虧轉盈**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。飆股清單（`#star-table`）欄位則無**季營收**、**EPS期別**、**資料日期**，最後一欄是**20日均**——**故意不加虧轉盈欄**（原因見上方 `turnaround_signal` 說明）。
+自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**、**價差%**、**20日均**、**虧轉盈**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。飆股清單（`#star-table`）欄位則無**季營收**、**EPS期別**、**資料日期**，最後兩欄是**20日均**、**虧轉盈**（後者在此表必為「—」，見上方 `turnaround_signal` 說明）。
 
 ### 重要 gotcha：jQuery `.data()` 型別轉換
 

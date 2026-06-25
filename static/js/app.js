@@ -753,6 +753,7 @@ function renderStarTable() {
       s.eps != null ? `<span class="${pctClass(s.eps)}">${fmt.eps(s.eps)}</span>` : '—',
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
       ma20Cell(s),
+      turnaroundCell(s),
     ];
   });
 
@@ -768,6 +769,7 @@ function renderStarTable() {
       columnDefs: [
         { targets: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 9], className: 'dt-left' },
+        { targets: 15, className: 'dt-left', width: '64px' },
       ],
     });
     $('#star-table tbody').on('click', 'td', function() {
