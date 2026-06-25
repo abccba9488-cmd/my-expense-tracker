@@ -266,7 +266,7 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 ## PWA
 
 - `/manifest.json`、`/sw.js`：`app.py` 透過 `send_from_directory('static', ...)` 從根路徑提供（scope 需為 `/`，放在 `/static/` 下無法註冊根 scope 的 service worker）。
-- `static/sw.js`：只快取 `/static/` 下的資源（cache-first），`/api/` 一律直連網路，確保資料新鮮度。
+- `static/sw.js`：只快取 `/static/` 下的資源（cache-first），`/api/` 一律直連網路，確保資料新鮮度。**修改 `static/js/app.js` 或 `static/css/style.css` 時記得把 `CACHE_NAME` 版本號往上加一**（例如 `bao-shell-v2` → `v3`），否則使用者瀏覽器會先用 SW 快取住的舊版 JS 配上剛部署的新版 `index.html`（`index.html` 不在快取範圍內，永遠抓最新），兩邊欄位數/邏輯不一致會出現如 DataTables「Requested unknown parameter」這類錯誤（通常重新整理一次就消失，因為 SW 已在背景把快取更新成新版，但第一個訪客會看到一次性錯誤）；升版號會讓 `activate` 事件裡的舊 cache 清除邏輯立即生效。
 - 圖示（`static/img/icons/`）由 `generate_pwa_icons.py` 產生（K 線圖樣式），含 `icon-192/512`、`maskable-512`、`apple-touch-icon`、`favicon.ico`；改設計後重新執行該腳本即可。
 - `display: standalone`（manifest.json）：安裝後無網址列，但保留手機狀態列。
 - 安裝按鈕：`#install-app-btn`（list view，CSV 下載旁），`app.js` 的 `initInstallButton()` / `installApp()`：
