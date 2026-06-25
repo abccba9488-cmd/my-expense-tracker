@@ -1,5 +1,5 @@
 // PWA service worker: cache app shell assets, always fetch fresh data for API/HTML.
-const CACHE_NAME = 'bao-shell-v2';
+const CACHE_NAME = 'bao-shell-v3';
 const SHELL_ASSETS = [
   '/static/css/style.css',
   '/static/js/app.js',
