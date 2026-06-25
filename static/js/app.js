@@ -203,7 +203,10 @@ function renderStockTable() {
       language:   dtLang(),
       columnDefs: [
         { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 16], className: 'dt-right', type: 'num-cell' },
-        { targets: [0, 1, 2, 8, 14, 15, 17], className: 'dt-left' },
+        { targets: [0, 1, 2, 8, 14, 15], className: 'dt-left' },
+        // Fixed width — content is just '—' or '🔥', too narrow for
+        // DataTables' auto column-width to size against its own header text.
+        { targets: 17, className: 'dt-left', width: '64px' },
       ],
     });
     // Row click
@@ -950,7 +953,8 @@ function renderWlTable() {
       columnDefs: [
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
         { targets: [4,5,6,7,8,9,11,12,13,14,16], className: 'dt-right', type: 'num-cell' },
-        { targets: [1,2,3,10,15,17],          className: 'dt-left' },
+        { targets: [1,2,3,10,15],             className: 'dt-left' },
+        { targets: 17, className: 'dt-left', width: '64px' },
       ],
     });
     $('#wl-table tbody').on('click', '.wl-remove-btn', function(e) {

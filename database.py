@@ -273,6 +273,31 @@ def init_db():
         '''))
         conn.commit()
 
+    # Backfill: compute turnaround_signal for each stock's latest monthly_revenue
+    # row using data already in the DB. Needed once after the column was added —
+    # existing rows start out NULL and only get recomputed the next time
+    # crawl_monthly_revenue() actually runs for that stock, which could be a
+    # full day away. Only touches each stock's latest row since that's the only
+    # one _SUMMARY_SQL ever reads; safe to rerun (no-op once NULL rows are gone).
+    with engine.connect() as conn:
+        conn.execute(text('''
+            UPDATE monthly_revenue
+            SET turnaround_signal = CASE
+                WHEN revenue_yoy >= 20 AND (
+                    SELECT q.eps FROM quarterly_financials q
+                    WHERE q.stock_code = monthly_revenue.stock_code AND q.eps IS NOT NULL
+                    ORDER BY q.year DESC, q.quarter DESC LIMIT 1
+                ) < 0
+                THEN 1 ELSE 0
+            END
+            WHERE turnaround_signal IS NULL
+              AND (year * 100 + month) = (
+                  SELECT MAX(year * 100 + month) FROM monthly_revenue mr2
+                  WHERE mr2.stock_code = monthly_revenue.stock_code
+              )
+        '''))
+        conn.commit()
+
     # Migration: fix Q4 annual EPS/revenue → individual Q4 (subtract Q1+Q2+Q3)
     with engine.connect() as conn:
         done = conn.execute(text(
