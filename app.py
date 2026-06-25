@@ -258,7 +258,7 @@ def api_updates_today():
 # ── Shared summary SQL (col order: 0=code,1=name,2=market,3=industry,
 #    4=close,5=change_pct,6=price_date,7=revenue,8=revenue_yoy,
 #    9=rev_year,10=rev_month,11=eps,12=eps_year,13=eps_quarter,
-#    14=qf_revenue,15=pe_ratio,16=start_price,17=ma20)
+#    14=qf_revenue,15=pe_ratio,16=start_price,17=ma20,18=turnaround_signal)
 _SUMMARY_SQL = '''
     WITH lp AS (
         SELECT stock_code, MAX(date) AS max_date
@@ -297,7 +297,8 @@ _SUMMARY_SQL = '''
                 WHERE d20.stock_code = s.code
                 ORDER BY d20.date DESC LIMIT 20
             )
-        ) AS ma20
+        ) AS ma20,
+        mr.turnaround_signal
     FROM stocks s
     LEFT JOIN lp ON s.code = lp.stock_code
     LEFT JOIN daily_prices dp
@@ -337,6 +338,7 @@ def _row_to_dict(r):
         'start_price':  r[16],
         'price_diff':   round((r[4] - r[16]) / r[16] * 100, 2) if r[4] is not None and r[16] and r[16] > 0 else None,
         'ma20':         round(r[17], 2) if r[17] is not None else None,
+        'turnaround_signal': bool(r[18]) if r[18] is not None else False,
     }
 
 
@@ -370,7 +372,7 @@ def api_market_summary_csv():
                     '月營收(千元)', '月營收年增%', '月營收期別',
                     '季營收(千元)',
                     '最新EPS', 'EPS期別',
-                    '資料日期', '本益比', '20日均'])
+                    '資料日期', '本益比', '20日均', '虧轉盈訊號'])
         for r in rows:
             eps_period = f"{r[12]}Q{r[13]}" if r[12] else ''
             rev_period = f"{r[9]}/{r[10]:02d}" if r[9] else ''
@@ -389,6 +391,7 @@ def api_market_summary_csv():
                 str(r[6]) if r[6] else '',
                 r[15] if r[15] is not None else '',
                 round(r[17], 2) if r[17] is not None else '',
+                '是' if r[18] else '',
             ])
         # utf-8-sig adds BOM so Excel opens Chinese correctly
         csv_bytes = buf.getvalue().encode('utf-8-sig')

@@ -78,6 +78,7 @@ class MonthlyRevenue(Base):
     revenue_yoy = Column(Float)        # 年增率 %
     revenue_mom = Column(Float)        # 月增率 %
     start_price = Column(Float)        # 首次寫入當天收盤價
+    turnaround_signal = Column(Integer)  # 1=潛在虧轉盈候選（最新一季EPS<0 且本月營收年增>=20%）
     updated_at  = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
@@ -246,6 +247,14 @@ def init_db():
     with engine.connect() as conn:
         try:
             conn.execute(text('ALTER TABLE quarterly_financials ADD COLUMN updated_at DATETIME'))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+    # Migration: add turnaround_signal column if not present
+    with engine.connect() as conn:
+        try:
+            conn.execute(text('ALTER TABLE monthly_revenue ADD COLUMN turnaround_signal INTEGER'))
             conn.commit()
         except Exception:
             pass  # Column already exists

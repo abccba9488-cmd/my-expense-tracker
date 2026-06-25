@@ -608,6 +608,19 @@ def crawl_monthly_revenue(year: int, month: int):
                 if prev and prev.revenue:
                     revenue_mom = round((revenue - prev.revenue) / prev.revenue * 100, 2)
 
+                # Turnaround signal: company is still loss-making as of its latest
+                # reported quarter, but this month's revenue YoY hit the same 20%
+                # bar used for 營收飆股 — a candidate worth watching, not a computed
+                # EPS/PE estimate. Recomputed every crawl since revenue_yoy changes
+                # monthly and the "latest quarter" EPS it's checked against can too.
+                turnaround_signal = 0
+                if revenue_yoy is not None and revenue_yoy >= 20:
+                    latest_q = db.query(QuarterlyFinancial).filter_by(
+                        stock_code=stock.code
+                    ).order_by(QuarterlyFinancial.year.desc(), QuarterlyFinancial.quarter.desc()).first()
+                    if latest_q and latest_q.eps is not None and latest_q.eps < 0:
+                        turnaround_signal = 1
+
                 existing = db.query(MonthlyRevenue).filter_by(
                     stock_code=stock.code, year=year, month=month
                 ).first()
@@ -618,6 +631,7 @@ def crawl_monthly_revenue(year: int, month: int):
                     existing.revenue     = revenue
                     existing.revenue_yoy = revenue_yoy
                     existing.revenue_mom = revenue_mom
+                    existing.turnaround_signal = turnaround_signal
                     # start_price intentionally unchanged (keep first-crawl price)
                     if changed:
                         existing.updated_at = datetime.now(_TZ)
@@ -629,6 +643,7 @@ def crawl_monthly_revenue(year: int, month: int):
                         stock_code=stock.code, year=year, month=month,
                         revenue=revenue, revenue_yoy=revenue_yoy, revenue_mom=revenue_mom,
                         start_price=latest_dp[0] if latest_dp else None,
+                        turnaround_signal=turnaround_signal,
                         updated_at=datetime.now(_TZ),
                     ))
                 total += 1

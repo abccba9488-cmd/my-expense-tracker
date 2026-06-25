@@ -77,7 +77,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 |----|------|---------|
 | `stocks` | `code` | market: TWSE \| TPEX |
 | `daily_prices` | `(stock_code, date)` | volume 單位：股 |
-| `monthly_revenue` | `(stock_code, year, month)` | revenue 千元；`start_price` = 首次寫入當天收盤價，月份切換時才更新 |
+| `monthly_revenue` | `(stock_code, year, month)` | revenue 千元；`start_price` = 首次寫入當天收盤價，月份切換時才更新；`turnaround_signal` = 潛在虧轉盈候選旗標，每次爬蟲都重算（見下方說明） |
 | `quarterly_financials` | `(stock_code, year, quarter)` | revenue/income 千元；eps 元/股；**各季獨立值**（Q4 已非累計） |
 | `users` | `id` | 會員帳號，`password_hash` 用 werkzeug |
 | `watchlists` | `id` | 屬於某 `user_id`，可多個 |
@@ -98,18 +98,21 @@ data/stocks.db         SQLite 資料庫（自動建立）
 5. `ALTER TABLE announcements ADD COLUMN price_at_announce / prior_year_eps / estimated_annual_eps REAL`
 6. `ALTER TABLE announcements ADD COLUMN ai_rating VARCHAR(30) / ai_analysis TEXT`
 7. `clear_old_announcements`：一次性清空舊版 AI 評級設計留下的 `announcements` 資料（schema 語意不同，只清資料不動欄位）
+8. `ALTER TABLE monthly_revenue ADD COLUMN turnaround_signal INTEGER`
 
-## _SUMMARY_SQL 欄位索引（r[0]–r[17]）
+## _SUMMARY_SQL 欄位索引（r[0]–r[18]）
 
 ```
 0=code, 1=name, 2=market, 3=industry,
 4=close, 5=change_pct, 6=price_date,
 7=revenue, 8=revenue_yoy, 9=rev_year, 10=rev_month,
 11=eps, 12=eps_year, 13=eps_quarter,
-14=qf_revenue, 15=pe_ratio, 16=start_price, 17=ma20
+14=qf_revenue, 15=pe_ratio, 16=start_price, 17=ma20, 18=turnaround_signal
 ```
 
 `ma20`：以相關子查詢取該股最近 20 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT 20`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端三個表格（主表格／飆股清單／自選股）最後一欄「20日均」皆呼叫 `app.js` 的 `ma20Cell(s)` 顯示此值，股價落在 `ma20` 上下 3% 內時儲存格變色＋🔔 圖示提示。
+
+`turnaround_signal`：**不是即時計算，是 `crawl_monthly_revenue()`（`crawler.py`）每次爬到新月營收時直接算好存進 `monthly_revenue` 表的**。邏輯：該股最新一季 `quarterly_financials.eps < 0`（還在虧損）**且**本月 `revenue_yoy >= 20`（跟營收飆股用同一個門檻）→ 寫入 1，否則 0；每次爬蟲都重算覆寫（不像 `start_price` 只在新增時寫一次）。前端 `app.js` 的 `turnaroundCell(s)` 為真時顯示 🔥 圖示、假則顯示「—」，**純圖示不塗滿底色**（跟 `ma20Cell` 的變色不同）。**飆股清單表格（`#star-table`）故意不加這欄**——`calcEst()` 要求 `eps > 0` 才會回傳值，飆股清單本身的篩選邏輯已排除所有虧損股，這欄放在那裡永遠是空的。
 
 ## 爬蟲資料來源
 
@@ -132,7 +135,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 - **`Accept-Encoding` 不可加 `br`**：Zeabur 容器未安裝 `brotli`，若伺服器回傳 Brotli 壓縮內容會導致 `resp.json()` 解析失敗，整批資料變成 0 筆但 task 仍顯示 success。只用 `gzip, deflate`
 - TWSE/TPEX JSON 解析失敗或 `stat != 'OK'` 時會記錄 `logger.warning`（含狀態碼與回應大小），方便從 Zeabur Runtime Logs 排查
 
-月營收爬蟲在新增記錄時，會查 `daily_prices` 最新收盤價寫入 `start_price`；更新既有記錄時不修改 `start_price`。
+月營收爬蟲在新增記錄時，會查 `daily_prices` 最新收盤價寫入 `start_price`；更新既有記錄時不修改 `start_price`。`turnaround_signal`（虧轉盈候選旗標）則相反，新增與更新都會重算覆寫，見上方「_SUMMARY_SQL 欄位索引」說明。
 
 季財報爬蟲：抓到 Q4 時，從 DB 取出同年 Q1/Q2/Q3 相減後再存入，確保存的是個別季數值。
 
@@ -289,9 +292,9 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' }`。
 
-### 主表格欄位（16 欄，index 0–15）
+### 主表格欄位（18 欄，index 0–17）
 
-代號 → 名稱 → 產業 → **起始股價** → 收盤價 → **價差%** → 漲跌幅% → **營收預估股價** → 營收月份 → 月營收 → 月營收年增% → 季營收 → 最新EPS → 本益比 → EPS期別 → 資料日期
+代號 → 名稱 → 產業 → **起始股價** → 收盤價 → **價差%** → 漲跌幅% → **營收預估股價** → 營收月份 → 月營收 → 月營收年增% → 季營收 → 最新EPS → 本益比 → EPS期別 → 資料日期 → **20日均** → **虧轉盈**
 
 **價差%**：`(close - start_price) / start_price × 100`，在 `_row_to_dict()` 計算（非來自 SQL），`price_diff` 欄位直接放入 JSON 回傳。正值綠色，負值紅色。
 
@@ -299,7 +302,7 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 **本益比**計算：Q1–Q3 用 `close / (eps / quarter × 4)`（年化）；Q4 用 `close / year_eps`（`yeps` CTE 全年加總）。
 
-自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**和**價差%**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。
+自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**、**價差%**、**20日均**、**虧轉盈**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。飆股清單（`#star-table`）欄位則無**季營收**、**EPS期別**、**資料日期**，最後一欄是**20日均**——**故意不加虧轉盈欄**（原因見上方 `turnaround_signal` 說明）。
 
 ### 重要 gotcha：jQuery `.data()` 型別轉換
 

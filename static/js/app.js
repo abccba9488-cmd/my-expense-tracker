@@ -57,6 +57,13 @@ function ma20Cell(s) {
   return `<span style="${fill}background:#eab308;color:#000">🔔 ${val}</span>`;
 }
 
+// Icon-only signal (no cell fill): set by the monthly-revenue crawler when
+// the stock is still loss-making but this month's revenue YoY hit the same
+// 20% bar used for 營收飆股 — a turnaround candidate worth watching.
+function turnaroundCell(s) {
+  return s.turnaround_signal ? '🔥' : '—';
+}
+
 function showToast(msg, ms = 2500) {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -182,6 +189,7 @@ function renderStockTable() {
     (s.eps_year && s.eps_quarter) ? `${s.eps_year}Q${s.eps_quarter}` : '—',
     s.price_date || '—',
     ma20Cell(s),
+    turnaroundCell(s),
   ]);
 
   if (mainDt) {
@@ -195,7 +203,7 @@ function renderStockTable() {
       language:   dtLang(),
       columnDefs: [
         { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 16], className: 'dt-right', type: 'num-cell' },
-        { targets: [0, 1, 2, 8, 14, 15], className: 'dt-left' },
+        { targets: [0, 1, 2, 8, 14, 15, 17], className: 'dt-left' },
       ],
     });
     // Row click
@@ -900,7 +908,7 @@ function renderWlTable() {
   const rows = wl.codes.map(code => {
     const s = state.allData.find(d => d.code === code);
     const rmBtn = `<button class="wl-remove-btn" data-rm-code="${code}" title="移除">✕</button>`;
-    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
+    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
     const est = calcEst(s);
     const ratio = (est != null && s.close) ? est / s.close : null;
     let estCell = '—';
@@ -930,6 +938,7 @@ function renderWlTable() {
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
       s.price_date || '—',
       ma20Cell(s),
+      turnaroundCell(s),
     ];
   });
 
@@ -941,7 +950,7 @@ function renderWlTable() {
       columnDefs: [
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
         { targets: [4,5,6,7,8,9,11,12,13,14,16], className: 'dt-right', type: 'num-cell' },
-        { targets: [1,2,3,10,15],             className: 'dt-left' },
+        { targets: [1,2,3,10,15,17],          className: 'dt-left' },
       ],
     });
     $('#wl-table tbody').on('click', '.wl-remove-btn', function(e) {
