@@ -99,6 +99,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 6. `ALTER TABLE announcements ADD COLUMN ai_rating VARCHAR(30) / ai_analysis TEXT`
 7. `clear_old_announcements`：一次性清空舊版 AI 評級設計留下的 `announcements` 資料（schema 語意不同，只清資料不動欄位）
 8. `ALTER TABLE monthly_revenue ADD COLUMN turnaround_signal INTEGER`
+9. 回填現有每檔股票**最新一筆** `monthly_revenue` 的 `turnaround_signal`（用既有 `quarterly_financials` 資料算，不用重新爬）——新增欄位時舊資料全是 NULL，要等下次爬蟲跑才會重算，這個一次性回填讓欄位上線當下就有正確值，不用等
 
 ## _SUMMARY_SQL 欄位索引（r[0]–r[18]）
 

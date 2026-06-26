@@ -45,16 +45,19 @@ function pctClass(v) {
   return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neutral';
 }
 
-// Highlights the cell when price is within ±3% of the 20-day MA (potential
-// support/resistance test signal).
+// Highlights the cell when price is within ±3% of the 20-day MA.
+// Returns [sortVal, displayHtml] so DataTables can sort by colour block:
+//   0 = highlighted (near MA20)  → sorts first
+//   1 = has value but not near   → sorts second
+//   2 = no data                  → sorts last
 function ma20Cell(s) {
-  if (s.ma20 == null) return '—';
+  if (s.ma20 == null) return [2, '—'];
   const val = fmt.price(s.ma20);
-  if (s.close == null) return val;
+  if (s.close == null) return [1, val];
   const near = Math.abs(s.close - s.ma20) / s.ma20 <= 0.03;
-  if (!near) return val;
+  if (!near) return [1, val];
   const fill = 'display:block;margin:-9px -12px;padding:9px 12px;font-weight:600;';
-  return `<span style="${fill}background:#eab308;color:#000">🔔 ${val}</span>`;
+  return [0, `<span style="${fill}background:#eab308;color:#000">🔔 ${val}</span>`];
 }
 
 // Icon-only signal (no cell fill): set by the monthly-revenue crawler when
@@ -202,8 +205,9 @@ function renderStockTable() {
       order:      [[0, 'asc']],
       language:   dtLang(),
       columnDefs: [
-        { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 16], className: 'dt-right', type: 'num-cell' },
+        { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 8, 14, 15], className: 'dt-left' },
+        { targets: 16, className: 'dt-right', render: { _: 0, display: 1 } },
         // Fixed width — content is just '—' or '🔥', too narrow for
         // DataTables' auto column-width to size against its own header text.
         { targets: 17, className: 'dt-left', width: '64px' },
@@ -304,6 +308,8 @@ function renderStockAiAnalysis(a) {
 }
 
 async function loadStockAiAnalysis(code) {
+  const btn = document.getElementById('stock-ai-btn');
+  if (btn) btn.disabled = false;
   try {
     const a = await fetch(`/api/stocks/${code}/ai-analysis`).then(r => r.json());
     renderStockAiAnalysis(a);
@@ -767,8 +773,9 @@ function renderStarTable() {
       order: [[7, 'desc']],
       language: dtLang(),
       columnDefs: [
-        { targets: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14], className: 'dt-right', type: 'num-cell' },
+        { targets: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 9], className: 'dt-left' },
+        { targets: 14, className: 'dt-right', render: { _: 0, display: 1 } },
         { targets: 15, className: 'dt-left', width: '64px' },
       ],
     });
@@ -954,8 +961,9 @@ function renderWlTable() {
       data: rows, pageLength: 25, order: [], language: dtLang(), destroy: true,
       columnDefs: [
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
-        { targets: [4,5,6,7,8,9,11,12,13,14,16], className: 'dt-right', type: 'num-cell' },
+        { targets: [4,5,6,7,8,9,11,12,13,14], className: 'dt-right', type: 'num-cell' },
         { targets: [1,2,3,10,15],             className: 'dt-left' },
+        { targets: 16, className: 'dt-right', render: { _: 0, display: 1 } },
         { targets: 17, className: 'dt-left', width: '64px' },
       ],
     });
