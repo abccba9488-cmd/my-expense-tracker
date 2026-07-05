@@ -86,6 +86,38 @@ def _announcements_test_job():
         logger.error('Announcements test job failed: %s', e)
 
 
+def _finmind_job():
+    """達人選股資料日增量：三大法人買賣超/股權分散/PER-PBR/股利政策/填息事件，
+    跑完後重新計算 7 套達人的評分快取（expert_scores）。放在凌晨、股價/月營收/
+    公告都跑完之後。"""
+    import crawler
+    import experts
+    today = datetime.now(_TZ).strftime('%Y%m%d')
+    for fn in (crawler.crawl_finmind_institutional, crawler.crawl_finmind_holding,
+               crawler.crawl_finmind_valuation, crawler.crawl_finmind_dividend,
+               crawler.crawl_finmind_dividend_result):
+        try:
+            fn(today)
+        except Exception as e:
+            logger.error('FinMind job step %s failed: %s', fn.__name__, e)
+    try:
+        experts.compute_expert_scores()
+    except Exception as e:
+        logger.error('compute_expert_scores failed: %s', e)
+
+
+def _finmind_financials_job(quarter):
+    """資產負債表/現金流量表/毛利項目，跟官方季報同一批公告時間窗（同
+    _quarterly_job 的揭露期限邏輯），比官方季報 job 晚 30 分鐘跑。"""
+    import crawler
+    now = datetime.now(_TZ)
+    year = now.year if quarter != 4 else now.year - 1
+    try:
+        crawler.crawl_finmind_financials(year, quarter)
+    except Exception as e:
+        logger.error('FinMind financials Q%d job failed: %s', quarter, e)
+
+
 def _quarterly_job(quarter):
     import crawler
     now = datetime.now(_TZ)
@@ -134,6 +166,17 @@ def start():
     _scheduler.add_job(lambda: _quarterly_job(3), CronTrigger(month=11, hour=23, minute=0))
     # Q4 (Oct–Dec): all of March of the following year (deadline Mar 31)
     _scheduler.add_job(lambda: _quarterly_job(4), CronTrigger(month=3,  hour=23, minute=0))
+
+    # 達人選股 (FinMind): daily incremental crawl + score recompute, 02:00 —
+    # after prices/revenue/announcements have all run for the day.
+    _scheduler.add_job(_finmind_job, CronTrigger(hour=2, minute=0))
+
+    # 達人選股 financial_extra: same disclosure-month cadence as the official
+    # quarterly job, 30 min later.
+    _scheduler.add_job(lambda: _finmind_financials_job(1), CronTrigger(month=5,  hour=23, minute=30))
+    _scheduler.add_job(lambda: _finmind_financials_job(2), CronTrigger(month=8,  hour=23, minute=30))
+    _scheduler.add_job(lambda: _finmind_financials_job(3), CronTrigger(month=11, hour=23, minute=30))
+    _scheduler.add_job(lambda: _finmind_financials_job(4), CronTrigger(month=3,  hour=23, minute=30))
 
     _scheduler.start()
     logger.info('Scheduler started')

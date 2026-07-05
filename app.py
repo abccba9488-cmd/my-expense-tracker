@@ -15,11 +15,12 @@ from sqlalchemy import desc, text, func as sa_func
 from werkzeug.security import generate_password_hash, check_password_hash
 
 import crawler
+import experts
 import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message,
-    Announcement, StockAiAnalysis, init_db
+    Announcement, StockAiAnalysis, ExpertScore, init_db
 )
 
 logging.basicConfig(
@@ -587,6 +588,60 @@ def api_announcements_today():
         db.close()
 
 
+# ── API: 達人選股 ───────────────────────────────────────────────────────────────
+
+@app.route('/api/experts')
+def api_experts_list():
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(ExpertScore.expert_key, ExpertScore.expert_label,
+                      sa_func.count().label('total'),
+                      sa_func.sum(ExpertScore.passed).label('passed_count'),
+                      sa_func.max(ExpertScore.computed_at).label('computed_at'))
+            .group_by(ExpertScore.expert_key)
+            .all()
+        )
+        by_key = {r.expert_key: r for r in rows}
+        return jsonify([{
+            'expert_key': key,
+            'expert_label': label,
+            'passed_count': (by_key[key].passed_count or 0) if key in by_key else 0,
+            'total': by_key[key].total if key in by_key else 0,
+            'computed_at': str(by_key[key].computed_at) if key in by_key else None,
+        } for key, label in experts.EXPERT_LABELS.items()])
+    finally:
+        db.close()
+
+
+@app.route('/api/experts/<key>')
+def api_experts_detail(key):
+    if key not in experts.EXPERT_LABELS:
+        return jsonify({'error': 'Unknown expert_key'}), 404
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(ExpertScore, Stock.name, Stock.market, Stock.industry)
+            .outerjoin(Stock, Stock.code == ExpertScore.stock_code)
+            .filter(ExpertScore.expert_key == key)
+            .order_by(desc(ExpertScore.passed), desc(ExpertScore.score))
+            .all()
+        )
+        return jsonify([{
+            'code': e.stock_code,
+            'name': name or '',
+            'market': market or '',
+            'industry': industry or '',
+            'passed': bool(e.passed),
+            'score': e.score,
+            'max_score': e.max_score,
+            'breakdown': _json.loads(e.breakdown_json) if e.breakdown_json else [],
+            'computed_at': str(e.computed_at),
+        } for e, name, market, industry in rows])
+    finally:
+        db.close()
+
+
 # ── API: crawler ──────────────────────────────────────────────────────────────
 
 @app.route('/api/crawler/status')
@@ -654,6 +709,12 @@ def api_run_crawler(task):
         ann_date = request.args.get('date')  # optional YYYYMMDD override
         ann_limit = request.args.get('limit', type=int)  # optional, testing only
         _run_bg(crawler.crawl_announcements, ann_date, ann_limit)
+
+    elif task == 'finmind_data':
+        _run_bg(sched._finmind_job)
+
+    elif task == 'expert_scores':
+        _run_bg(experts.compute_expert_scores)
 
     elif task == 'init':
         _run_bg(_initial_crawl)

@@ -20,8 +20,11 @@ _session.verify = False
 from sqlalchemy import text
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
-    QuarterlyFinancial, CrawlerLog, Announcement, StockAiAnalysis
+    QuarterlyFinancial, CrawlerLog, Announcement, StockAiAnalysis,
+    InstitutionalTrade, HoldingConcentration, FinancialExtra,
+    DividendPolicy, DividendFillEvent,
 )
+import finmind_client
 
 logger = logging.getLogger(__name__)
 _TZ = ZoneInfo('Asia/Taipei')
@@ -1443,6 +1446,365 @@ def analyze_stock_with_ai(code):
             'target_cheap': target_cheap, 'target_fair': target_fair,
             'target_expensive': target_expensive,
         }
+    finally:
+        db.close()
+
+
+# ── FinMind (達人選股資料來源) ─────────────────────────────────────────────────
+# Every FinMind dataset used here supports "bulk mode" — omit data_id and pass
+# start_date/end_date, and it returns ALL stocks for that date/period in one
+# call (verified: TaiwanStockInstitutionalInvestorsBuySell for one day returns
+# ~19k rows across the whole market). So unlike the per-stock MOPS crawlers
+# above, these fetch once per date/quarter and filter down to our own
+# tracked universe (`Stock` table) rather than looping per stock_code.
+
+def _to_int(v):
+    return int(v) if v is not None else None
+
+
+def _parse_iso_date(s):
+    return datetime.strptime(s, '%Y-%m-%d').date()
+
+
+def _finmind_valid_codes(db):
+    return {c for (c,) in db.query(Stock.code).all()}
+
+
+def crawl_finmind_institutional(date_str: str):
+    """三大法人買賣超（日資料）。date_str: YYYYMMDD。單位：股。"""
+    iso = f'{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}'
+    _log('finmind_institutional', 'running', date_str)
+    db = SessionLocal()
+    try:
+        valid = _finmind_valid_codes(db)
+        rows = finmind_client.fetch('TaiwanStockInstitutionalInvestorsBuySell',
+                                     start_date=iso, end_date=iso)
+        agg = {}
+        for r in rows:
+            code = r['stock_id']
+            if code not in valid:
+                continue
+            key = (code, _parse_iso_date(r['date']))
+            a = agg.setdefault(key, {'foreign_buy': 0, 'foreign_sell': 0,
+                                      'trust_buy': 0, 'trust_sell': 0,
+                                      'dealer_buy': 0, 'dealer_sell': 0})
+            name = r.get('name')
+            buy, sell = r.get('buy') or 0, r.get('sell') or 0
+            if name in ('Foreign_Investor', 'Foreign_Dealer_Self'):
+                a['foreign_buy'] += buy
+                a['foreign_sell'] += sell
+            elif name == 'Investment_Trust':
+                a['trust_buy'] += buy
+                a['trust_sell'] += sell
+            elif name in ('Dealer_self', 'Dealer_Hedging'):
+                a['dealer_buy'] += buy
+                a['dealer_sell'] += sell
+
+        records = [{'stock_code': code, 'date': d, **vals} for (code, d), vals in agg.items()]
+        if records:
+            db.execute(InstitutionalTrade.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log('finmind_institutional', 'success', f'{date_str}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('finmind_institutional', 'failed', f'{date_str}: {e}')
+        logger.exception('crawl_finmind_institutional failed for %s', date_str)
+        raise
+    finally:
+        db.close()
+
+
+# HoldingSharesLevel bucket thresholds match 股泰's own definitions exactly:
+# "大戶" = 1000/800/600/400張以上 (>=1,000,001/800,001/600,001/400,001 股),
+# "散戶" = 200/100張以下 (<=200,000/100,000 股). Levels between 200,001 and
+# 400,000 shares count toward neither bucket (matches the source definitions).
+_HOLDING_LEVEL_BUCKETS = {
+    'more than 1,000,001': ('pct_1000up', 'pct_800up', 'pct_600up', 'pct_400up'),
+    '800,001-1,000,000':   ('pct_800up', 'pct_600up', 'pct_400up'),
+    '600,001-800,000':     ('pct_600up', 'pct_400up'),
+    '400,001-600,000':     ('pct_400up',),
+    '100,001-200,000':     ('pct_200down',),
+    '50,001-100,000':      ('pct_200down', 'pct_100down'),
+    '40,001-50,000':       ('pct_200down', 'pct_100down'),
+    '30,001-40,000':       ('pct_200down', 'pct_100down'),
+    '20,001-30,000':       ('pct_200down', 'pct_100down'),
+    '15,001-20,000':       ('pct_200down', 'pct_100down'),
+    '10,001-15,000':       ('pct_200down', 'pct_100down'),
+    '5,001-10,000':        ('pct_200down', 'pct_100down'),
+    '1,000-5,000':         ('pct_200down', 'pct_100down'),
+    '1-999':                ('pct_200down', 'pct_100down'),
+}
+
+
+def crawl_finmind_holding(date_str: str, lookback_days: int = 10):
+    """股權分散表（週資料，TDCC 每週特定日公布，通常週五但假日會調整）。
+    這個 dataset 的 bulk 模式一次只認一個確切的公布日（start_date 必須精準命中
+    當週公布日，否則回傳 0 筆，不會像其他 dataset 那樣把整個 date range 內的
+    資料都吐出來——已用真實 API 呼叫驗證過），所以逐日嘗試 lookback_days 天，
+    公布日以外的日子回傳 0 筆直接跳過即可，成本仍然很低（一次最多
+    lookback_days+1 次呼叫）。date_str: YYYYMMDD。"""
+    end = datetime.strptime(date_str, '%Y%m%d').date()
+    _log('finmind_holding', 'running', date_str)
+    db = SessionLocal()
+    try:
+        valid = _finmind_valid_codes(db)
+        agg = {}
+        for delta in range(lookback_days + 1):
+            d_iso = (end - timedelta(days=delta)).isoformat()
+            rows = finmind_client.fetch('TaiwanStockHoldingSharesPer',
+                                         start_date=d_iso, end_date=d_iso)
+            for r in rows:
+                code = r['stock_id']
+                if code not in valid:
+                    continue
+                buckets = _HOLDING_LEVEL_BUCKETS.get(r.get('HoldingSharesLevel'))
+                if not buckets:
+                    continue
+                key = (code, _parse_iso_date(r['date']))
+                a = agg.setdefault(key, {'pct_1000up': 0.0, 'pct_800up': 0.0, 'pct_600up': 0.0,
+                                          'pct_400up': 0.0, 'pct_200down': 0.0, 'pct_100down': 0.0})
+                pct = r.get('percent') or 0.0
+                for b in buckets:
+                    a[b] += pct
+
+        records = [{'stock_code': code, 'date': d, **vals} for (code, d), vals in agg.items()]
+        if records:
+            db.execute(HoldingConcentration.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log('finmind_holding', 'success', f'{date_str}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('finmind_holding', 'failed', f'{date_str}: {e}')
+        logger.exception('crawl_finmind_holding failed for %s', date_str)
+        raise
+    finally:
+        db.close()
+
+
+_BS_KEYS = ('Inventories', 'AccountsReceivableNet', 'CurrentAssets', 'CurrentLiabilities',
+            'Liabilities', 'Equity', 'TotalAssets', 'LongtermBorrowings', 'CapitalStock')
+_FS_KEYS = ('GrossProfit', 'CostOfGoodsSold', 'PreTaxIncome')
+_CF_KEYS = ('CashFlowsFromOperatingActivities', 'NetCashInflowFromOperatingActivities',
+            'InterestExpense', 'PropertyAndPlantAndEquipment')
+_QUARTER_END = {1: '03-31', 2: '06-30', 3: '09-30', 4: '12-31'}
+
+
+def crawl_finmind_financials(year: int, quarter: int):
+    """資產負債表 + 財報毛利項目 + 現金流量表（季資料，補 quarterly_financials
+    沒有的欄位；quarterly_financials 本身來自 MOPS，這裡刻意存成獨立表不混用
+    兩個資料來源）。Q4 的損益/現金流項目是年度累計值，比照 quarterly_financials
+    的作法減去 Q1+Q2+Q3 還原為單季值；資產負債表項目本身是期末時點值，
+    不需要調整。單位：千元。"""
+    period_end = f'{year}-{_QUARTER_END[quarter]}'
+    _log('finmind_financials', 'running', f'{year}Q{quarter}')
+    db = SessionLocal()
+    try:
+        valid = _finmind_valid_codes(db)
+
+        def _pivot(dataset, keys):
+            rows = finmind_client.fetch(dataset, start_date=period_end, end_date=period_end)
+            out = {}
+            for r in rows:
+                code = r['stock_id']
+                if code not in valid or r.get('type') not in keys:
+                    continue
+                out.setdefault(code, {})[r['type']] = r.get('value')
+            return out
+
+        bs = _pivot('TaiwanStockBalanceSheet', _BS_KEYS)
+        fs = _pivot('TaiwanStockFinancialStatements', _FS_KEYS)
+        cf = _pivot('TaiwanStockCashFlowsStatement', _CF_KEYS)
+
+        def _de_cumulate(val, existing, field):
+            """Q4 fields from FinMind are annual cumulative; subtract Q1-Q3
+            (already stored in financial_extra) to get the individual quarter,
+            same convention as quarterly_financials' own Q4 handling."""
+            if val is None or existing is None:
+                return val
+            parts = [getattr(e, field) for e in existing]
+            if any(p is None for p in parts):
+                return val
+            return val - sum(parts)
+
+        records = []
+        for code in set(bs) | set(fs) | set(cf):
+            b, f, c = bs.get(code, {}), fs.get(code, {}), cf.get(code, {})
+            ocf = c.get('CashFlowsFromOperatingActivities')
+            if ocf is None:
+                ocf = c.get('NetCashInflowFromOperatingActivities')
+            capex = c.get('PropertyAndPlantAndEquipment')
+            gross_profit, cogs, pretax = f.get('GrossProfit'), f.get('CostOfGoodsSold'), f.get('PreTaxIncome')
+            interest_expense = c.get('InterestExpense')
+
+            if quarter == 4:
+                q123 = [db.query(FinancialExtra).filter_by(stock_code=code, year=year, quarter=q).first()
+                        for q in (1, 2, 3)]
+                if all(q123):
+                    gross_profit     = _de_cumulate(gross_profit, q123, 'gross_profit')
+                    cogs              = _de_cumulate(cogs, q123, 'cost_of_goods_sold')
+                    pretax            = _de_cumulate(pretax, q123, 'pretax_income')
+                    ocf               = _de_cumulate(ocf, q123, 'operating_cash_flow')
+                    interest_expense  = _de_cumulate(interest_expense, q123, 'interest_expense')
+                    capex             = _de_cumulate(capex, q123, 'capex')
+
+            records.append({
+                'stock_code': code, 'year': year, 'quarter': quarter,
+                'inventories': _to_int(b.get('Inventories')),
+                'accounts_receivable': _to_int(b.get('AccountsReceivableNet')),
+                'current_assets': _to_int(b.get('CurrentAssets')),
+                'current_liabilities': _to_int(b.get('CurrentLiabilities')),
+                'liabilities': _to_int(b.get('Liabilities')),
+                'equity': _to_int(b.get('Equity')),
+                'total_assets': _to_int(b.get('TotalAssets')),
+                'long_term_borrowings': _to_int(b.get('LongtermBorrowings')),
+                'capital_stock': _to_int(b.get('CapitalStock')),
+                'gross_profit': _to_int(gross_profit),
+                'cost_of_goods_sold': _to_int(cogs),
+                'pretax_income': _to_int(pretax),
+                'operating_cash_flow': _to_int(ocf),
+                'interest_expense': _to_int(interest_expense),
+                'capex': _to_int(capex),
+                'updated_at': datetime.now(_TZ),
+            })
+
+        if records:
+            db.execute(FinancialExtra.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log('finmind_financials', 'success', f'{year}Q{quarter}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('finmind_financials', 'failed', f'{year}Q{quarter}: {e}')
+        logger.exception('crawl_finmind_financials failed %dQ%d', year, quarter)
+        raise
+    finally:
+        db.close()
+
+
+def crawl_finmind_dividend(date_str: str, lookback_days: int = 14):
+    """個別股利分派事件，來源 TaiwanStockDividend。這個 dataset 跟股權分散表
+    一樣，bulk 模式的 range 查詢對「各公司自己時程」的事件型資料不可靠（已用
+    真實 API 呼叫驗證：整年 range 幾乎查不到資料，但單日查詢正常回傳當天全部
+    公司的事件），所以逐日呼叫 lookback_days 天。逐筆存事件（不在此加總成年度
+    總額，見 DividendPolicy model 說明），OR REPLACE 天然 idempotent，同一事件
+    重複爬到也不會重複計算。date_str: YYYYMMDD。"""
+    end = datetime.strptime(date_str, '%Y%m%d').date()
+    _log('finmind_dividend', 'running', date_str)
+    db = SessionLocal()
+    try:
+        valid = _finmind_valid_codes(db)
+        records = []
+        for delta in range(lookback_days + 1):
+            d_iso = (end - timedelta(days=delta)).isoformat()
+            rows = finmind_client.fetch('TaiwanStockDividend', start_date=d_iso, end_date=d_iso)
+            for r in rows:
+                code = r['stock_id']
+                if code not in valid:
+                    continue
+                m = re.match(r'(\d+)', str(r.get('year', '')))
+                if not m:
+                    continue
+                records.append({
+                    'stock_code': code,
+                    'event_date': _parse_iso_date(r['date']),
+                    'fiscal_year': int(m.group(1)) + 1911,
+                    'cash_dividend': r.get('CashEarningsDistribution') or 0.0,
+                    'stock_dividend': r.get('StockEarningsDistribution') or 0.0,
+                })
+
+        if records:
+            db.execute(DividendPolicy.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log('finmind_dividend', 'success', f'{date_str}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('finmind_dividend', 'failed', f'{date_str}: {e}')
+        logger.exception('crawl_finmind_dividend failed for %s', date_str)
+        raise
+    finally:
+        db.close()
+
+
+def crawl_finmind_dividend_result(date_str: str, lookback_days: int = 14):
+    """除權息事件 + 填息判斷，來源 TaiwanStockDividendResult。跟
+    crawl_finmind_dividend 同樣的 dataset 限制，逐日呼叫。填息與否用目前已有
+    的 daily_prices 重新檢查所有尚未填息的舊事件（除息日之後最高收盤價 >=
+    before_price），隨股價資料增加持續自我修正，不是一次性判斷。
+    date_str: YYYYMMDD。"""
+    end = datetime.strptime(date_str, '%Y%m%d').date()
+    _log('finmind_dividend_result', 'running', date_str)
+    db = SessionLocal()
+    try:
+        valid = _finmind_valid_codes(db)
+        records = []
+        for delta in range(lookback_days + 1):
+            d_iso = (end - timedelta(days=delta)).isoformat()
+            rows = finmind_client.fetch('TaiwanStockDividendResult', start_date=d_iso, end_date=d_iso)
+            records.extend(
+                {'stock_code': r['stock_id'], 'ex_date': _parse_iso_date(r['date']),
+                 'before_price': r.get('before_price'), 'filled': None}
+                for r in rows if r['stock_id'] in valid
+            )
+        if records:
+            # OR IGNORE: keep whatever `filled` an existing event already has,
+            # only insert events we haven't seen before.
+            db.execute(DividendFillEvent.__table__.insert().prefix_with('OR IGNORE'), records)
+            db.commit()
+
+        db.execute(text('''
+            UPDATE dividend_fill_events
+            SET filled = 1
+            WHERE (filled IS NULL OR filled = 0)
+              AND before_price IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM daily_prices dp
+                  WHERE dp.stock_code = dividend_fill_events.stock_code
+                    AND dp.date > dividend_fill_events.ex_date
+                    AND dp.close >= dividend_fill_events.before_price
+              )
+        '''))
+        db.commit()
+        _log('finmind_dividend_result', 'success', f'{date_str}: {len(records)} events')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('finmind_dividend_result', 'failed', f'{date_str}: {e}')
+        logger.exception('crawl_finmind_dividend_result failed for %s', date_str)
+        raise
+    finally:
+        db.close()
+
+
+def crawl_finmind_valuation(date_str: str):
+    """PER/PBR/殖利率寫回 daily_prices。用 UPDATE-only（不是 OR REPLACE），
+    避免覆蓋掉當天已寫入的 OHLCV 欄位。date_str: YYYYMMDD。"""
+    iso = f'{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}'
+    _log('finmind_valuation', 'running', date_str)
+    db = SessionLocal()
+    try:
+        valid = _finmind_valid_codes(db)
+        rows = finmind_client.fetch('TaiwanStockPER', start_date=iso, end_date=iso)
+        records = [
+            {'stock_code': r['stock_id'], 'date': r['date'],
+             'per': r.get('PER'), 'pbr': r.get('PBR'), 'dividend_yield': r.get('dividend_yield')}
+            for r in rows if r['stock_id'] in valid
+        ]
+        if records:
+            db.execute(text('''
+                UPDATE daily_prices SET per=:per, pbr=:pbr, dividend_yield=:dividend_yield
+                WHERE stock_code=:stock_code AND date=:date
+            '''), records)
+            db.commit()
+        _log('finmind_valuation', 'success', f'{date_str}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('finmind_valuation', 'failed', f'{date_str}: {e}')
+        logger.exception('crawl_finmind_valuation failed for %s', date_str)
+        raise
     finally:
         db.close()
 

@@ -131,6 +131,7 @@
       <button class="page-tab" data-tab="star">🔥 營收飆股</button>
       <button class="page-tab" data-tab="watchlist">⭐ 自選股</button>
       <button class="page-tab" data-tab="ann">📰 自結公告</button>
+      <button class="page-tab" data-tab="expert">🎯 達人選股</button>
     </div>
   </div>
 
@@ -317,6 +318,46 @@
     </div>
   </div>
 
+  <!-- 達人選股 -->
+  <div id="expert-view" class="view">
+    <div class="container">
+      <div class="toolbar">
+        <div class="filter-group" id="expert-tabs"></div>
+        <span class="stats-badge" id="expert-count"></span>
+      </div>
+      <p id="expert-desc" class="expert-desc"></p>
+      <div class="card">
+        <div class="ann-table-wrap">
+          <table id="expert-table" class="ann-table">
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>代號</th>
+                <th>名稱</th>
+                <th>產業</th>
+                <th>符合選股標準</th>
+                <th>評分</th>
+                <th>評分明細</th>
+              </tr>
+            </thead>
+            <tbody id="expert-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 達人選股評分明細 Modal -->
+  <div id="expert-modal" class="ann-modal-overlay hidden" onclick="if(event.target===this)closeExpertModal()">
+    <div class="ann-modal">
+      <div class="ann-modal-hdr">
+        <span id="expert-modal-title"></span>
+        <button class="ann-modal-close" onclick="closeExpertModal()">✕</button>
+      </div>
+      <div id="expert-modal-body" class="ann-modal-body"></div>
+    </div>
+  </div>
+
   <!-- 個股詳情 -->
   <div id="detail-view" class="view">
     <div class="container">
@@ -433,6 +474,8 @@
     <button class="btn btn-sm admin-only hidden" onclick="runCrawler('daily_price')">更新今日股價</button>
     <button class="btn btn-sm admin-only hidden" onclick="runCrawler('monthly_revenue')">更新月營收</button>
     <button class="btn btn-sm admin-only hidden" onclick="runCrawler('announcements')">更新自結公告</button>
+    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('finmind_data')">更新達人選股資料</button>
+    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('expert_scores')">重新計算達人評分</button>
   </div>
   <div id="status-logs" class="status-logs"></div>
 </div>

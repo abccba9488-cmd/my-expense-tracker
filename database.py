@@ -30,6 +30,10 @@ def _set_sqlite_pragma(dbapi_conn, _):
     cur.execute('PRAGMA mmap_size=0')
     cur.execute('PRAGMA cache_size=-2000')   # ~2MB page cache
     cur.execute('PRAGMA temp_store=FILE')
+    # Wait instead of immediately raising "database is locked" when another
+    # connection (scheduler job, manual crawler trigger, backfill script) is
+    # mid-write — several of these can legitimately overlap.
+    cur.execute('PRAGMA busy_timeout=30000')
     cur.close()
 
 
@@ -62,6 +66,9 @@ class DailyPrice(Base):
     volume     = Column(BigInteger)
     change     = Column(Float)
     change_pct = Column(Float)
+    per             = Column(Float)   # 本益比（FinMind TaiwanStockPER）
+    pbr             = Column(Float)   # 股價淨值比
+    dividend_yield  = Column(Float)   # 殖利率 %
 
 
 class MonthlyRevenue(Base):
@@ -97,6 +104,128 @@ class QuarterlyFinancial(Base):
     net_income       = Column(BigInteger)   # 千元
     eps              = Column(Float)        # 元/股
     updated_at       = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
+
+
+class InstitutionalTrade(Base):
+    """三大法人買賣超（日資料），來源 FinMind TaiwanStockInstitutionalInvestorsBuySell。
+    單位：股。dealer_buy/sell 已把 Dealer_self + Dealer_Hedging 加總。"""
+    __tablename__ = 'institutional_trades'
+    __table_args__ = (
+        UniqueConstraint('stock_code', 'date'),
+        Index('ix_it_code_date', 'stock_code', 'date'),
+    )
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code  = Column(String(10), nullable=False)
+    date        = Column(Date, nullable=False)
+    foreign_buy  = Column(BigInteger)
+    foreign_sell = Column(BigInteger)
+    trust_buy    = Column(BigInteger)
+    trust_sell   = Column(BigInteger)
+    dealer_buy   = Column(BigInteger)
+    dealer_sell  = Column(BigInteger)
+
+
+class HoldingConcentration(Base):
+    """股權分散表（週資料），來源 FinMind TaiwanStockHoldingSharesPer。
+    pct_* 為該張數門檻(含)以上／以下各級距 percent 加總，門檻對應
+    FinMind HoldingSharesLevel 的股數分界（400,001/600,001/800,001/1,000,001 股）。"""
+    __tablename__ = 'holding_concentration'
+    __table_args__ = (
+        UniqueConstraint('stock_code', 'date'),
+        Index('ix_hc_code_date', 'stock_code', 'date'),
+    )
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code  = Column(String(10), nullable=False)
+    date        = Column(Date, nullable=False)
+    pct_1000up  = Column(Float)   # >=1,000,001股 (1000張以上)
+    pct_800up   = Column(Float)   # >=800,001股
+    pct_600up   = Column(Float)   # >=600,001股
+    pct_400up   = Column(Float)   # >=400,001股
+    pct_200down = Column(Float)   # <=200,000股 (200張以下)
+    pct_100down = Column(Float)   # <=100,000股
+
+
+class FinancialExtra(Base):
+    """季資料，補足 quarterly_financials 沒有的資產負債表/現金流量表/毛利項目。
+    來源 FinMind TaiwanStockBalanceSheet + TaiwanStockFinancialStatements +
+    TaiwanStockCashFlowsStatement。獨立於 quarterly_financials（MOPS 來源），
+    用 (stock_code, year, quarter) 對齊但不混用兩個資料來源。單位：千元。"""
+    __tablename__ = 'financial_extra'
+    __table_args__ = (
+        UniqueConstraint('stock_code', 'year', 'quarter'),
+        Index('ix_fe_code', 'stock_code'),
+    )
+    id                    = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code            = Column(String(10), nullable=False)
+    year                  = Column(Integer, nullable=False)
+    quarter               = Column(Integer, nullable=False)
+    inventories           = Column(BigInteger)
+    accounts_receivable   = Column(BigInteger)
+    current_assets        = Column(BigInteger)
+    current_liabilities   = Column(BigInteger)
+    liabilities           = Column(BigInteger)
+    equity                = Column(BigInteger)
+    total_assets          = Column(BigInteger)
+    long_term_borrowings  = Column(BigInteger)
+    capital_stock         = Column(BigInteger)
+    gross_profit          = Column(BigInteger)
+    cost_of_goods_sold    = Column(BigInteger)
+    pretax_income         = Column(BigInteger)
+    operating_cash_flow   = Column(BigInteger)
+    interest_expense      = Column(BigInteger)
+    capex                 = Column(BigInteger)
+    updated_at            = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
+
+
+class DividendPolicy(Base):
+    """個別股利分派事件，來源 FinMind TaiwanStockDividend。單位：元/股。一家
+    公司一年可能配息多次（如台積電改季配息後一年4次）——刻意存成逐筆事件而
+    不在爬蟲階段就加總成年度總額：FinMind 這個 dataset 的 bulk 查詢只認「單一
+    日期精準命中」，range 查詢會漏資料（已用真實 API 呼叫驗證過），爬蟲只能
+    逐日呼叫、逐筆累積事件；若爬蟲階段就先加總，重跑/增量爬取的時間窗選擇會
+    決定加總範圍，容易重複計算或漏算。年度加總改在 experts.py 用 SQL
+    GROUP BY fiscal_year 即時算。fiscal_year 由 FinMind year 欄位（民國年
+    字串，如「114年第1次」）反推的西元年。payout_ratio 不在此存（會隨當年度
+    EPS 陸續公布而過時），改由 experts.py 對當年度 quarterly_financials EPS
+    加總即時計算。"""
+    __tablename__ = 'dividend_policy'
+    __table_args__ = (UniqueConstraint('stock_code', 'event_date'),)
+    id             = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code     = Column(String(10), nullable=False)
+    event_date     = Column(Date, nullable=False)
+    fiscal_year    = Column(Integer, nullable=False)
+    cash_dividend  = Column(Float)
+    stock_dividend = Column(Float)
+
+
+class DividendFillEvent(Base):
+    """除權息事件，來源 FinMind TaiwanStockDividendResult。before_price 是除權
+    息前一交易日收盤價（填息比較基準）；filled 由爬蟲每次執行時用目前已有的
+    daily_prices 資料重新判斷（除息日之後最高收盤價 >= before_price 即算填息），
+    尚未填息的舊事件會隨新股價資料進來持續重新檢查，不是一次性判斷。"""
+    __tablename__ = 'dividend_fill_events'
+    __table_args__ = (UniqueConstraint('stock_code', 'ex_date'),)
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code   = Column(String(10), nullable=False)
+    ex_date      = Column(Date, nullable=False)
+    before_price = Column(Float)
+    filled       = Column(Integer)   # 1 = 有填息, 0/NULL = 尚未（可能之後補上）
+
+
+class ExpertScore(Base):
+    """達人選股：每檔股票在每套規則下的最新一次計分結果（比照 stock_ai_analysis
+    只存最新快照，每次 compute_expert_scores() 覆寫）。"""
+    __tablename__ = 'expert_scores'
+    __table_args__ = (UniqueConstraint('stock_code', 'expert_key'),)
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code    = Column(String(10), nullable=False)
+    expert_key    = Column(String(30), nullable=False)
+    expert_label  = Column(String(50))
+    passed        = Column(Integer)     # 1 = 通過選股標準
+    score         = Column(Integer)
+    max_score     = Column(Integer)
+    breakdown_json = Column(Text)
+    computed_at   = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
 class User(Base):
@@ -325,6 +454,16 @@ def init_db():
         for col, coltype in (('ai_rating', 'VARCHAR(30)'), ('ai_analysis', 'TEXT')):
             try:
                 conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col} {coltype}'))
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
+    # Migration: add per/pbr/dividend_yield columns to daily_prices (達人選股,
+    # FinMind TaiwanStockPER)
+    with engine.connect() as conn:
+        for col in ('per', 'pbr', 'dividend_yield'):
+            try:
+                conn.execute(text(f'ALTER TABLE daily_prices ADD COLUMN {col} REAL'))
                 conn.commit()
             except Exception:
                 pass  # Column already exists

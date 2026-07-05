@@ -568,9 +568,11 @@ document.querySelectorAll('.page-tab').forEach(btn => {
     document.getElementById('star-view').classList.toggle('active', state.activeTab === 'star');
     document.getElementById('watchlist-view').classList.toggle('active', state.activeTab === 'watchlist');
     document.getElementById('ann-view').classList.toggle('active', state.activeTab === 'ann');
+    document.getElementById('expert-view').classList.toggle('active', state.activeTab === 'expert');
     if (state.activeTab === 'star') renderStarTable();
     if (state.activeTab === 'watchlist') renderWatchlistView();
     if (state.activeTab === 'ann') loadAnnouncements();
+    if (state.activeTab === 'expert') loadExperts();
   });
 });
 
@@ -793,6 +795,7 @@ function showDetailView() {
   document.getElementById('star-view').classList.remove('active');
   document.getElementById('watchlist-view').classList.remove('active');
   document.getElementById('ann-view').classList.remove('active');
+  document.getElementById('expert-view').classList.remove('active');
   document.getElementById('detail-view').classList.add('active');
   document.getElementById('page-tabs-bar').classList.add('hidden');
   window.scrollTo(0, 0);
@@ -801,7 +804,7 @@ function showDetailView() {
 function showListView() {
   document.getElementById('detail-view').classList.remove('active');
   document.getElementById('page-tabs-bar').classList.remove('hidden');
-  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' };
+  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view', expert: 'expert-view' };
   document.getElementById(viewMap[state.activeTab] || 'list-view').classList.add('active');
   state.currentCode = null;
 }
@@ -1321,6 +1324,108 @@ ${a.content || a.subject || ''}`;
   navigator.clipboard.writeText(prompt)
     .then(() => showToast('已複製提示詞，貼到 Gemini 即可分析'))
     .catch(() => showToast('複製失敗，請手動複製'));
+}
+
+/* ── 達人選股 ── */
+let _expertList = [];
+let _expertData = [];
+let _expertKey = null;
+
+async function loadExperts() {
+  try {
+    _expertList = await fetch('/api/experts').then(r => r.json());
+  } catch (_) {
+    document.getElementById('expert-tabs').innerHTML = '<span class="ann-empty">載入失敗</span>';
+    return;
+  }
+  if (!_expertKey && _expertList.length) _expertKey = _expertList[0].expert_key;
+  renderExpertTabs();
+  if (_expertKey) loadExpertDetail(_expertKey);
+}
+
+function renderExpertTabs() {
+  document.getElementById('expert-tabs').innerHTML = _expertList.map(e => `
+    <button class="filter-btn ${e.expert_key === _expertKey ? 'active' : ''}" data-expert-key="${e.expert_key}">
+      ${e.expert_label}（${e.passed_count}/${e.total}）
+    </button>
+  `).join('');
+  document.querySelectorAll('#expert-tabs [data-expert-key]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _expertKey = btn.dataset.expertKey;
+      renderExpertTabs();
+      loadExpertDetail(_expertKey);
+    });
+  });
+}
+
+async function loadExpertDetail(key) {
+  const tbody = document.getElementById('expert-tbody');
+  tbody.innerHTML = '<tr><td colspan="7" class="ann-empty">載入中…</td></tr>';
+  document.getElementById('expert-desc').textContent =
+    '評分明細中標註「近似」的項目，是原始達人邏輯中依賴其專屬未公開公式（如股泰的TU/TM/TD價位）或本站暫無資料來源（如董監持股）的項目，以同類型公開指標近似替代，並非原始公式。';
+  try {
+    _expertData = await fetch(`/api/experts/${key}`).then(r => r.json());
+  } catch (_) {
+    tbody.innerHTML = '<tr><td colspan="7" class="ann-empty">載入失敗</td></tr>';
+    return;
+  }
+  const passedCount = _expertData.filter(s => s.passed).length;
+  document.getElementById('expert-count').textContent = `符合選股標準 ${passedCount} / 共 ${_expertData.length} 支`;
+  renderExpertTable();
+}
+
+function renderExpertTable() {
+  const tbody = document.getElementById('expert-tbody');
+  if (!_expertData.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>';
+    return;
+  }
+  const rows = _expertData.filter(s => s.passed);
+  tbody.innerHTML = rows.length
+    ? rows.map((s, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td><span class="stock-link" data-code="${s.code}">${s.code}</span></td>
+          <td><span class="stock-link" data-code="${s.code}">${s.name}</span></td>
+          <td>${s.industry || '—'}</td>
+          <td class="td-center">✅</td>
+          <td class="num">${s.score} / ${s.max_score}</td>
+          <td class="td-center"><span class="ann-subject-link" data-idx="${_expertData.indexOf(s)}">查看明細</span></td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="7" class="ann-empty">目前沒有符合選股標準的個股</td></tr>';
+  tbody.querySelectorAll('[data-code]').forEach(el => {
+    el.addEventListener('click', () => loadStockDetail(el.dataset.code));
+  });
+  tbody.querySelectorAll('.ann-subject-link').forEach(el => {
+    el.addEventListener('click', () => openExpertModal(+el.dataset.idx));
+  });
+}
+
+function openExpertModal(i) {
+  const s = _expertData[i];
+  if (!s) return;
+  document.getElementById('expert-modal-title').textContent = `${s.code} ${s.name || ''}`;
+  const selectItems = s.breakdown.filter(b => b.type === 'select');
+  const scoreItems = s.breakdown.filter(b => b.type === 'score');
+  const metIcon = (met) => met === null ? '<span class="ann-dot-empty">—</span>' : (met ? '✅' : '❌');
+  document.getElementById('expert-modal-body').innerHTML = `
+    <div class="ann-modal-subject">選股標準（${s.passed ? '✅ 全部符合' : '❌ 未全部符合'}）</div>
+    <ul class="expert-criteria-list">
+      ${selectItems.map(b => `<li>${metIcon(b.met)} ${b.label}</li>`).join('')}
+    </ul>
+    <hr class="ann-modal-divider">
+    <div class="ann-modal-subject">評分明細（${s.score} / ${s.max_score} 分）</div>
+    <ul class="expert-criteria-list">
+      ${scoreItems.map(b => `<li>${metIcon(b.met)} ${b.label}${b.approx ? ' <em>（近似）</em>' : ''}
+        <span class="expert-points">${b.met === null ? '資料不足' : (b.gained != null ? b.gained : (b.met ? b.points : 0)) + ' / ' + b.points}</span></li>`).join('')}
+    </ul>
+  `;
+  document.getElementById('expert-modal').classList.remove('hidden');
+}
+
+function closeExpertModal() {
+  document.getElementById('expert-modal').classList.add('hidden');
 }
 
 /* ── Crawler status panel ── */
