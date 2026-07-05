@@ -1462,6 +1462,17 @@ def _to_int(v):
     return int(v) if v is not None else None
 
 
+def _to_thousands(v):
+    """FinMind's balance sheet / cash flow / income statement values are in
+    plain NT$ (not 千元 like this project's own quarterly_financials, which
+    comes from MOPS) — verified against 2330's real total assets (~NT$8.6
+    trillion matched the raw FinMind value, not ×1000 that). Divide here so
+    financial_extra stays on the same 千元 unit as quarterly_financials;
+    ratios that mix fields from both tables (ROE, ROA, AR turnover, interest
+    coverage, 本業收入比…) would otherwise be off by 1000x."""
+    return int(v / 1000) if v is not None else None
+
+
 def _parse_iso_date(s):
     return datetime.strptime(s, '%Y-%m-%d').date()
 
@@ -1645,6 +1656,17 @@ def crawl_finmind_financials(year: int, quarter: int):
             gross_profit, cogs, pretax = f.get('GrossProfit'), f.get('CostOfGoodsSold'), f.get('PreTaxIncome')
             interest_expense = c.get('InterestExpense')
 
+            # Convert FinMind's plain-NT$ values to 千元 *before* the Q4
+            # de-cumulate subtraction below, since the Q1-Q3 values already
+            # stored in financial_extra are in 千元 — subtracting mismatched
+            # scales would produce garbage.
+            gross_profit     = _to_thousands(gross_profit)
+            cogs              = _to_thousands(cogs)
+            pretax            = _to_thousands(pretax)
+            ocf               = _to_thousands(ocf)
+            interest_expense  = _to_thousands(interest_expense)
+            capex             = _to_thousands(capex)
+
             if quarter == 4:
                 q123 = [db.query(FinancialExtra).filter_by(stock_code=code, year=year, quarter=q).first()
                         for q in (1, 2, 3)]
@@ -1658,21 +1680,21 @@ def crawl_finmind_financials(year: int, quarter: int):
 
             records.append({
                 'stock_code': code, 'year': year, 'quarter': quarter,
-                'inventories': _to_int(b.get('Inventories')),
-                'accounts_receivable': _to_int(b.get('AccountsReceivableNet')),
-                'current_assets': _to_int(b.get('CurrentAssets')),
-                'current_liabilities': _to_int(b.get('CurrentLiabilities')),
-                'liabilities': _to_int(b.get('Liabilities')),
-                'equity': _to_int(b.get('Equity')),
-                'total_assets': _to_int(b.get('TotalAssets')),
-                'long_term_borrowings': _to_int(b.get('LongtermBorrowings')),
-                'capital_stock': _to_int(b.get('CapitalStock')),
-                'gross_profit': _to_int(gross_profit),
-                'cost_of_goods_sold': _to_int(cogs),
-                'pretax_income': _to_int(pretax),
-                'operating_cash_flow': _to_int(ocf),
-                'interest_expense': _to_int(interest_expense),
-                'capex': _to_int(capex),
+                'inventories': _to_thousands(b.get('Inventories')),
+                'accounts_receivable': _to_thousands(b.get('AccountsReceivableNet')),
+                'current_assets': _to_thousands(b.get('CurrentAssets')),
+                'current_liabilities': _to_thousands(b.get('CurrentLiabilities')),
+                'liabilities': _to_thousands(b.get('Liabilities')),
+                'equity': _to_thousands(b.get('Equity')),
+                'total_assets': _to_thousands(b.get('TotalAssets')),
+                'long_term_borrowings': _to_thousands(b.get('LongtermBorrowings')),
+                'capital_stock': _to_thousands(b.get('CapitalStock')),
+                'gross_profit': gross_profit,
+                'cost_of_goods_sold': cogs,
+                'pretax_income': pretax,
+                'operating_cash_flow': ocf,
+                'interest_expense': interest_expense,
+                'capex': capex,
                 'updated_at': datetime.now(_TZ),
             })
 
