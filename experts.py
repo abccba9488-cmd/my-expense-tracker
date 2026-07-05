@@ -370,6 +370,8 @@ def _gutai(ctx, bull=True):
 
     k_w_ge_d = (t.get('k_weekly') is not None and t.get('d_weekly') is not None
                 and (t['k_weekly'] >= t['d_weekly']) == bull)
+    k_m_ge_d = (t.get('k_monthly') is not None and t.get('d_monthly') is not None
+                and (t['k_monthly'] >= t['d_monthly']) == bull)
     macd_hist, macd_prev = t.get('macd_hist'), t.get('macd_hist_prev')
     macd_daily_trend = (macd_hist is not None and macd_prev is not None
                          and (macd_hist > macd_prev and macd_hist * sign > 0))
@@ -383,7 +385,7 @@ def _gutai(ctx, bull=True):
     month_break = (ctx['close'] > t['month_low_20']) == bull if (ctx['close'] and t.get('month_low_20') is not None) else None
 
     s.award('週K/週D同向', k_w_ge_d, 3)
-    s.award('月K/月D同向（資料不足，暫無月K月D）', None, 3)
+    s.award('月K/月D同向', k_m_ge_d if t.get('k_monthly') is not None else None, 3)
     s.award('日MACD柱狀同向增強', macd_daily_trend, 3)
     s.award('日MACD柱狀方向一致', macd_daily_sign, 3)
     s.award('週MACD柱狀方向一致', macd_weekly_sign, 3)
