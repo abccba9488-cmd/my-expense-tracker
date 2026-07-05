@@ -1361,8 +1361,6 @@ function renderExpertTabs() {
 async function loadExpertDetail(key) {
   const tbody = document.getElementById('expert-tbody');
   tbody.innerHTML = '<tr><td colspan="7" class="ann-empty">載入中…</td></tr>';
-  document.getElementById('expert-desc').textContent =
-    '評分明細中標註「近似」的項目，是原始達人邏輯中依賴其專屬未公開公式（如股泰的TU/TM/TD價位）或本站暫無資料來源（如董監持股）的項目，以同類型公開指標近似替代，並非原始公式。';
   try {
     _expertData = await fetch(`/api/experts/${key}`).then(r => r.json());
   } catch (_) {
