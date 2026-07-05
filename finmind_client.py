@@ -33,8 +33,13 @@ def _token():
 
 def fetch(dataset, start_date=None, end_date=None, data_id=None, *, retries=4, timeout=60):
     """Fetch one dataset from FinMind. Omitting data_id returns ALL stocks for
-    the given date range in a single call (bulk mode) — confirmed working for
-    every dataset this project uses. Returns the list under the 'data' key."""
+    start_date in a single call (bulk mode) — confirmed against the live API
+    for every dataset this project uses. end_date is NOT a true range filter:
+    it's only honored when it equals start_date (or is simply ignored) —
+    passing a wider range silently returns just start_date's rows instead of
+    the whole span. Every caller in crawler.py therefore always sets
+    start_date == end_date and loops one call per day/period itself. Returns
+    the list under the 'data' key."""
     params = {'dataset': dataset, 'token': _token()}
     if data_id:
         params['data_id'] = data_id
@@ -43,9 +48,16 @@ def fetch(dataset, start_date=None, end_date=None, data_id=None, *, retries=4, t
     if end_date:
         params['end_date'] = end_date
 
+    # Force gzip/deflate only — if brotli ever ends up importable in the
+    # deployment container, requests/urllib3 would otherwise auto-advertise
+    # 'br' and a brotli-encoded response would fail to decode (the same
+    # class of bug crawler.py's _get()/_post() already guard against for
+    # TWSE/TPEX/MOPS).
+    headers = {'Accept-Encoding': 'gzip, deflate'}
+
     for attempt in range(retries):
         try:
-            resp = _session.get(_BASE_URL, params=params, timeout=timeout)
+            resp = _session.get(_BASE_URL, params=params, headers=headers, timeout=timeout)
         except requests.exceptions.RequestException as e:
             if attempt == retries - 1:
                 raise

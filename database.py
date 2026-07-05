@@ -30,9 +30,15 @@ def _set_sqlite_pragma(dbapi_conn, _):
     cur.execute('PRAGMA mmap_size=0')
     cur.execute('PRAGMA cache_size=-2000')   # ~2MB page cache
     cur.execute('PRAGMA temp_store=FILE')
-    # Wait instead of immediately raising "database is locked" when another
-    # connection (scheduler job, manual crawler trigger, backfill script) is
-    # mid-write — several of these can legitimately overlap.
+    # WAL: readers no longer block a writer's commit (the default rollback
+    # journal does — a long-running read like compute_expert_scores() could
+    # stall a concurrent backfill/crawler write past any busy_timeout).
+    # journal_mode is stored in the db file itself, but PRAGMA is idempotent
+    # so setting it on every connect is harmless and self-healing if the
+    # file is ever replaced/restored without WAL.
+    cur.execute('PRAGMA journal_mode=WAL')
+    # Belt-and-suspenders: wait instead of immediately raising "database is
+    # locked" for the cases WAL doesn't fully cover (two simultaneous writers).
     cur.execute('PRAGMA busy_timeout=30000')
     cur.close()
 

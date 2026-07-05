@@ -79,7 +79,7 @@ def backfill_valuation(from_year: int):
             continue
         date_str = d.strftime('%Y%m%d')
         try:
-            n = crawler.crawl_finmind_valuation(date_str)
+            n = crawler.crawl_finmind_valuation(date_str, lookback_days=0)
             crawled += 1
             logger.info('Valuation %s: %d records (done=%d skip=%d)', date_str, n, crawled, skipped)
         except Exception as e:
@@ -101,6 +101,9 @@ def backfill_holding(from_year: int):
     skipped = crawled = 0
 
     logger.info('=== Holding concentration %d -> %d ===', from_year, today.year)
+    # lookback_days=6 must cover the same span as the outer 7-day step below —
+    # the exact weekly report day varies (usually Fri, shifts around holidays),
+    # so unlike institutional/valuation this can't use lookback_days=0.
     while d <= today:
         window_end = min(d + timedelta(days=6), today)
         count = db.execute(
@@ -135,6 +138,8 @@ def backfill_dividend(from_year: int):
     skipped = crawled = 0
 
     logger.info('=== Dividend policy + fill events %d -> %d ===', from_year, today.year)
+    # Same reasoning as backfill_holding: dividend events land on scattered
+    # dates, so lookback_days=6 must match the outer 7-day step to avoid gaps.
     while d <= today:
         window_end = min(d + timedelta(days=6), today)
         count = db.execute(

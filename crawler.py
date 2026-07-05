@@ -1470,6 +1470,20 @@ def _finmind_valid_codes(db):
     return {c for (c,) in db.query(Stock.code).all()}
 
 
+def _finmind_daily_rows(dataset, end_date, lookback_days, valid_codes):
+    """Yield rows from `dataset` across [end_date-lookback_days, end_date],
+    one FinMind call per day and filtered to valid_codes. FinMind's bulk mode
+    (no data_id) only honors start_date, not end_date — a wider range
+    silently collapses to just start_date's rows, verified against the live
+    API (see finmind_client.fetch's docstring). Looping day by day is the
+    only reliable way to cover a multi-day window."""
+    for delta in range(lookback_days + 1):
+        d_iso = (end_date - timedelta(days=delta)).isoformat()
+        for r in finmind_client.fetch(dataset, start_date=d_iso, end_date=d_iso):
+            if r.get('stock_id') in valid_codes:
+                yield r
+
+
 def crawl_finmind_institutional(date_str: str):
     """三大法人買賣超（日資料）。date_str: YYYYMMDD。單位：股。"""
     iso = f'{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}'
@@ -1550,23 +1564,16 @@ def crawl_finmind_holding(date_str: str, lookback_days: int = 10):
     try:
         valid = _finmind_valid_codes(db)
         agg = {}
-        for delta in range(lookback_days + 1):
-            d_iso = (end - timedelta(days=delta)).isoformat()
-            rows = finmind_client.fetch('TaiwanStockHoldingSharesPer',
-                                         start_date=d_iso, end_date=d_iso)
-            for r in rows:
-                code = r['stock_id']
-                if code not in valid:
-                    continue
-                buckets = _HOLDING_LEVEL_BUCKETS.get(r.get('HoldingSharesLevel'))
-                if not buckets:
-                    continue
-                key = (code, _parse_iso_date(r['date']))
-                a = agg.setdefault(key, {'pct_1000up': 0.0, 'pct_800up': 0.0, 'pct_600up': 0.0,
-                                          'pct_400up': 0.0, 'pct_200down': 0.0, 'pct_100down': 0.0})
-                pct = r.get('percent') or 0.0
-                for b in buckets:
-                    a[b] += pct
+        for r in _finmind_daily_rows('TaiwanStockHoldingSharesPer', end, lookback_days, valid):
+            buckets = _HOLDING_LEVEL_BUCKETS.get(r.get('HoldingSharesLevel'))
+            if not buckets:
+                continue
+            key = (r['stock_id'], _parse_iso_date(r['date']))
+            a = agg.setdefault(key, {'pct_1000up': 0.0, 'pct_800up': 0.0, 'pct_600up': 0.0,
+                                      'pct_400up': 0.0, 'pct_200down': 0.0, 'pct_100down': 0.0})
+            pct = r.get('percent') or 0.0
+            for b in buckets:
+                a[b] += pct
 
         records = [{'stock_code': code, 'date': d, **vals} for (code, d), vals in agg.items()]
         if records:
@@ -1696,23 +1703,17 @@ def crawl_finmind_dividend(date_str: str, lookback_days: int = 14):
     try:
         valid = _finmind_valid_codes(db)
         records = []
-        for delta in range(lookback_days + 1):
-            d_iso = (end - timedelta(days=delta)).isoformat()
-            rows = finmind_client.fetch('TaiwanStockDividend', start_date=d_iso, end_date=d_iso)
-            for r in rows:
-                code = r['stock_id']
-                if code not in valid:
-                    continue
-                m = re.match(r'(\d+)', str(r.get('year', '')))
-                if not m:
-                    continue
-                records.append({
-                    'stock_code': code,
-                    'event_date': _parse_iso_date(r['date']),
-                    'fiscal_year': int(m.group(1)) + 1911,
-                    'cash_dividend': r.get('CashEarningsDistribution') or 0.0,
-                    'stock_dividend': r.get('StockEarningsDistribution') or 0.0,
-                })
+        for r in _finmind_daily_rows('TaiwanStockDividend', end, lookback_days, valid):
+            m = re.match(r'(\d+)', str(r.get('year', '')))
+            if not m:
+                continue
+            records.append({
+                'stock_code': r['stock_id'],
+                'event_date': _parse_iso_date(r['date']),
+                'fiscal_year': int(m.group(1)) + 1911,
+                'cash_dividend': r.get('CashEarningsDistribution') or 0.0,
+                'stock_dividend': r.get('StockEarningsDistribution') or 0.0,
+            })
 
         if records:
             db.execute(DividendPolicy.__table__.insert().prefix_with('OR REPLACE'), records)
@@ -1739,15 +1740,11 @@ def crawl_finmind_dividend_result(date_str: str, lookback_days: int = 14):
     db = SessionLocal()
     try:
         valid = _finmind_valid_codes(db)
-        records = []
-        for delta in range(lookback_days + 1):
-            d_iso = (end - timedelta(days=delta)).isoformat()
-            rows = finmind_client.fetch('TaiwanStockDividendResult', start_date=d_iso, end_date=d_iso)
-            records.extend(
-                {'stock_code': r['stock_id'], 'ex_date': _parse_iso_date(r['date']),
-                 'before_price': r.get('before_price'), 'filled': None}
-                for r in rows if r['stock_id'] in valid
-            )
+        records = [
+            {'stock_code': r['stock_id'], 'ex_date': _parse_iso_date(r['date']),
+             'before_price': r.get('before_price'), 'filled': None}
+            for r in _finmind_daily_rows('TaiwanStockDividendResult', end, lookback_days, valid)
+        ]
         if records:
             # OR IGNORE: keep whatever `filled` an existing event already has,
             # only insert events we haven't seen before.
@@ -1778,19 +1775,21 @@ def crawl_finmind_dividend_result(date_str: str, lookback_days: int = 14):
         db.close()
 
 
-def crawl_finmind_valuation(date_str: str):
+def crawl_finmind_valuation(date_str: str, lookback_days: int = 3):
     """PER/PBR/殖利率寫回 daily_prices。用 UPDATE-only（不是 OR REPLACE），
-    避免覆蓋掉當天已寫入的 OHLCV 欄位。date_str: YYYYMMDD。"""
-    iso = f'{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}'
+    避免覆蓋掉當天已寫入的 OHLCV 欄位。UPDATE 對還沒有當天 daily_prices 列的
+    股票會靜默影響 0 筆（例如當天股價爬蟲還沒跑完就先跑到這裡）——預設回看
+    3 天，讓前幾天漏掉的 PER/PBR 有機會在後續幾次執行中自動補上，不需要
+    額外的一次性補值 job。date_str: YYYYMMDD。"""
+    end = datetime.strptime(date_str, '%Y%m%d').date()
     _log('finmind_valuation', 'running', date_str)
     db = SessionLocal()
     try:
         valid = _finmind_valid_codes(db)
-        rows = finmind_client.fetch('TaiwanStockPER', start_date=iso, end_date=iso)
         records = [
             {'stock_code': r['stock_id'], 'date': r['date'],
              'per': r.get('PER'), 'pbr': r.get('PBR'), 'dividend_yield': r.get('dividend_yield')}
-            for r in rows if r['stock_id'] in valid
+            for r in _finmind_daily_rows('TaiwanStockPER', end, lookback_days, valid)
         ]
         if records:
             db.execute(text('''

@@ -81,23 +81,31 @@ def _quick_ratio_series(q_list):
 
 def _turnover_days(q_list, balance_field, flow_field, period_days=91):
     """Avg-balance turnover days per quarter: needs this + prior quarter's
-    balance, so yields one fewer point than len(q_list)."""
+    balance, so yields one fewer point than len(q_list). Index-aligned with
+    q_list (None where not computable) — some callers read index 0 as
+    "latest quarter" (e.g. for a YoY comparison), which a skip-don't-append
+    would silently shift onto a stale quarter."""
     out = []
     for i in range(len(q_list) - 1):
         cur, prev = q_list[i], q_list[i + 1]
         bal_cur, bal_prev = cur.get(balance_field), prev.get(balance_field)
         flow = cur.get(flow_field)
         if bal_cur is None or bal_prev is None or not flow:
+            out.append(None)
             continue
         out.append((bal_cur + bal_prev) / 2 / abs(flow) * period_days)
     return out
 
 
 def _yoy_diff(series, lag=4):
-    """series[i] - series[i+lag], series indexed newest-first."""
+    """series[i] - series[i+lag], series indexed newest-first. Output stays
+    index-aligned with the input (None where not computable) — callers read
+    index 0 as "latest quarter's YoY"; silently dropping unavailable entries
+    would shift that read onto a stale, unlabeled older quarter instead."""
     out = []
     for i in range(len(series)):
         if i + lag >= len(series) or series[i] is None or series[i + lag] is None:
+            out.append(None)
             continue
         out.append(series[i] - series[i + lag])
     return out
@@ -432,11 +440,11 @@ def score_flag888_1(ctx):
 
     s.award('月營收年增率>0', ctx['revenue_yoy'] > 0 if ctx['revenue_yoy'] is not None else None, 10)
     gm_yoy = _yoy_diff(gm)
-    s.award('毛利率年增率>0', gm_yoy[0] > 0 if gm_yoy else None, 30)
+    s.award('毛利率年增率>0', gm_yoy[0] > 0 if gm_yoy and gm_yoy[0] is not None else None, 30)
     inv_yoy = _yoy_diff([-d if d is not None else None for d in inv_days])  # turnover rate ~ -days
-    s.award('存貨週轉率年增率>0', inv_yoy[0] > 0 if inv_yoy else None, 30)
+    s.award('存貨週轉率年增率>0', inv_yoy[0] > 0 if inv_yoy and inv_yoy[0] is not None else None, 30)
     roe_yoy = _yoy_diff(roe)
-    s.award('ROE年增率>0', roe_yoy[0] > 0 if roe_yoy else None, 20)
+    s.award('ROE年增率>0', roe_yoy[0] > 0 if roe_yoy and roe_yoy[0] is not None else None, 20)
     inst_today = ctx['inst'][0] if ctx['inst'] else None
     s.award('法人買超>0', (inst_today['foreign_net'] + inst_today['trust_net'] + inst_today['dealer_net'] > 0)
             if inst_today else None, 10)
@@ -453,7 +461,7 @@ def score_flag888_2(ctx):
     latest_year = years[0] if years else None
     annual_eps = None
     if latest_year:
-        annual_eps = _mean_sum_eps(q, latest_year)
+        annual_eps = _annual_eps_sum(q, latest_year)
     div_this_year = div_totals[0] if div_totals else None
     payout = (div_this_year / annual_eps * 100) if (div_this_year is not None and annual_eps) else None
     debt_ratio = _mean(_ratio_series(q[:8], 'liabilities', 'total_assets'))
@@ -465,7 +473,7 @@ def score_flag888_2(ctx):
     s.award('董監持股>12%（無公開資料來源，未列入評分）', None, 20)
     s.award('負債比<50%', debt_ratio < 50 if debt_ratio is not None else None, 20)
     s.award('近5年平均ROE>15%', roe_5y > 15 if roe_5y is not None else None, 10)
-    s.award('近4季ROE年增率>0', roe_yoy[0] > 0 if roe_yoy else None, 10)
+    s.award('近4季ROE年增率>0', roe_yoy[0] > 0 if roe_yoy and roe_yoy[0] is not None else None, 10)
     s.award('本益比<=15倍', ctx['per'] <= 15 if ctx['per'] is not None else None, 10)
     s.award('現金殖利率>6.67%', ctx['dividend_yield'] > 6.67 if ctx['dividend_yield'] is not None else None, 10)
     return s.result()
@@ -488,15 +496,20 @@ def score_flag888_3(ctx):
     ni0 = q[0].get('net_income') if q else None
     ltb0 = q[0].get('long_term_borrowings') if q else None
 
+    roa_yoy = _yoy_diff(roa)
+    current_ratio_yoy = _yoy_diff(current_ratio)
+    gm_yoy = _yoy_diff(gm)
+    asset_turnover_yoy = _yoy_diff(asset_turnover)
+
     s.award('季EPS>0', q[0]['eps'] > 0 if q and q[0].get('eps') is not None else None, 10)
-    s.award('ROA年增率>0', _yoy_diff(roa)[0] > 0 if _yoy_diff(roa) else None, 10)
+    s.award('ROA年增率>0', roa_yoy[0] > 0 if roa_yoy and roa_yoy[0] is not None else None, 10)
     s.award('季營業現金流入>0', ocf0 > 0 if ocf0 is not None else None, 10)
     s.award('營業現金流>淨利', (ocf0 > ni0) if (ocf0 is not None and ni0 is not None) else None, 10)
     s.award('長期借款<=0', ltb0 <= 0 if ltb0 is not None else None, 10)
-    s.award('流動比年增率>0', _yoy_diff(current_ratio)[0] > 0 if _yoy_diff(current_ratio) else None, 10)
-    s.award('股本年增率<=0', cap_stock_yoy[0] <= 0 if cap_stock_yoy else None, 10)
-    s.award('毛利率年增率>0', _yoy_diff(gm)[0] > 0 if _yoy_diff(gm) else None, 10)
-    s.award('資產週轉率年增率>0', _yoy_diff(asset_turnover)[0] > 0 if _yoy_diff(asset_turnover) else None, 10)
+    s.award('流動比年增率>0', current_ratio_yoy[0] > 0 if current_ratio_yoy and current_ratio_yoy[0] is not None else None, 10)
+    s.award('股本年增率<=0', cap_stock_yoy[0] <= 0 if cap_stock_yoy and cap_stock_yoy[0] is not None else None, 10)
+    s.award('毛利率年增率>0', gm_yoy[0] > 0 if gm_yoy and gm_yoy[0] is not None else None, 10)
+    s.award('資產週轉率年增率>0', asset_turnover_yoy[0] > 0 if asset_turnover_yoy and asset_turnover_yoy[0] is not None else None, 10)
     s.award('法人買超>0', (inst_today['foreign_net'] + inst_today['trust_net'] + inst_today['dealer_net'] > 0)
             if inst_today else None, 10)
     return s.result()
@@ -509,7 +522,7 @@ def score_flag888_4(ctx):
     div_totals = [ctx['div_by_year'][y]['cash'] + ctx['div_by_year'][y]['stock'] for y in years]
     s.require('近10年股息>0', bool(years) and all(v > 0 for v in div_totals))
 
-    events = ctx['div_fill_events'][:5 * 2]  # ~5yr, ~2 payouts/yr typical
+    # ctx['div_fill_events'] is already limited to the last 5 years (see _build_context)
     known = [e['filled'] for e in ctx['div_fill_events'] if e['filled'] is not None]
     fill_rate = (sum(known) / len(known) * 100) if known else None
 
@@ -522,9 +535,11 @@ def score_flag888_4(ctx):
         op_income_ttm_yoy = ttm - ttm_prev
     div_yoy = (div_totals[0] - div_totals[1]) if len(div_totals) >= 2 else None
 
+    gm_yoy = _yoy_diff(gm)
+    op_margin_yoy = _yoy_diff(op_margin)
     s.award('近5年填息機率>80%', fill_rate > 80 if fill_rate is not None else None, 70)
-    s.award('毛利率年增率>0', _yoy_diff(gm)[0] > 0 if _yoy_diff(gm) else None, 5)
-    s.award('營業利益率年增率>0', _yoy_diff(op_margin)[0] > 0 if _yoy_diff(op_margin) else None, 5)
+    s.award('毛利率年增率>0', gm_yoy[0] > 0 if gm_yoy and gm_yoy[0] is not None else None, 5)
+    s.award('營業利益率年增率>0', op_margin_yoy[0] > 0 if op_margin_yoy and op_margin_yoy[0] is not None else None, 5)
     s.award('近3月平均營收>近12月平均', (ctx['rev3m_avg'] > ctx['rev12m_avg'])
             if (ctx['rev3m_avg'] is not None and ctx['rev12m_avg'] is not None) else None, 5)
     s.award('近4季營業利益合計年增率>0', op_income_ttm_yoy > 0 if op_income_ttm_yoy is not None else None, 5)
@@ -532,7 +547,9 @@ def score_flag888_4(ctx):
     return s.result()
 
 
-def _mean_sum_eps(q, year):
+def _annual_eps_sum(q, year):
+    """Sum of a stock's quarterly EPS for one calendar year — an approximation
+    of annual EPS (undercounts if a quarter hasn't been disclosed yet)."""
     vals = [r.get('eps') for r in q if r.get('year') == year and r.get('eps') is not None]
     return sum(vals) if vals else None
 
@@ -542,7 +559,6 @@ def _mean_sum_eps(q, year):
 def score_guyu(ctx):
     q = ctx['q']
     s = ScoreCard()
-    op_income_yoy = _yoy_diff([r.get('operating_income') for r in q])
     op_yoy_pct = []
     for i in range(len(q)):
         if i + 4 < len(q) and q[i].get('operating_income') is not None and q[i + 4].get('operating_income'):
@@ -584,7 +600,7 @@ def score_guyu(ctx):
     s.award('本業收入比介於80~120', (80 <= mb0 <= 120) if mb0 is not None else None, 15)
     s.award('本業收入比介於90~120', (90 <= mb0 <= 120) if mb0 is not None else None, 3)
     years = sorted(ctx['div_by_year'], reverse=True)[:1]
-    latest_eps_annual = _mean_sum_eps(q, years[0]) if years else None
+    latest_eps_annual = _annual_eps_sum(q, years[0]) if years else None
     div0 = (ctx['div_by_year'][years[0]]['cash'] + ctx['div_by_year'][years[0]]['stock']) if years else None
     payout0 = (div0 / latest_eps_annual * 100) if (div0 is not None and latest_eps_annual) else None
     s.award('股息發放率>=50%', payout0 >= 50 if payout0 is not None else None, 5)
@@ -614,13 +630,16 @@ def score_laoniu(ctx):
     capex7 = [r.get('capex') for r in q[:28]]
     fcf7 = [(o + c) if (o is not None and c is not None) else None for o, c in zip(ocf7, capex7)]
 
-    s.award('淨利年增率>0', ni_yoy[0] > 0 if ni_yoy else None, 6)
-    s.award('近似：累積淨利年增率>0（用單季年增代替）', ni_yoy[0] > 0 if ni_yoy else None, 6, approx=True)
+    ni_yoy_ok = ni_yoy[0] > 0 if ni_yoy and ni_yoy[0] is not None else None
+    s.award('淨利年增率>0', ni_yoy_ok, 6)
+    s.award('近似：累積淨利年增率>0（用單季年增代替）', ni_yoy_ok, 6, approx=True)
     oi0, pretax0 = (q[0].get('operating_income'), q[0].get('pretax_income')) if q else (None, None)
     non_op = (pretax0 - oi0) if (oi0 is not None and pretax0 is not None) else None
     s.award('近4季營業利益>業外損益', (oi0 > non_op) if (oi0 is not None and non_op is not None) else None, 3)
-    s.award('季毛利率年增率>0', _yoy_diff(gm)[0] > 0 if _yoy_diff(gm) else None, 4)
-    s.award('季營益率年增率>0', _yoy_diff(op_margin)[0] > 0 if _yoy_diff(op_margin) else None, 10)
+    gm_yoy = _yoy_diff(gm)
+    op_margin_yoy = _yoy_diff(op_margin)
+    s.award('季毛利率年增率>0', gm_yoy[0] > 0 if gm_yoy and gm_yoy[0] is not None else None, 4)
+    s.award('季營益率年增率>0', op_margin_yoy[0] > 0 if op_margin_yoy and op_margin_yoy[0] is not None else None, 10)
     ocf_pos = sum(1 for v in ocf7 if v is not None and v > 0)
     s.award_count('近似：營業現金流入次數（用近7季代替近7年）', ocf_pos if ocf7 else None, 7, approx=True)
     fcf_pos = sum(1 for v in fcf7 if v is not None and v > 0)
@@ -629,9 +648,10 @@ def score_laoniu(ctx):
 
     eps4 = [r.get('eps') for r in q[:4]]
     ttm_eps_sum = sum(v for v in eps4 if v is not None) if any(v is not None for v in eps4) else None
-    payout2 = [div_totals_5[i] / _mean_sum_eps(q, div5[i]) * 100
-               if (i < len(div5) and _mean_sum_eps(q, div5[i])) else None
-               for i in range(min(2, len(div5)))]
+    payout2 = []
+    for i, y in enumerate(div5[:2]):
+        annual_eps = _annual_eps_sum(q, y)
+        payout2.append(div_totals_5[i] / annual_eps * 100 if annual_eps else None)
     payout2_valid = [p for p in payout2 if p is not None]
     avg_payout2 = _mean(payout2_valid) if payout2_valid else None
     yield_metric = (ttm_eps_sum * (avg_payout2 / 100) / ctx['close'] * 100
