@@ -167,9 +167,9 @@ def start():
     # Q4 (Oct–Dec): all of March of the following year (deadline Mar 31)
     _scheduler.add_job(lambda: _quarterly_job(4), CronTrigger(month=3,  hour=23, minute=0))
 
-    # 達人選股 (FinMind): daily incremental crawl + score recompute, 02:00 —
-    # after prices/revenue/announcements have all run for the day.
-    _scheduler.add_job(_finmind_job, CronTrigger(hour=2, minute=0))
+    # 達人選股 (FinMind): daily incremental crawl + score recompute, 17:00 —
+    # after the day's price crawls (14:00/15:00) and watchdog window.
+    _scheduler.add_job(_finmind_job, CronTrigger(hour=17, minute=0))
 
     # 達人選股 financial_extra: same disclosure-month cadence as the official
     # quarterly job, 30 min later.
