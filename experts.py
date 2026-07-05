@@ -97,6 +97,21 @@ def _turnover_days(q_list, balance_field, flow_field, period_days=91):
     return out
 
 
+def _consecutive_dividend_years(div_by_year, n):
+    """True consecutive calendar years ending last year — no gaps allowed.
+    A year with no dividend_policy row at all (company skipped a payout)
+    fails this just as much as a row with a non-positive total; the looser
+    "however many years we happen to have data for" check let short-history
+    stocks pass trivially (confirmed against real data: 1518/1982 passed
+    the loose version vs 400/1982 for a true 5-year streak)."""
+    this_year = datetime.now(_TZ).year
+    for y in range(this_year - 1, this_year - 1 - n, -1):
+        entry = div_by_year.get(y)
+        if not entry or (entry['cash'] + entry['stock']) <= 0:
+            return False
+    return True
+
+
 def _yoy_diff(series, lag=4):
     """series[i] - series[i+lag], series indexed newest-first. Output stays
     index-aligned with the input (None where not computable) — callers read
@@ -458,7 +473,7 @@ def score_flag888_2(ctx):
     s = ScoreCard()
     years = sorted(ctx['div_by_year'], reverse=True)[:10]
     div_totals = [ctx['div_by_year'][y]['cash'] + ctx['div_by_year'][y]['stock'] for y in years]
-    s.require('近10年股息>0', bool(years) and all(v > 0 for v in div_totals))
+    s.require('連續5年股息>0', _consecutive_dividend_years(ctx['div_by_year'], 5))
 
     latest_year = years[0] if years else None
     annual_eps = None
@@ -522,7 +537,7 @@ def score_flag888_4(ctx):
     s = ScoreCard()
     years = sorted(ctx['div_by_year'], reverse=True)[:10]
     div_totals = [ctx['div_by_year'][y]['cash'] + ctx['div_by_year'][y]['stock'] for y in years]
-    s.require('近10年股息>0', bool(years) and all(v > 0 for v in div_totals))
+    s.require('連續5年股息>0', _consecutive_dividend_years(ctx['div_by_year'], 5))
 
     # ctx['div_fill_events'] is already limited to the last 5 years (see _build_context)
     known = [e['filled'] for e in ctx['div_fill_events'] if e['filled'] is not None]
@@ -620,7 +635,7 @@ def score_laoniu(ctx):
     eps3 = [r.get('eps') for r in q[:12] if r.get('eps') is not None][:12]
 
     s.require('成交量>100張', ctx['volume'] is not None and ctx['volume'] > 100_000)
-    s.require('近5年股利>0', len(div5) >= 1 and all(v > 0 for v in div_totals_5))
+    s.require('連續5年股利>0', _consecutive_dividend_years(ctx['div_by_year'], 5))
     s.require('近3年EPS>0', bool(eps3) and all(v > 0 for v in eps3))
     s.require('營收年增率>0', ctx['revenue_yoy'] is not None and ctx['revenue_yoy'] > 0)
 
