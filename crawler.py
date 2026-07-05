@@ -199,7 +199,12 @@ def crawl_stock_list():
         for mode, market in [('2', 'TWSE'), ('4', 'TPEX')]:
             url = f'https://isin.twse.com.tw/isin/C_public.jsp?strMode={mode}'
             resp = _get(url, timeout=30)
-            resp.encoding = 'big5'
+            # Python's plain 'big5' codec can't even encode/decode some real
+            # company-name characters (e.g. 碁, used by half the Acer group's
+            # subsidiaries — 宏碁/建碁/啟碁/展碁國際/...) — verified it raises
+            # UnicodeEncodeError. 'cp950' is the fuller Big5 code page TWSE's
+            # site actually uses and round-trips these correctly.
+            resp.encoding = 'cp950'
             soup = BeautifulSoup(resp.text, 'lxml')
 
             table = soup.find('table', class_='h4')
