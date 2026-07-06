@@ -101,6 +101,12 @@ def _finmind_job():
         except Exception as e:
             logger.error('FinMind job step %s failed: %s', fn.__name__, e)
     try:
+        # TWSE/TPEX OpenAPI, not FinMind — updates monthly upstream but cheap
+        # enough (2 HTTP calls) to just refresh daily alongside everything else.
+        crawler.crawl_director_holdings()
+    except Exception as e:
+        logger.error('crawl_director_holdings failed: %s', e)
+    try:
         experts.compute_expert_scores()
     except Exception as e:
         logger.error('compute_expert_scores failed: %s', e)

@@ -22,7 +22,7 @@ from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, Announcement, StockAiAnalysis,
     InstitutionalTrade, HoldingConcentration, FinancialExtra,
-    DividendPolicy, DividendFillEvent,
+    DividendPolicy, DividendFillEvent, DirectorHolding,
 )
 import finmind_client
 
@@ -1830,6 +1830,109 @@ def crawl_finmind_valuation(date_str: str, lookback_days: int = 3):
         db.rollback()
         _log('finmind_valuation', 'failed', f'{date_str}: {e}')
         logger.exception('crawl_finmind_valuation failed for %s', date_str)
+        raise
+    finally:
+        db.close()
+
+
+# ── 董監持股（TWSE/TPEX OpenAPI，免金鑰） ──────────────────────────────────────
+# 每次呼叫回傳當下最新一期全市場快照（月更新，不能查歷史日期），所以跟
+# FinMind 那組不同，這裡沒有 date_str 參數。
+
+_DIRECTOR_TITLE_RE = re.compile(r'董事|監察人')
+
+
+def _director_title_counts(rows):
+    """Sum 目前持股 across board-seat holders ("...本人" 職稱, excluding
+    proxies "...之法人代表人" whose shares are already counted under the
+    corporate holder's own row, and non-board roles like 經理人/大股東本人).
+
+    One shareholder (individual or corporate) can hold multiple board seats
+    at once (e.g. a holding company occupying both 董事長 and two 董事 seats)
+    — the raw feed repeats that shareholder's full share count once per seat,
+    so summing every row would multiply-count them. Dedup by (company, 姓名)
+    first — same name within one company always reports the same share
+    count for the same seats — then sum the deduped per-shareholder totals."""
+    by_stock_name = {}
+    for r in rows:
+        title = r.get('職稱', '')
+        if not title.endswith('本人') or not _DIRECTOR_TITLE_RE.search(title):
+            continue
+        code, name = r.get('公司代號'), r.get('姓名')
+        shares = _parse_num(r.get('目前持股'))
+        if code is None or name is None or shares is None:
+            continue
+        by_stock_name[(code, name)] = shares
+
+    out = {}
+    for (code, _name), shares in by_stock_name.items():
+        out[code] = out.get(code, 0) + shares
+    return out
+
+
+def crawl_director_holdings():
+    """董監持股比例：上市 TWSE OpenAPI（opendata/t187ap11_L）+ 上櫃 TPEX
+    OpenAPI（mopsfin_t187ap11_O）。已發行股數用 financial_extra.capital_stock
+    反推（股本÷面額10元），絕大多數台股適用，面額非10元的少數股票會不準。"""
+    _log('director_holdings', 'running')
+    db = SessionLocal()
+    try:
+        valid = _finmind_valid_codes(db)
+        counts = {}
+        year_month = None
+        for url in (
+            'https://openapi.twse.com.tw/v1/opendata/t187ap11_L',
+            'https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap11_O',
+        ):
+            resp = _get(url, headers={'Accept': 'application/json'}, timeout=60)
+            rows = resp.json()
+            if rows and year_month is None:
+                year_month = rows[0].get('資料年月')
+            for code, shares in _director_title_counts(rows).items():
+                if code in valid:
+                    counts[code] = counts.get(code, 0) + shares
+            _jitter(0.5)
+
+        if not counts or not year_month:
+            _log('director_holdings', 'success', '0 records (empty response)')
+            return 0
+
+        # Latest capital_stock per stock (already 千元, see crawl_finmind_financials)
+        cap_rows = db.execute(text('''
+            SELECT fe.stock_code, fe.capital_stock FROM financial_extra fe
+            INNER JOIN (SELECT stock_code, MAX(year*10+quarter) AS mx FROM financial_extra GROUP BY stock_code) lt
+              ON lt.stock_code = fe.stock_code AND (fe.year*10+fe.quarter) = lt.mx
+        ''')).fetchall()
+        capital_stock = {code: cs for code, cs in cap_rows if cs is not None}
+
+        records = []
+        for code, director_shares in counts.items():
+            cs = capital_stock.get(code)
+            shares_outstanding = int(cs * 1000 / 10) if cs is not None else None
+            pct = (director_shares / shares_outstanding * 100) if shares_outstanding else None
+            if pct is not None and pct > 100:
+                # Impossible — capital_stock is stale/wrong or this stock's
+                # face value isn't NT$10 (the assumption above breaks down).
+                # Don't store a number that can't be real.
+                shares_outstanding = None
+                pct = None
+            records.append({
+                'stock_code': code, 'year_month': year_month,
+                'director_shares': director_shares,
+                'shares_outstanding': shares_outstanding,
+                'holding_pct': pct,
+                'updated_at': datetime.now(_TZ),
+            })
+
+        if records:
+            db.execute(DirectorHolding.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log('director_holdings', 'success', f'{year_month}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('director_holdings', 'failed', str(e))
+        logger.exception('crawl_director_holdings failed')
         raise
     finally:
         db.close()

@@ -13,9 +13,12 @@ Known, deliberate simplifications (all discussed with the project owner):
     undocumented formulas. The 10 scoring lines built on them are collapsed
     into 3 clearly-labeled approximate checks (same total point value) using
     technical.py's `ema13_support` / `week_low_4` / `month_low_20`.
-  - 888 標準2's 董監持股 scoring item has no public data source (FinMind
-    doesn't carry it) — skipped entirely, not counted toward score or
-    max_score.
+  - 888 標準2's 董監持股 comes from TWSE/TPEX OpenAPI (not FinMind, which
+    doesn't carry it), via crawl_director_holdings() → director_holdings.
+    shares_outstanding is derived from capital_stock ÷ NT$10 par value —
+    wrong for the handful of stocks with a different par value (crawler
+    drops any resulting ratio over 100% rather than store an impossible
+    number).
   - "累計月營收年增率" (股泰) and "累積淨利年增率" (老牛) reuse the single
     latest period's YoY instead of a true cumulative-to-date YoY (no
     cumulative-revenue/profit column exists in this project's schema).
@@ -30,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
-from database import SessionLocal, Stock, ExpertScore
+from database import SessionLocal, Stock, ExpertScore, DirectorHolding
 import technical
 
 logger = logging.getLogger(__name__)
@@ -192,7 +195,7 @@ def _build_context(db):
             'per': None, 'pbr': None, 'pbr_avg_hist': None, 'dividend_yield': None,
             'revenue_yoy': None, 'rev_yoy_recent': [], 'rev3m_avg': None, 'rev12m_avg': None,
             'q': [], 'inst': [], 'hold': [], 'div_by_year': {}, 'div_fill_events': [],
-            'tech': {},
+            'tech': {}, 'director_holding_pct': None,
         }
         for code, name, market, industry in
         db.query(Stock.code, Stock.name, Stock.market, Stock.industry).all()
@@ -227,6 +230,15 @@ def _build_context(db):
         c = ctx.get(r['stock_code'])
         if c:
             c['pbr_avg_hist'] = r['v']
+
+    for r in db.execute(text('''
+        SELECT dh.stock_code, dh.holding_pct FROM director_holdings dh
+        INNER JOIN (SELECT stock_code, MAX(year_month) AS mx FROM director_holdings GROUP BY stock_code) lt
+          ON lt.stock_code = dh.stock_code AND dh.year_month = lt.mx
+    ''')).mappings():
+        c = ctx.get(r['stock_code'])
+        if c:
+            c['director_holding_pct'] = r['holding_pct']
 
     rev_rows = {}
     for r in db.execute(text('''
@@ -487,7 +499,7 @@ def score_flag888_2(ctx):
     roe_yoy = _yoy_diff(roe)
 
     s.award('股息配發率>70%', payout > 70 if payout is not None else None, 20)
-    s.award('董監持股>12%（無公開資料來源，未列入評分）', None, 20)
+    s.award('董監持股>12%', ctx['director_holding_pct'] > 12 if ctx['director_holding_pct'] is not None else None, 20)
     s.award('負債比<50%', debt_ratio < 50 if debt_ratio is not None else None, 20)
     s.award('近5年平均ROE>15%', roe_5y > 15 if roe_5y is not None else None, 10)
     s.award('近4季ROE年增率>0', roe_yoy[0] > 0 if roe_yoy and roe_yoy[0] is not None else None, 10)

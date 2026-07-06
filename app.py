@@ -713,6 +713,9 @@ def api_run_crawler(task):
     elif task == 'finmind_data':
         _run_bg(sched._finmind_job)
 
+    elif task == 'director_holdings':
+        _run_bg(crawler.crawl_director_holdings)
+
     elif task == 'expert_scores':
         _run_bg(experts.compute_expert_scores)
 

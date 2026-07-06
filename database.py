@@ -234,6 +234,26 @@ class ExpertScore(Base):
     computed_at   = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
+class DirectorHolding(Base):
+    """董監持股比例，來源 TWSE OpenAPI（opendata/t187ap11_L，上市）+ TPEX
+    OpenAPI（mopsfin_t187ap11_O，上櫃）。兩個都是免金鑰的官方公開資料，每次
+    呼叫回傳當下最新一期全市場快照（月更新），不能用日期查歷史。
+    director_shares 只加總「職稱」為董事長/副董事長/常務董事/董事/獨立董事/
+    監察人「本人」的列（排除法人代表列——股份已算在法人本身那筆、本人這裡是
+    0，也排除總經理/副總經理/財會主管等經理人列、以及非董監的大股東本人列）。
+    shares_outstanding 用 financial_extra.capital_stock 反推（股本÷面額10元，
+    絕大多數台股適用，面額非10元的少數股票會不準）。"""
+    __tablename__ = 'director_holdings'
+    __table_args__ = (UniqueConstraint('stock_code', 'year_month'),)
+    id                 = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code         = Column(String(10), nullable=False)
+    year_month         = Column(String(6), nullable=False)   # 民國年月，如 "11505"，比照來源本身格式
+    director_shares    = Column(BigInteger)
+    shares_outstanding = Column(BigInteger)
+    holding_pct        = Column(Float)
+    updated_at         = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
+
+
 class User(Base):
     __tablename__ = 'users'
     id            = Column(Integer, primary_key=True, autoincrement=True)
