@@ -36,7 +36,16 @@ def _set_sqlite_pragma(dbapi_conn, _):
     # journal_mode is stored in the db file itself, but PRAGMA is idempotent
     # so setting it on every connect is harmless and self-healing if the
     # file is ever replaced/restored without WAL.
-    cur.execute('PRAGMA journal_mode=WAL')
+    # BUT: WAL needs shared-memory (mmap) support from the filesystem the db
+    # file lives on, and fails outright on some network-attached volumes
+    # (exactly the kind a PaaS persistent volume often is) — wrapped so a
+    # deployment whose volume doesn't support it still boots on the plain
+    # rollback journal instead of crashing every worker at connect time,
+    # before any log line can even be written.
+    try:
+        cur.execute('PRAGMA journal_mode=WAL')
+    except Exception:
+        pass
     # Belt-and-suspenders: wait instead of immediately raising "database is
     # locked" for the cases WAL doesn't fully cover (two simultaneous writers).
     cur.execute('PRAGMA busy_timeout=30000')
