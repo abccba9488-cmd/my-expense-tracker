@@ -334,14 +334,9 @@
                 <th>代號</th>
                 <th>名稱</th>
                 <th>產業</th>
-                <th>起始股價</th>
-                <th>收盤價</th>
-                <th>價差%</th>
-                <th>漲跌幅%</th>
+                <th>符合選股標準</th>
                 <th>評分</th>
                 <th>評分明細</th>
-                <th>資料日期</th>
-                <th>20日均</th>
               </tr>
             </thead>
             <tbody id="expert-tbody"></tbody>
@@ -365,13 +360,7 @@
   <!-- 個股詳情 -->
   <div id="detail-view" class="view">
     <div class="container">
-      <div class="detail-nav-bar">
-        <button class="back-btn" onclick="showListView()">← 返回列表</button>
-        <div class="detail-nav-btns hidden" id="detail-nav-btns">
-          <button class="btn btn-sm" id="prev-stock-btn" onclick="goToAdjacentStock(-1)">← 上一檔</button>
-          <button class="btn btn-sm" id="next-stock-btn" onclick="goToAdjacentStock(1)">下一檔 →</button>
-        </div>
-      </div>
+      <button class="back-btn" onclick="showListView()">← 返回列表</button>
 
       <div class="detail-header">
         <h2 id="d-name"></h2>
@@ -389,16 +378,6 @@
           <button class="btn btn-sm" id="stock-ai-btn" onclick="runStockAiAnalysis()">重新分析（會產生 API 費用）</button>
         </div>
         <div id="stock-ai-body" class="stock-ai-body">尚無分析，點擊「重新分析」開始</div>
-      </div>
-
-      <!-- 達人選股評分 -->
-      <div class="card hidden" id="stock-expert-card">
-        <div class="card-header">
-          <h3>🎯 達人選股評分</h3>
-        </div>
-        <div class="filter-group" id="stock-expert-tabs"></div>
-        <div id="stock-expert-criteria" class="expert-criteria-list"></div>
-        <div class="chart-wrap" id="stock-expert-chart-wrap"><canvas id="stock-expert-chart"></canvas></div>
       </div>
 
       <!-- 股價圖 -->

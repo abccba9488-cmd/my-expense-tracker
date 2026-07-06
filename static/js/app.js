@@ -217,10 +217,7 @@ function renderStockTable() {
     $('#stocks-table tbody').on('click', 'td', function() {
       const $link = $(this).find('[data-code]');
       const code = $link.data('code') || $(this).closest('tr').find('[data-code]').data('code');
-      if (code) {
-        setDetailNavContext(_dtOrderedCodes(mainDt, 0), String(code));
-        loadStockDetail(code);
-      }
+      if (code) loadStockDetail(code);
     });
   }
 }
@@ -261,45 +258,6 @@ document.getElementById('industry-filter').addEventListener('change', function()
 });
 
 /* ── Stock detail ── */
-/* ── Prev/next stock navigation within whichever list was clicked from ── */
-function _codeFromCell(html) {
-  const m = /data-code="([^"]+)"/.exec(html || '');
-  return m ? m[1] : null;
-}
-
-// DataTables' current filter+sort order (not just the current page), so
-// prev/next still makes sense after sorting a column or paginating.
-function _dtOrderedCodes(dt, codeColIndex) {
-  if (!dt) return [];
-  return dt.rows({ order: 'applied', search: 'applied' }).data().toArray()
-    .map(row => _codeFromCell(row[codeColIndex])).filter(Boolean);
-}
-
-function setDetailNavContext(codes, currentCode) {
-  state.detailNavList = codes;
-  state.detailNavIndex = codes.indexOf(currentCode);
-  updateDetailNavButtons();
-}
-
-function updateDetailNavButtons() {
-  const wrap = document.getElementById('detail-nav-btns');
-  const list = state.detailNavList || [];
-  const idx = state.detailNavIndex;
-  if (!list.length || idx < 0) { wrap.classList.add('hidden'); return; }
-  wrap.classList.remove('hidden');
-  document.getElementById('prev-stock-btn').disabled = idx <= 0;
-  document.getElementById('next-stock-btn').disabled = idx >= list.length - 1;
-}
-
-function goToAdjacentStock(delta) {
-  const list = state.detailNavList || [];
-  const newIdx = (state.detailNavIndex ?? -1) + delta;
-  if (newIdx < 0 || newIdx >= list.length) return;
-  state.detailNavIndex = newIdx;
-  loadStockDetail(list[newIdx]);
-  updateDetailNavButtons();
-}
-
 async function loadStockDetail(code) {
   code = String(code);
   state.currentCode = code;
@@ -325,7 +283,6 @@ async function loadStockDetail(code) {
   renderRevenueTable(revenues);
   renderEpsChart(financials);
   renderQuarterlyTable(financials);
-  loadStockExpertScores(code);
 
   if (state.user && state.user.is_admin) loadStockAiAnalysis(code);
 }
@@ -827,10 +784,7 @@ function renderStarTable() {
     $('#star-table tbody').on('click', 'td', function() {
       const code = $(this).find('[data-code]').data('code') ||
                    $(this).closest('tr').find('[data-code]').data('code');
-      if (code) {
-        setDetailNavContext(_dtOrderedCodes(starDt, 0), String(code));
-        loadStockDetail(code);
-      }
+      if (code) loadStockDetail(code);
     });
   }
 }
@@ -1023,10 +977,7 @@ function renderWlTable() {
     $('#wl-table tbody').on('click', 'td', function() {
       const code = $(this).find('[data-code]').data('code') ||
                    $(this).closest('tr').find('[data-code]').data('code');
-      if (code) {
-        setDetailNavContext(_dtOrderedCodes(wlDt, 1), String(code));
-        loadStockDetail(code);
-      }
+      if (code) loadStockDetail(code);
     });
   }
 }
@@ -1214,10 +1165,7 @@ function renderAnnTable() {
     ? _annData.map(renderAnnRow).join('')
     : '<tr><td colspan="14" class="ann-empty">近期無公告</td></tr>';
   tbody.querySelectorAll('[data-code]').forEach(el => {
-    el.addEventListener('click', () => {
-      setDetailNavContext([...new Set(_annData.map(a => a.stock_code))], el.dataset.code);
-      loadStockDetail(el.dataset.code);
-    });
+    el.addEventListener('click', () => loadStockDetail(el.dataset.code));
   });
   tbody.querySelectorAll('.ann-subject-link, .ann-rating-link').forEach(el => {
     el.addEventListener('click', () => openAnnModal(+el.dataset.idx));
@@ -1412,11 +1360,11 @@ function renderExpertTabs() {
 
 async function loadExpertDetail(key) {
   const tbody = document.getElementById('expert-tbody');
-  tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">載入中…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" class="ann-empty">載入中…</td></tr>';
   try {
     _expertData = await fetch(`/api/experts/${key}`).then(r => r.json());
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">載入失敗</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="ann-empty">載入失敗</td></tr>';
     return;
   }
   const passedCount = _expertData.filter(s => s.passed).length;
@@ -1427,36 +1375,25 @@ async function loadExpertDetail(key) {
 function renderExpertTable() {
   const tbody = document.getElementById('expert-tbody');
   if (!_expertData.length) {
-    tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>';
     return;
   }
   const rows = _expertData.filter(s => s.passed);
   tbody.innerHTML = rows.length
-    ? rows.map((s, i) => {
-        const p = state.allData.find(d => d.code === s.code) || {};
-        return `
+    ? rows.map((s, i) => `
         <tr>
           <td>${i + 1}</td>
           <td><span class="stock-link" data-code="${s.code}">${s.code}</span></td>
           <td><span class="stock-link" data-code="${s.code}">${s.name}</span></td>
           <td>${s.industry || '—'}</td>
-          <td class="num">${p.start_price != null ? fmt.price(p.start_price) : '—'}</td>
-          <td class="num">${p.close != null ? fmt.price(p.close) : '—'}</td>
-          <td class="num">${p.price_diff != null ? `<span class="${pctClass(p.price_diff)}">${fmt.pct(p.price_diff)}</span>` : '—'}</td>
-          <td class="num">${p.change_pct != null ? `<span class="${pctClass(p.change_pct)}">${fmt.pct(p.change_pct)}</span>` : '—'}</td>
+          <td class="td-center">✅</td>
           <td class="num">${s.score} / ${s.max_score}</td>
           <td class="td-center"><span class="ann-subject-link" data-idx="${_expertData.indexOf(s)}">查看明細</span></td>
-          <td>${p.price_date || '—'}</td>
-          <td class="td-left">${ma20Cell(p)[1]}</td>
         </tr>
-      `;
-      }).join('')
-    : '<tr><td colspan="12" class="ann-empty">目前沒有符合選股標準的個股</td></tr>';
+      `).join('')
+    : '<tr><td colspan="7" class="ann-empty">目前沒有符合選股標準的個股</td></tr>';
   tbody.querySelectorAll('[data-code]').forEach(el => {
-    el.addEventListener('click', () => {
-      setDetailNavContext(rows.map(s => s.code), el.dataset.code);
-      loadStockDetail(el.dataset.code);
-    });
+    el.addEventListener('click', () => loadStockDetail(el.dataset.code));
   });
   tbody.querySelectorAll('.ann-subject-link').forEach(el => {
     el.addEventListener('click', () => openExpertModal(+el.dataset.idx));
@@ -1487,98 +1424,6 @@ function openExpertModal(i) {
 
 function closeExpertModal() {
   document.getElementById('expert-modal').classList.add('hidden');
-}
-
-/* ── 個股詳情頁：達人選股評分圖表 ── */
-let _stockExpertData = [];
-let _stockExpertKey = null;
-
-async function loadStockExpertScores(code) {
-  const card = document.getElementById('stock-expert-card');
-  try {
-    _stockExpertData = await fetch(`/api/stocks/${code}/expert-scores`).then(r => r.json());
-  } catch (_) {
-    card.classList.add('hidden');
-    return;
-  }
-  const scored = _stockExpertData.filter(s => s.score != null);
-  if (!scored.length) { card.classList.add('hidden'); return; }
-  card.classList.remove('hidden');
-
-  // Default to the first ruleset this stock passed, else just the first one.
-  const preferred = scored.find(s => s.passed) || scored[0];
-  _stockExpertKey = preferred.expert_key;
-
-  document.getElementById('stock-expert-tabs').innerHTML = scored.map(s => `
-    <button class="filter-btn ${s.expert_key === _stockExpertKey ? 'active' : ''}" data-expert-key="${s.expert_key}">
-      ${s.passed ? '✅ ' : ''}${s.expert_label}（${s.score}/${s.max_score}）
-    </button>
-  `).join('');
-  document.querySelectorAll('#stock-expert-tabs [data-expert-key]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      _stockExpertKey = btn.dataset.expertKey;
-      document.querySelectorAll('#stock-expert-tabs [data-expert-key]').forEach(b =>
-        b.classList.toggle('active', b.dataset.expertKey === _stockExpertKey));
-      renderStockExpertDetail();
-    });
-  });
-  renderStockExpertDetail();
-}
-
-function renderStockExpertDetail() {
-  const s = _stockExpertData.find(x => x.expert_key === _stockExpertKey);
-  const critEl = document.getElementById('stock-expert-criteria');
-  if (!s || !s.breakdown.length) {
-    critEl.innerHTML = '<div class="ann-empty">尚無評分資料</div>';
-    if (state.stockExpertChart) { state.stockExpertChart.destroy(); state.stockExpertChart = null; }
-    return;
-  }
-  const metIcon = (met) => met === null ? '<span class="ann-dot-empty">—</span>' : (met ? '✅' : '❌');
-  const selectItems = s.breakdown.filter(b => b.type === 'select');
-  critEl.innerHTML = `
-    <div class="ann-modal-subject">選股標準（${s.passed ? '✅ 全部符合' : '❌ 未全部符合'}）</div>
-    <ul class="expert-criteria-list">
-      ${selectItems.map(b => `<li>${metIcon(b.met)} ${b.label}</li>`).join('')}
-    </ul>
-  `;
-  renderStockExpertChart(s.breakdown.filter(b => b.type === 'score'));
-}
-
-function renderStockExpertChart(scoreItems) {
-  const canvas = document.getElementById('stock-expert-chart');
-  if (state.stockExpertChart) { state.stockExpertChart.destroy(); state.stockExpertChart = null; }
-  if (!scoreItems.length) return;
-
-  const labels   = scoreItems.map(b => b.label.replace(/（[^）]*次）/, ''));
-  const gained   = scoreItems.map(b => b.met === null ? 0 : (b.gained != null ? b.gained : (b.met ? b.points : 0)));
-  const missing  = scoreItems.map((b, i) => Math.max(0, b.points - gained[i]));
-  const barColor = scoreItems.map(b => b.met === null ? getCssVar('--text2') : (b.met ? getCssVar('--pos') : getCssVar('--neg')));
-
-  document.getElementById('stock-expert-chart-wrap').style.height = `${Math.max(240, scoreItems.length * 26)}px`;
-
-  state.stockExpertChart = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: '取得分數', data: gained, backgroundColor: barColor, stack: 's' },
-        { label: '未取得/上限', data: missing, backgroundColor: getCssVar('--border'), stack: 's' },
-      ],
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: getCssVar('--text2'), boxWidth: 12 } },
-        tooltip: { backgroundColor: getCssVar('--bg3'), titleColor: getCssVar('--text'), bodyColor: getCssVar('--text2'), borderColor: getCssVar('--border'), borderWidth: 1 },
-      },
-      scales: {
-        x: { stacked: true, grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
-        y: { stacked: true, grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), font: { size: 11 } } },
-      },
-    },
-  });
 }
 
 /* ── Crawler status panel ── */
