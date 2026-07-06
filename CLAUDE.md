@@ -88,7 +88,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `dividend_policy` | `(stock_code, event_date)` | 逐筆股利分派事件（非年度加總），FinMind |
 | `dividend_fill_events` | `(stock_code, ex_date)` | 除權息事件 + 填息判斷，FinMind |
 | `director_holdings` | `(stock_code, year_month)` | 董監持股比例，TWSE/TPEX OpenAPI（非 FinMind） |
-| `expert_scores` | `(stock_code, expert_key)` | 達人選股每套規則最新一次計分快取，見下方「達人選股」章節 |
+| `expert_scores` | `(stock_code, expert_key)` | 達人選股每套規則最新一次計分快取；`entered_at`/`transition` 是唯二跨執行延續（不覆寫）的欄位，見下方「達人選股」章節 |
 | `users` | `id` | 會員帳號，`password_hash` 用 werkzeug |
 | `watchlists` | `id` | 屬於某 `user_id`，可多個 |
 | `watchlist_stocks` | `(watchlist_id, stock_code)` | 自選股關聯表 |
@@ -111,6 +111,8 @@ data/stocks.db         SQLite 資料庫（自動建立）
 8. `ALTER TABLE monthly_revenue ADD COLUMN turnaround_signal INTEGER`
 9. 回填現有每檔股票**最新一筆** `monthly_revenue` 的 `turnaround_signal`（用既有 `quarterly_financials` 資料算，不用重新爬）——新增欄位時舊資料全是 NULL，要等下次爬蟲跑才會重算，這個一次性回填讓欄位上線當下就有正確值，不用等
 10. `ALTER TABLE daily_prices ADD COLUMN per / pbr / dividend_yield REAL`（達人選股，FinMind `TaiwanStockPER`）
+11. `ALTER TABLE expert_scores ADD COLUMN entered_at DATE / transition VARCHAR(10)`（股泰多方/空方訊號的入榜日期＋翻轉標記，見「達人選股」章節）
+12. `backfill_price_change`：一次性回填 `daily_prices.change`/`change_pct`（某段期間曾因（已修復的）程式問題留空，用該股前一交易日收盤價回推補上，OHLCV 本身沒問題）
 
 ## _SUMMARY_SQL 欄位索引（r[0]–r[18]）
 
@@ -420,8 +422,9 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 ### 計分引擎（`experts.py`）
 
 - `ScoreCard`：`require(label, cond)` 是選股門檻（`passed` = 全部 `require` 皆真；輸入為 `None` 一律視為不通過，不放行無法驗證的股票）；`award(label, cond, points)` 是配分項，`cond=None` 時整項跳過不計入 `max_score`（資料不足不扣分，也不算分）；`award_count(label, achieved, max_occurrences, unit_points)` 是「每命中一次 +N 分，封頂 M 次」的漸進計分（如「近5日外資買超次數」）。
-- `_build_context(db)`：一次 bulk 查完全部表，組成 `{stock_code: ctx}`。**技術指標快照是逐股流式計算**（`daily_prices` 查詢本身已 `ORDER BY stock_code, date`，累積到換股票就 flush 該股的 `technical.snapshot()` 後捨棄），而不是先把全市場~2 年 OHLC 全部塞進記憶體再統一算——後者在 Zeabur 容器上會直接 OOM（~1,982 檔 × ~500 筆同時在記憶體是實測會爆的規模）。
-- `compute_expert_scores()`：對每檔股票跑全部 8 套規則，寫入 `expert_scores`（`INSERT OR REPLACE`，跟 `stock_ai_analysis` 同樣的「只存最新一筆快照，不留歷史」模式）。單一規則對單一股票算分丟例外時只記 log 跳過，不影響其他規則/股票。
+- `_build_context(db)`：一次 bulk 查完全部表，組成 `{stock_code: ctx}`。**技術指標快照是逐股流式計算**（`daily_prices` 查詢本身已 `ORDER BY stock_code, date`，累積到換股票就 flush 該股的 `technical.snapshot()` 後捨棄），而不是先把全市場~2 年 OHLC 全部塞進記憶體再統一算——後者在 Zeabur 容器上會直接 OOM（~1,982 檔 × ~500 筆同時在記憶體是實測會爆的規模）。**`per`/`pbr`/`dividend_yield` 刻意不跟 `close`/`volume` 綁同一個「最新一天」查詢**，而是另外抓「最近一筆這三欄實際有值」的資料列：`crawl_finmind_valuation` 排在股價爬蟲之後跑，且容許落後 1–3 天回補（見下方爬蟲章節），若跟 `close` 一樣強制要求同一天，只要當天估值資料還沒進來，888標準1（淨值比）/888標準3（殖利率）會瞬間全數判定不通過（曾經在這個確切原因下發生過 0/1982、1/1982 的假性全滅，已修復）。
+- `compute_expert_scores()`：對每檔股票跑全部 8 套規則，寫入 `expert_scores`（`INSERT OR REPLACE`，跟 `stock_ai_analysis` 同樣的「只存最新一筆快照，不留歷史」模式，**唯二例外是 `entered_at`/`transition`**）。單一規則對單一股票算分丟例外時只記 log 跳過，不影響其他規則/股票。
+- **`entered_at`/`transition`（僅股泰多方/空方訊號有意義）**：每次執行都先讀出覆寫前的舊列（`old_rows`），`passed` 狀態沒變就延續舊的 `entered_at`（入榜日期）；狀態改變（或該列第一次寫入/剛加欄位的 bootstrap）才把 `entered_at` 更新成當天。`transition` 只在 `gutai_bull`/`gutai_bear` 這對互斥規則、且是「真正的狀態翻轉」時才計算：進榜當下若「舊快照」發現該股正好在對面那個訊號上榜，記錄 `空轉多`/`多轉空`；bootstrap（欄位剛加入，`old.entered_at is None`）或非翻轉的正常首次進榜一律是 `None`，不會亂猜。
 
 ### API / 排程
 
@@ -429,6 +432,6 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 ### 前端
 
-- **`#expert-view`**（列表）：`#expert-tabs` 8 個規則切換鈕（`loadExperts()`/`renderExpertTabs()`），下方純表格 12 欄：排名/代號/名稱/產業/起始股價/收盤價/價差%/漲跌幅%/評分/評分明細/資料日期/20日均。點「評分明細」呼叫 `openExpertModal(i)` 開 `#expert-modal`，內容：頂部「總分 X/Y 分」大字標頭（`.stock-expert-total`）→ 選股標準 ✅/❌ 清單 → 評分明細標題 → `renderModalExpertChart()` 畫出的 Chart.js 橫向堆疊長條圖（每項：綠=取得分數，灰=未取得/上限；`met===null`（資料不足）顯示灰色）。
+- **`#expert-view`**（列表）：`#expert-tabs` 8 個規則切換鈕（`loadExperts()`/`renderExpertTabs()`），下方純表格 13 欄：排名/代號/名稱/產業/營收月份/起始股價/收盤價/價差%/漲跌幅%/評分/評分明細/資料日期/20日均。**`gutai_bull`/`gutai_bear` 這兩個分頁額外多兩欄**（入榜日期/轉換，來自 `expert_scores.entered_at`/`transition`）：`renderExpertTable()` 用 `_isGutaiKey(_expertKey)` 判斷，動態 toggle 這兩個 `<th>`（`#expert-th-entered`/`#expert-th-transition`，預設 `.hidden`）並在列資料多帶兩個 `<td>`，其他 6 套規則不顯示。點「評分明細」呼叫 `openExpertModal(i)` 開 `#expert-modal`，內容：頂部「總分 X/Y 分」大字標頭（`.stock-expert-total`）→ 選股標準 ✅/❌ 清單 → 評分明細標題 → `renderModalExpertChart()` 畫出的 Chart.js 橫向堆疊長條圖（每項：綠=取得分數，灰=未取得/上限；`met===null`（資料不足）顯示灰色）。
 - **`#detail-view` 達人選股評分卡**（`#stock-expert-card`）：`loadStockExpertScores(code)` 抓 `/api/stocks/<code>/expert-scores`，`#stock-expert-tabs` 列出該股所有已算出分數的規則（預設選第一個「通過」的，沒有則選第一個），`renderStockExpertDetail()` 一樣先畫「總分 X/Y 分」大字標頭，再選股標準清單，再呼叫 `renderStockExpertChart()`。**圖表繪製邏輯抽成共用的 `_renderExpertChart(scoreItems, canvasId, wrapId, chartKey)`**，`renderStockExpertChart`/`renderModalExpertChart` 只是帶入各自的 canvas/state key 呼叫它——確保列表 modal 跟詳情頁兩處的視覺化永遠同步；`state.stockExpertChart`/`state.modalExpertChart` 各自持有 Chart.js 實例，切換分頁/關閉彈窗時 `.destroy()` 再建新的，避免 canvas 重用衝突。
 - **總分一定要清楚顯示**：不論在列表的評分明細彈窗、還是詳情頁的評分卡，`.stock-expert-total`（大字、`--primary` 顏色數字）都放在選股標準清單「之前」，不是只靠分頁按鈕上的小字 `(X/Y)` 讓使用者自己找。
