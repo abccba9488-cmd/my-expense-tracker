@@ -217,7 +217,10 @@ function renderStockTable() {
     $('#stocks-table tbody').on('click', 'td', function() {
       const $link = $(this).find('[data-code]');
       const code = $link.data('code') || $(this).closest('tr').find('[data-code]').data('code');
-      if (code) loadStockDetail(code);
+      if (code) {
+        setDetailNavContext(_dtOrderedCodes(mainDt, 0), String(code));
+        loadStockDetail(code);
+      }
     });
   }
 }
@@ -258,6 +261,45 @@ document.getElementById('industry-filter').addEventListener('change', function()
 });
 
 /* ── Stock detail ── */
+/* ── Prev/next stock navigation within whichever list was clicked from ── */
+function _codeFromCell(html) {
+  const m = /data-code="([^"]+)"/.exec(html || '');
+  return m ? m[1] : null;
+}
+
+// DataTables' current filter+sort order (not just the current page), so
+// prev/next still makes sense after sorting a column or paginating.
+function _dtOrderedCodes(dt, codeColIndex) {
+  if (!dt) return [];
+  return dt.rows({ order: 'applied', search: 'applied' }).data().toArray()
+    .map(row => _codeFromCell(row[codeColIndex])).filter(Boolean);
+}
+
+function setDetailNavContext(codes, currentCode) {
+  state.detailNavList = codes;
+  state.detailNavIndex = codes.indexOf(currentCode);
+  updateDetailNavButtons();
+}
+
+function updateDetailNavButtons() {
+  const wrap = document.getElementById('detail-nav-btns');
+  const list = state.detailNavList || [];
+  const idx = state.detailNavIndex;
+  if (!list.length || idx < 0) { wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  document.getElementById('prev-stock-btn').disabled = idx <= 0;
+  document.getElementById('next-stock-btn').disabled = idx >= list.length - 1;
+}
+
+function goToAdjacentStock(delta) {
+  const list = state.detailNavList || [];
+  const newIdx = (state.detailNavIndex ?? -1) + delta;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  state.detailNavIndex = newIdx;
+  loadStockDetail(list[newIdx]);
+  updateDetailNavButtons();
+}
+
 async function loadStockDetail(code) {
   code = String(code);
   state.currentCode = code;
@@ -785,7 +827,10 @@ function renderStarTable() {
     $('#star-table tbody').on('click', 'td', function() {
       const code = $(this).find('[data-code]').data('code') ||
                    $(this).closest('tr').find('[data-code]').data('code');
-      if (code) loadStockDetail(code);
+      if (code) {
+        setDetailNavContext(_dtOrderedCodes(starDt, 0), String(code));
+        loadStockDetail(code);
+      }
     });
   }
 }
@@ -978,7 +1023,10 @@ function renderWlTable() {
     $('#wl-table tbody').on('click', 'td', function() {
       const code = $(this).find('[data-code]').data('code') ||
                    $(this).closest('tr').find('[data-code]').data('code');
-      if (code) loadStockDetail(code);
+      if (code) {
+        setDetailNavContext(_dtOrderedCodes(wlDt, 1), String(code));
+        loadStockDetail(code);
+      }
     });
   }
 }
@@ -1166,7 +1214,10 @@ function renderAnnTable() {
     ? _annData.map(renderAnnRow).join('')
     : '<tr><td colspan="14" class="ann-empty">近期無公告</td></tr>';
   tbody.querySelectorAll('[data-code]').forEach(el => {
-    el.addEventListener('click', () => loadStockDetail(el.dataset.code));
+    el.addEventListener('click', () => {
+      setDetailNavContext([...new Set(_annData.map(a => a.stock_code))], el.dataset.code);
+      loadStockDetail(el.dataset.code);
+    });
   });
   tbody.querySelectorAll('.ann-subject-link, .ann-rating-link').forEach(el => {
     el.addEventListener('click', () => openAnnModal(+el.dataset.idx));
@@ -1402,7 +1453,10 @@ function renderExpertTable() {
       }).join('')
     : '<tr><td colspan="12" class="ann-empty">目前沒有符合選股標準的個股</td></tr>';
   tbody.querySelectorAll('[data-code]').forEach(el => {
-    el.addEventListener('click', () => loadStockDetail(el.dataset.code));
+    el.addEventListener('click', () => {
+      setDetailNavContext(rows.map(s => s.code), el.dataset.code);
+      loadStockDetail(el.dataset.code);
+    });
   });
   tbody.querySelectorAll('.ann-subject-link').forEach(el => {
     el.addEventListener('click', () => openExpertModal(+el.dataset.idx));

@@ -365,7 +365,13 @@
   <!-- 個股詳情 -->
   <div id="detail-view" class="view">
     <div class="container">
-      <button class="back-btn" onclick="showListView()">← 返回列表</button>
+      <div class="detail-nav-bar">
+        <button class="back-btn" onclick="showListView()">← 返回列表</button>
+        <div class="detail-nav-btns hidden" id="detail-nav-btns">
+          <button class="btn btn-sm" id="prev-stock-btn" onclick="goToAdjacentStock(-1)">← 上一檔</button>
+          <button class="btn btn-sm" id="next-stock-btn" onclick="goToAdjacentStock(1)">下一檔 →</button>
+        </div>
+      </div>
 
       <div class="detail-header">
         <h2 id="d-name"></h2>
