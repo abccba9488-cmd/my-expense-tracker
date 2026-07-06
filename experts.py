@@ -327,25 +327,38 @@ def _build_context(db):
         if c:
             c['div_fill_events'].append({'filled': r['filled']})
 
-    since_tech = (today - timedelta(days=760)).isoformat()
-    price_hist = {}
-    for r in db.execute(text('''
-        SELECT stock_code, date, open, high, low, close FROM daily_prices
-        WHERE date >= :since ORDER BY stock_code, date ASC
-    '''), {'since': since_tech}).mappings():
-        d = r['date']
-        if isinstance(d, str):
-            d = datetime.strptime(d, '%Y-%m-%d').date()
-        price_hist.setdefault(r['stock_code'], []).append({
-            'date': d, 'open': r['open'], 'high': r['high'], 'low': r['low'], 'close': r['close'],
-        })
-    for code, rows in price_hist.items():
+    # Streamed rather than grouped-in-a-dict-then-iterated: holding ~2 years
+    # of OHLC for every tracked stock simultaneously (~1M rows) risked OOM on
+    # memory-constrained deployments (observed crashing the Zeabur container).
+    # The query is already ORDER BY stock_code, date, so accumulate one
+    # stock's rows at a time and flush (compute + discard) the moment the
+    # stock_code changes — peak memory is one stock's ~500 rows, not all of them.
+    def _flush_tech(code, rows):
         c = ctx.get(code)
         if c and len(rows) >= 30:
             try:
                 c['tech'] = technical.snapshot(rows)
             except Exception:
                 logger.exception('technical.snapshot failed for %s', code)
+
+    since_tech = (today - timedelta(days=760)).isoformat()
+    current_code, current_rows = None, []
+    price_result = db.execute(text('''
+        SELECT stock_code, date, open, high, low, close FROM daily_prices
+        WHERE date >= :since ORDER BY stock_code, date ASC
+    '''), {'since': since_tech})
+    for r in price_result.mappings():
+        code = r['stock_code']
+        if code != current_code:
+            if current_code is not None:
+                _flush_tech(current_code, current_rows)
+            current_code, current_rows = code, []
+        d = r['date']
+        if isinstance(d, str):
+            d = datetime.strptime(d, '%Y-%m-%d').date()
+        current_rows.append({'date': d, 'open': r['open'], 'high': r['high'], 'low': r['low'], 'close': r['close']})
+    if current_code is not None:
+        _flush_tech(current_code, current_rows)
 
     return ctx
 

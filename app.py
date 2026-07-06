@@ -511,6 +511,25 @@ def api_financials(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/expert-scores')
+def api_stock_expert_scores(code):
+    db = SessionLocal()
+    try:
+        rows = db.query(ExpertScore).filter_by(stock_code=code).all()
+        by_key = {e.expert_key: e for e in rows}
+        return jsonify([{
+            'expert_key': key,
+            'expert_label': label,
+            'passed': bool(by_key[key].passed) if key in by_key else None,
+            'score': by_key[key].score if key in by_key else None,
+            'max_score': by_key[key].max_score if key in by_key else None,
+            'breakdown': _json.loads(by_key[key].breakdown_json) if key in by_key and by_key[key].breakdown_json else [],
+            'computed_at': str(by_key[key].computed_at) if key in by_key else None,
+        } for key, label in experts.EXPERT_LABELS.items()])
+    finally:
+        db.close()
+
+
 @app.route('/api/stocks/<code>/ai-analysis')
 def api_stock_ai_analysis_get(code):
     """Return the cached latest AI analysis for this stock, if any —

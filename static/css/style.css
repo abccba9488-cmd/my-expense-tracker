@@ -176,6 +176,14 @@ main { padding-top: 52px; min-height: 100vh; }
 }
 .back-btn:hover { color: var(--text); }
 
+.detail-nav-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 4px;
+}
+.detail-nav-bar .back-btn { margin-bottom: 0; }
+.detail-nav-btns { display: flex; gap: 8px; }
+.detail-nav-btns button:disabled { opacity: .4; cursor: not-allowed; }
+
 .detail-header { margin-bottom: 16px; }
 .detail-header h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
 .badges { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -382,6 +390,11 @@ table.dataTable tbody td {
 .expert-criteria-list li:last-child { border-bottom: none; }
 .expert-criteria-list em { color: var(--text2); font-style: normal; font-size: 12px; }
 .expert-points { margin-left: auto; color: var(--text2); font-size: 12px; white-space: nowrap; }
+.stock-expert-total {
+  font-size: 15px; font-weight: 700; color: var(--text);
+  background: var(--bg2); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px;
+}
+.stock-expert-total-num { color: var(--primary); font-size: 18px; }
 
 /* ── Today updates panel ── */
 .today-panel { left: 16px; right: auto; }
