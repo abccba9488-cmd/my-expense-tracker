@@ -40,14 +40,14 @@ logger = logging.getLogger(__name__)
 _TZ = ZoneInfo('Asia/Taipei')
 
 EXPERT_LABELS = {
-    'gutai_bull':  '股泰｜多方訊號',
-    'gutai_bear':  '股泰｜空方訊號',
-    'flag888_1':   '888｜標準1 營收轉機',
-    'flag888_2':   '888｜標準2 高股息',
-    'flag888_3':   '888｜標準3 低價價值',
-    'flag888_4':   '888｜標準4 填息穩定',
-    'guyu':        '股魚｜價值K線',
-    'laoniu':      '股海老牛｜抱緊股',
+    'gutai_bull':  '多方訊號',
+    'gutai_bear':  '空方訊號',
+    'flag888_1':   '標準1 營收轉機',
+    'flag888_2':   '標準2 高股息',
+    'flag888_3':   '標準3 低價價值',
+    'flag888_4':   '標準4 填息穩定',
+    'guyu':        '價值K線',
+    'laoniu':      '抱緊股',
 }
 
 
