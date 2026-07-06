@@ -229,7 +229,17 @@ class DividendFillEvent(Base):
 
 class ExpertScore(Base):
     """達人選股：每檔股票在每套規則下的最新一次計分結果（比照 stock_ai_analysis
-    只存最新快照，每次 compute_expert_scores() 覆寫）。"""
+    只存最新快照，每次 compute_expert_scores() 覆寫）。
+
+    entered_at/transition 是唯一跨執行「延續」的欄位（其餘全部每次覆寫）：
+    compute_expert_scores() 每次執行都會讀取覆寫前的舊列，passed 狀態沒變就
+    延續舊的 entered_at/transition，狀態改變（含第一次寫入）才更新成今天。
+    因為 expert_scores 從未保留歷史，這個機制上線當下對「已經上榜多久」的舊
+    資料無法回溯，entered_at 只能從上線那天開始準確計算。
+    transition 只有 gutai_bull/gutai_bear 這對規則會用到：多方/空方訊號是
+    互斥的一組，进榜當天若「上一次快照」發現該股正好在對面那個訊號上榜，
+    代表是直接翻轉過來的，記錄 '空轉多'/'多轉空'；其餘情況（含其他6套規則）
+    一律是 None。"""
     __tablename__ = 'expert_scores'
     __table_args__ = (UniqueConstraint('stock_code', 'expert_key'),)
     id            = Column(Integer, primary_key=True, autoincrement=True)
@@ -240,6 +250,8 @@ class ExpertScore(Base):
     score         = Column(Integer)
     max_score     = Column(Integer)
     breakdown_json = Column(Text)
+    entered_at    = Column(Date)        # passed 目前這個狀態（延續）從哪天開始
+    transition    = Column(String(10))  # 僅 gutai_bull/gutai_bear：'空轉多' / '多轉空' / None
     computed_at   = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
@@ -502,6 +514,51 @@ def init_db():
                 conn.commit()
             except Exception:
                 pass  # Column already exists
+
+    # Migration: add entered_at/transition to expert_scores (股泰多方/空方
+    # 訊號的入榜日期 + 翻轉標記)
+    with engine.connect() as conn:
+        try:
+            conn.execute(text('ALTER TABLE expert_scores ADD COLUMN entered_at DATE'))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+    with engine.connect() as conn:
+        try:
+            conn.execute(text('ALTER TABLE expert_scores ADD COLUMN transition VARCHAR(10)'))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
+    # Migration: backfill missing daily_prices.change/change_pct from each
+    # stock's own previous trading day's close (same "recompute from data
+    # already in the DB" pattern as start_price/turnaround_signal). A block
+    # of rows (2026-06-15 to 2026-07-03) ended up with change/change_pct
+    # left NULL despite close/OHLCV being populated — this backfills them
+    # once. Rows with no previous day at all (first row ever for that stock)
+    # legitimately stay NULL, same as before.
+    with engine.connect() as conn:
+        done = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name='backfill_price_change'"
+        )).scalar()
+        if not done:
+            conn.execute(text('''
+                WITH prev AS (
+                    SELECT id, close,
+                           LAG(close) OVER (PARTITION BY stock_code ORDER BY date) AS prev_close
+                    FROM daily_prices
+                )
+                UPDATE daily_prices
+                SET change = ROUND(daily_prices.close - prev.prev_close, 2),
+                    change_pct = ROUND((daily_prices.close - prev.prev_close) / prev.prev_close * 100, 2)
+                FROM prev
+                WHERE daily_prices.id = prev.id
+                  AND daily_prices.change_pct IS NULL
+                  AND prev.prev_close IS NOT NULL
+                  AND prev.prev_close != 0
+            '''))
+            conn.execute(text("INSERT INTO schema_migrations(name) VALUES('backfill_price_change')"))
+            conn.commit()
 
     # Migration: one-time wipe of announcements rows written by the old
     # AI-rating design (different schema semantics, e.g. estimated_pe was

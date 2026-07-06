@@ -1410,13 +1410,18 @@ function renderExpertTabs() {
   });
 }
 
+function _isGutaiKey(key) {
+  return key === 'gutai_bull' || key === 'gutai_bear';
+}
+
 async function loadExpertDetail(key) {
   const tbody = document.getElementById('expert-tbody');
-  tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">載入中…</td></tr>';
+  const colspan = _isGutaiKey(key) ? 15 : 13;
+  tbody.innerHTML = `<tr><td colspan="${colspan}" class="ann-empty">載入中…</td></tr>`;
   try {
     _expertData = await fetch(`/api/experts/${key}`).then(r => r.json());
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">載入失敗</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="ann-empty">載入失敗</td></tr>`;
     return;
   }
   const passedCount = _expertData.filter(s => s.passed).length;
@@ -1426,8 +1431,16 @@ async function loadExpertDetail(key) {
 
 function renderExpertTable() {
   const tbody = document.getElementById('expert-tbody');
+  // 入榜日期／轉換（空轉多/多轉空）只對股泰多方/空方訊號這一組有意義
+  // （見 experts.py ExpertScore 的 entered_at/transition 說明），其他 6 套
+  // 規則不顯示這兩欄。
+  const isGutai = _isGutaiKey(_expertKey);
+  document.getElementById('expert-th-entered').classList.toggle('hidden', !isGutai);
+  document.getElementById('expert-th-transition').classList.toggle('hidden', !isGutai);
+  const colspan = isGutai ? 15 : 13;
+
   if (!_expertData.length) {
-    tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>`;
     return;
   }
   const rows = _expertData.filter(s => s.passed);
@@ -1449,10 +1462,11 @@ function renderExpertTable() {
           <td class="td-center"><span class="ann-subject-link" data-idx="${_expertData.indexOf(s)}">查看明細</span></td>
           <td>${p.price_date || '—'}</td>
           <td class="td-left">${ma20Cell(p)[1]}</td>
+          ${isGutai ? `<td>${s.entered_at || '—'}</td><td>${s.transition || '—'}</td>` : ''}
         </tr>
       `;
       }).join('')
-    : '<tr><td colspan="13" class="ann-empty">目前沒有符合選股標準的個股</td></tr>';
+    : `<tr><td colspan="${colspan}" class="ann-empty">目前沒有符合選股標準的個股</td></tr>`;
   tbody.querySelectorAll('[data-code]').forEach(el => {
     el.addEventListener('click', () => {
       setDetailNavContext(rows.map(s => s.code), el.dataset.code);

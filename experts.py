@@ -202,7 +202,7 @@ def _build_context(db):
     }
 
     for r in db.execute(text('''
-        SELECT dp.stock_code, dp.close, dp.volume, dp.per, dp.pbr, dp.dividend_yield
+        SELECT dp.stock_code, dp.close, dp.volume
         FROM daily_prices dp
         INNER JOIN (SELECT stock_code, MAX(date) AS max_date FROM daily_prices GROUP BY stock_code) lt
           ON dp.stock_code = lt.stock_code AND dp.date = lt.max_date
@@ -210,6 +210,24 @@ def _build_context(db):
         c = ctx.get(r['stock_code'])
         if c:
             c['close'], c['volume'] = r['close'], r['volume']
+
+    # per/pbr/dividend_yield: use the latest row where these are actually
+    # populated, not strictly the latest price date. crawl_finmind_valuation
+    # can lag a day or two behind the daily price crawl (its own lookback
+    # window catches up later) — anchoring to the exact latest date would
+    # silently blank out 888標準1/888標準3 (which require pbr/dividend_yield)
+    # on any day that job hasn't run yet, even though a perfectly good value
+    # from a day or two ago exists.
+    for r in db.execute(text('''
+        SELECT dp.stock_code, dp.per, dp.pbr, dp.dividend_yield
+        FROM daily_prices dp
+        INNER JOIN (
+            SELECT stock_code, MAX(date) AS max_date FROM daily_prices
+            WHERE pbr IS NOT NULL GROUP BY stock_code
+        ) lt ON dp.stock_code = lt.stock_code AND dp.date = lt.max_date
+    ''')).mappings():
+        c = ctx.get(r['stock_code'])
+        if c:
             c['per'], c['pbr'], c['dividend_yield'] = r['per'], r['pbr'], r['dividend_yield']
 
     since_vol = (today - timedelta(days=20)).isoformat()
@@ -723,13 +741,21 @@ SCORERS = {
 }
 
 
+_GUTAI_OPPOSITE = {'gutai_bull': 'gutai_bear', 'gutai_bear': 'gutai_bull'}
+_GUTAI_TRANSITION_LABEL = {'gutai_bull': '空轉多', 'gutai_bear': '多轉空'}
+
+
 def compute_expert_scores():
     """Runs all 8 rulesets over every tracked stock and overwrites
     expert_scores (one row per stock per ruleset, latest snapshot only —
-    same "overwrite, no history" pattern as stock_ai_analysis)."""
+    same "overwrite, no history" pattern as stock_ai_analysis), except
+    entered_at/transition which deliberately carry over from the row being
+    replaced (see ExpertScore's docstring)."""
     import json as _json
     db = SessionLocal()
     try:
+        old_rows = {(e.stock_code, e.expert_key): e for e in db.query(ExpertScore).all()}
+        today = datetime.now(_TZ).date()
         ctx_map = _build_context(db)
         records = []
         for code, ctx in ctx_map.items():
@@ -739,10 +765,30 @@ def compute_expert_scores():
                 except Exception:
                     logger.exception('Scoring %s failed for %s', key, code)
                     continue
+
+                old = old_rows.get((code, key))
+                # entered_at==None on an existing row only happens once, right
+                # after this column was added (no prior history to know the
+                # true start from) — treat that "bootstrap" case as a fresh
+                # streak too, otherwise it would carry forward None forever.
+                is_new_streak = old is None or bool(old.passed) != passed or old.entered_at is None
+                if is_new_streak:
+                    entered_at, transition = today, None
+                    if old is not None and bool(old.passed) != passed and passed:
+                        opp_key = _GUTAI_OPPOSITE.get(key)
+                        opp_old = old_rows.get((code, opp_key)) if opp_key else None
+                        if opp_old is not None and bool(opp_old.passed):
+                            transition = _GUTAI_TRANSITION_LABEL[key]
+                else:
+                    # Same streak as before — keep its original start date
+                    # and how it began.
+                    entered_at, transition = old.entered_at, old.transition
+
                 records.append({
                     'stock_code': code, 'expert_key': key, 'expert_label': EXPERT_LABELS[key],
                     'passed': int(passed), 'score': score, 'max_score': max_score,
                     'breakdown_json': _json.dumps(breakdown, ensure_ascii=False),
+                    'entered_at': entered_at, 'transition': transition,
                     'computed_at': datetime.now(_TZ),
                 })
         if records:

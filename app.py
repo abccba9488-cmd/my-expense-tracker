@@ -655,6 +655,8 @@ def api_experts_detail(key):
             'score': e.score,
             'max_score': e.max_score,
             'breakdown': _json.loads(e.breakdown_json) if e.breakdown_json else [],
+            'entered_at': str(e.entered_at) if e.entered_at else None,
+            'transition': e.transition,
             'computed_at': str(e.computed_at),
         } for e, name, market, industry in rows])
     finally:
