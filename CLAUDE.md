@@ -41,7 +41,10 @@ C:\Users\user\anaconda3\Scripts\pip.exe install -r requirements.txt
 
 ```
 app.py          Flask app + REST API endpoints + 初始化入口
-crawler.py      所有爬蟲函式（TWSE / TPEX / MOPS）
+crawler.py      所有爬蟲函式（TWSE / TPEX / MOPS / FinMind / 董監持股 OpenAPI）
+finmind_client.py  FinMind API 薄封裝（crawler.py 的 crawl_finmind_* 函式呼叫）
+technical.py    純 Python 技術指標（EMA/MACD/RSI/KD），達人選股股泰規則用
+experts.py      達人選股計分引擎（8 套規則），見「達人選股」章節
 scheduler.py    APScheduler 排程（BackgroundScheduler，Asia/Taipei）
 database.py     SQLAlchemy models + SQLite 設定 + migration
 templates/index.html   單頁前端（DataTables + Chart.js，CDN）
@@ -76,9 +79,16 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 表 | 主鍵 | 單位備註 |
 |----|------|---------|
 | `stocks` | `code` | market: TWSE \| TPEX |
-| `daily_prices` | `(stock_code, date)` | volume 單位：股 |
+| `daily_prices` | `(stock_code, date)` | volume 單位：股；`per`/`pbr`/`dividend_yield` 來自 FinMind，達人選股用 |
 | `monthly_revenue` | `(stock_code, year, month)` | revenue 千元；`start_price` = 首次寫入當天收盤價，月份切換時才更新；`turnaround_signal` = 潛在虧轉盈候選旗標，每次爬蟲都重算（見下方說明） |
 | `quarterly_financials` | `(stock_code, year, quarter)` | revenue/income 千元；eps 元/股；**各季獨立值**（Q4 已非累計） |
+| `institutional_trades` | `(stock_code, date)` | 三大法人買賣超（股），FinMind，達人選股用 |
+| `holding_concentration` | `(stock_code, date)` | 股權分散表（週資料），FinMind，達人選股用 |
+| `financial_extra` | `(stock_code, year, quarter)` | 資產負債表/現金流量表/毛利項目（千元），FinMind，獨立於 MOPS 來源的 `quarterly_financials` |
+| `dividend_policy` | `(stock_code, event_date)` | 逐筆股利分派事件（非年度加總），FinMind |
+| `dividend_fill_events` | `(stock_code, ex_date)` | 除權息事件 + 填息判斷，FinMind |
+| `director_holdings` | `(stock_code, year_month)` | 董監持股比例，TWSE/TPEX OpenAPI（非 FinMind） |
+| `expert_scores` | `(stock_code, expert_key)` | 達人選股每套規則最新一次計分快取，見下方「達人選股」章節 |
 | `users` | `id` | 會員帳號，`password_hash` 用 werkzeug |
 | `watchlists` | `id` | 屬於某 `user_id`，可多個 |
 | `watchlist_stocks` | `(watchlist_id, stock_code)` | 自選股關聯表 |
@@ -100,6 +110,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 7. `clear_old_announcements`：一次性清空舊版 AI 評級設計留下的 `announcements` 資料（schema 語意不同，只清資料不動欄位）
 8. `ALTER TABLE monthly_revenue ADD COLUMN turnaround_signal INTEGER`
 9. 回填現有每檔股票**最新一筆** `monthly_revenue` 的 `turnaround_signal`（用既有 `quarterly_financials` 資料算，不用重新爬）——新增欄位時舊資料全是 NULL，要等下次爬蟲跑才會重算，這個一次性回填讓欄位上線當下就有正確值，不用等
+10. `ALTER TABLE daily_prices ADD COLUMN per / pbr / dividend_yield REAL`（達人選股，FinMind `TaiwanStockPER`）
 
 ## _SUMMARY_SQL 欄位索引（r[0]–r[18]）
 
@@ -154,10 +165,12 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | Q2 | 8 月每天 23:00（公告期限 8/14） |
 | Q3 | 11 月每天 23:00（公告期限 11/14） |
 | Q4 | 隔年 3 月每天 23:00（公告期限 3/31） |
+| 達人選股（FinMind 增量 + 重算分數） | 每天 17:00（股價爬蟲與 watchdog 之後），見「達人選股」章節 |
+| 達人選股（financial_extra） | 與官方季報同月份、每天 23:30（比官方季報 job 晚 30 分） |
 
 **注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
-手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。
+手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `director_holdings` / `expert_scores`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
 
 ## REST API
 
@@ -170,6 +183,9 @@ GET  /api/stocks/<code>/revenue    個股月營收
 GET  /api/stocks/<code>/financials 個股季財報
 GET  /api/stocks/<code>/ai-analysis  讀取該股快取的 AI 分析結果（任何人可讀，不會觸發新分析）
 POST /api/stocks/<code>/ai-analysis  觸發一次全新 AI 分析（僅管理員；同步執行，會產生 OpenRouter 費用）
+GET  /api/stocks/<code>/expert-scores  該股在 8 套達人選股規則下的最新分數/明細
+GET  /api/experts                  8 套達人選股規則清單（標籤、通過檔數/總檔數）
+GET  /api/experts/<key>            該規則下依分數排序的完整清單（含每檔 breakdown）
 GET  /api/stats                    DB 統計（stocks/prices/revenues/quarterly 筆數）
 GET  /api/crawler/status           最近 30 筆爬蟲 log
 POST /api/crawler/run/<task>       手動觸發爬蟲（僅限 localhost 或 admin 登入）
@@ -249,6 +265,18 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 **TWSE Big5 編碼**：2015 年以前的 TWSE 資料欄位名稱為 Big5 編碼，crawler 解析到 0 筆但 tables 有資料時，會自動以 Big5 重新解碼後再解析。
 
+**達人選股（FinMind）資料回填**：`backfill_finmind.py`，風格與 `backfill.py` 一致（已有資料自動跳過、可中斷續跑），需要 `FINMIND_TOKEN` 環境變數。
+
+```bat
+backfill_finmind.bat   ← 雙擊，回填三大法人/股權分散/財報/股利/PER-PBR
+```
+
+或分開執行：
+```
+python backfill_finmind.py --institutional --holding --financials --dividend --valuation
+python backfill_finmind.py --financials --from-year 2013   # financial_extra 只有 2013 年後 IFRS 資料可靠
+```
+
 ## 分析與驗證
 
 | 服務 | ID / 設定 | 位置 |
@@ -282,7 +310,7 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 
 `state.allData` 存放 `/api/market/summary` 的完整資料，篩選（上市/上櫃、飆股）皆在前端計算，不重新呼叫 API。
 
-### 五個視圖
+### 六個視圖
 
 | 視圖 | 說明 |
 |------|------|
@@ -290,9 +318,10 @@ python backfill.py --from-year 2020 --prices   # 指定起始年
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
 | `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
 | `#ann-view` | 自結公告：純表格（不用 DataTables），見下方「自結公告」章節 |
-| `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表） |
+| `#expert-view` | 達人選股：8 套規則切換分頁，見下方「達人選股」章節 |
+| `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表、達人選股評分卡、上一/下一檔導覽） |
 
-分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view' }`。
+分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view', expert: 'expert-view' }`。
 
 ### 主表格欄位（18 欄，index 0–17）
 
@@ -323,6 +352,10 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 - `#status-panel`（⚙ 爬蟲狀態）、`#today-panel`（🆕 今日更新，呼叫 `/api/updates/today`）：右下／左下角浮動面板，`.hidden` 切換顯示。
 - `#msg-panel`（💬 留言板）：右側滑出抽屜（`.msg-drawer.open` 切換），`loadMessages()` 載入、`sendMessage()` 發表、依 `can_delete` 顯示刪除按鈕。
+
+### 個股詳情頁：上一檔 / 下一檔導覽
+
+`#detail-nav-btns`（`prev-stock-btn`/`next-stock-btn`）在詳情頁沿用「使用者是從哪個列表點進來的」那份清單與目前排序/篩選，而不是固定用代號順序：呼叫進入前的表格用 `setDetailNavContext(codes, currentCode)` 記下 `state.detailNavList`/`state.detailNavIndex`；DataTables 表格用 `_dtOrderedCodes(dt, codeColIndex)`（`dt.rows({order:'applied', search:'applied'}).data()`）取出「目前排序+篩選後」的完整代號順序，不只是當前頁面那幾筆。`goToAdjacentStock(delta)` 直接呼叫 `loadStockDetail(list[newIdx])` 切換，按鈕在清單頭尾自動 disable。
 
 ## 自結公告（爬蟲 + 決定性解析 + AI 評級）
 
@@ -366,3 +399,36 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 - **快取表 `stock_ai_analysis`**：`stock_code` 為主鍵，**每檔股票只存最新一次結果**（無歷史），`POST` 觸發新分析時直接覆寫。即使 AI 呼叫失敗也會覆寫一筆（`ai_rating` 等留 NULL），這樣才能正確反映「最近一次嘗試失敗」而不是顯示舊的過期結果。
 - **同步執行**：`POST /api/stocks/<code>/ai-analysis` 不像 `crawl_*` 系列用 `_run_bg()` 背景執行，是直接 block 住等 OpenRouter 回應（最長 90 秒逾時）——因為這是管理員主動點擊、正在等結果的單次操作，不是排程批次任務，不需要輪詢機制。
 - **前端**：`#detail-view` 最上方有個 `.admin-only.hidden` 卡片（非管理員完全看不到，連 `GET` 都不會打，省一次無意義的請求），`loadStockDetail()` 載入時若 `state.user.is_admin` 才順便抓快取結果；點「重新分析」呼叫 `runStockAiAnalysis()`，按鈕 disable 防止重複點擊（同一檔股票短時間連點兩次會疊加成兩筆 OpenRouter 費用）。評級 dot 重用 `_annRatingDot()`，跟自結公告同一套 🔴🟠🟡🟢 視覺語言。
+
+## 達人選股（8 套規則計分引擎）
+
+編碼 4 位台股達人（股泰多方/空方、888/巔峰標準1–4、股魚、股海老牛）公開的選股/評分邏輯，對本站 DB + FinMind 補充資料即時計分，`expert_key`：`gutai_bull`/`gutai_bear`/`flag888_1`–`flag888_4`/`guyu`/`laoniu`，中文標籤見 `experts.py` 的 `EXPERT_LABELS`。
+
+### 資料來源
+
+- **FinMind**（`finmind_client.py`，付費 999 方案 6,000 次/小時）：三大法人買賣超、股權分散表、資產負債表/現金流量表/財報毛利項目、股利政策、除權息填息、PER/PBR。**Bulk 模式（不帶 `data_id`）一次回傳全市場當天資料，但 `end_date` 對大多數 dataset 不是真正的 range 篩選**——只有精準等於 `start_date` 才有效，寬範圍查詢會直接塌縮成只回傳 `start_date` 當天的資料（已用真實 API 呼叫驗證過）。因此 `crawler.py` 所有 `crawl_finmind_*` 一律逐日呼叫（`_finmind_daily_rows()` 共用這個逐日迴圈），不依賴 range 查詢一次拿多天資料。
+- **TWSE/TPEX OpenAPI**（`crawl_director_holdings()`，非 FinMind、免金鑰）：董監持股比例。兩個端點都只回傳「目前最新一期」全市場快照（月更新），**無法查歷史日期**，跟其他 FinMind 函式的 `date_str` 參數模式不同。
+- **技術指標**（`technical.py`）：不靠 FinMind，純 Python 用 `daily_prices` 的 OHLC 自算 EMA(3/5/8/13)/MACD/RSI/KD（含週K、月K），只有股泰規則會用到。
+
+### 已知的簡化/近似（都跟 project owner 討論過，不是漏洞）
+
+- 股泰的 TU/TM/TD 價位與 週守/月守 支撐是其軟體專屬公式，未公開——用 `technical.py` 的 `ema13_support`/`week_low_4`/`month_low_20` 近似替代，`breakdown` 裡都標成 `approx: true`，不冒充原始公式。
+- 888 標準2「董監持股」用 `financial_extra.capital_stock ÷ 面額10元` 反推已發行股數，面額非 10 元的少數股票會不準（`crawl_director_holdings()` 對算出 >100% 的異常值直接捨棄不存）。
+- 「累計月營收年增率」（股泰）、「累積淨利年增率」（老牛）都用單期 YoY 代替真正的累計值——本站 schema 沒有累計營收/淨利欄位。
+- 每一項「近N年平均」比率（ROE/ROA/毛利率/流動比率/周轉天數）都用「近 N×4 季」的算術平均近似，不是嚴格的曆年桶。
+
+### 計分引擎（`experts.py`）
+
+- `ScoreCard`：`require(label, cond)` 是選股門檻（`passed` = 全部 `require` 皆真；輸入為 `None` 一律視為不通過，不放行無法驗證的股票）；`award(label, cond, points)` 是配分項，`cond=None` 時整項跳過不計入 `max_score`（資料不足不扣分，也不算分）；`award_count(label, achieved, max_occurrences, unit_points)` 是「每命中一次 +N 分，封頂 M 次」的漸進計分（如「近5日外資買超次數」）。
+- `_build_context(db)`：一次 bulk 查完全部表，組成 `{stock_code: ctx}`。**技術指標快照是逐股流式計算**（`daily_prices` 查詢本身已 `ORDER BY stock_code, date`，累積到換股票就 flush 該股的 `technical.snapshot()` 後捨棄），而不是先把全市場~2 年 OHLC 全部塞進記憶體再統一算——後者在 Zeabur 容器上會直接 OOM（~1,982 檔 × ~500 筆同時在記憶體是實測會爆的規模）。
+- `compute_expert_scores()`：對每檔股票跑全部 8 套規則，寫入 `expert_scores`（`INSERT OR REPLACE`，跟 `stock_ai_analysis` 同樣的「只存最新一筆快照，不留歷史」模式）。單一規則對單一股票算分丟例外時只記 log 跳過，不影響其他規則/股票。
+
+### API / 排程
+
+`GET /api/experts`、`GET /api/experts/<key>`、`GET /api/stocks/<code>/expert-scores`（見上方 REST API 清單）。排程：`_finmind_job()` 每天 17:00 依序跑 5 個 FinMind 增量函式 + `crawl_director_holdings()` + `compute_expert_scores()`；`_finmind_financials_job(quarter)` 跟官方季報同月份、每天 23:30 補 `financial_extra`（`financial_extra` MOPS IFRS 資料可靠起點同官方季報一樣是 2013 年）。手動觸發任務見上方「排程」章節。
+
+### 前端
+
+- **`#expert-view`**（列表）：`#expert-tabs` 8 個規則切換鈕（`loadExperts()`/`renderExpertTabs()`），下方純表格 12 欄：排名/代號/名稱/產業/起始股價/收盤價/價差%/漲跌幅%/評分/評分明細/資料日期/20日均。點「評分明細」呼叫 `openExpertModal(i)` 開 `#expert-modal`，內容：頂部「總分 X/Y 分」大字標頭（`.stock-expert-total`）→ 選股標準 ✅/❌ 清單 → 評分明細標題 → `renderModalExpertChart()` 畫出的 Chart.js 橫向堆疊長條圖（每項：綠=取得分數，灰=未取得/上限；`met===null`（資料不足）顯示灰色）。
+- **`#detail-view` 達人選股評分卡**（`#stock-expert-card`）：`loadStockExpertScores(code)` 抓 `/api/stocks/<code>/expert-scores`，`#stock-expert-tabs` 列出該股所有已算出分數的規則（預設選第一個「通過」的，沒有則選第一個），`renderStockExpertDetail()` 一樣先畫「總分 X/Y 分」大字標頭，再選股標準清單，再呼叫 `renderStockExpertChart()`。**圖表繪製邏輯抽成共用的 `_renderExpertChart(scoreItems, canvasId, wrapId, chartKey)`**，`renderStockExpertChart`/`renderModalExpertChart` 只是帶入各自的 canvas/state key 呼叫它——確保列表 modal 跟詳情頁兩處的視覺化永遠同步；`state.stockExpertChart`/`state.modalExpertChart` 各自持有 Chart.js 實例，切換分頁/關閉彈窗時 `.destroy()` 再建新的，避免 canvas 重用衝突。
+- **總分一定要清楚顯示**：不論在列表的評分明細彈窗、還是詳情頁的評分卡，`.stock-expert-total`（大字、`--primary` 顏色數字）都放在選股標準清單「之前」，不是只靠分頁按鈕上的小字 `(X/Y)` 讓使用者自己找。
