@@ -1412,11 +1412,11 @@ function renderExpertTabs() {
 
 async function loadExpertDetail(key) {
   const tbody = document.getElementById('expert-tbody');
-  tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">載入中…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">載入中…</td></tr>';
   try {
     _expertData = await fetch(`/api/experts/${key}`).then(r => r.json());
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">載入失敗</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">載入失敗</td></tr>';
     return;
   }
   const passedCount = _expertData.filter(s => s.passed).length;
@@ -1427,7 +1427,7 @@ async function loadExpertDetail(key) {
 function renderExpertTable() {
   const tbody = document.getElementById('expert-tbody');
   if (!_expertData.length) {
-    tbody.innerHTML = '<tr><td colspan="12" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>';
     return;
   }
   const rows = _expertData.filter(s => s.passed);
@@ -1440,6 +1440,7 @@ function renderExpertTable() {
           <td><span class="stock-link" data-code="${s.code}">${s.code}</span></td>
           <td><span class="stock-link" data-code="${s.code}">${s.name}</span></td>
           <td>${s.industry || '—'}</td>
+          <td>${(p.rev_year && p.rev_month) ? `${p.rev_year}/${String(p.rev_month).padStart(2,'0')}` : '—'}</td>
           <td class="num">${p.start_price != null ? fmt.price(p.start_price) : '—'}</td>
           <td class="num">${p.close != null ? fmt.price(p.close) : '—'}</td>
           <td class="num">${p.price_diff != null ? `<span class="${pctClass(p.price_diff)}">${fmt.pct(p.price_diff)}</span>` : '—'}</td>
@@ -1451,7 +1452,7 @@ function renderExpertTable() {
         </tr>
       `;
       }).join('')
-    : '<tr><td colspan="12" class="ann-empty">目前沒有符合選股標準的個股</td></tr>';
+    : '<tr><td colspan="13" class="ann-empty">目前沒有符合選股標準的個股</td></tr>';
   tbody.querySelectorAll('[data-code]').forEach(el => {
     el.addEventListener('click', () => {
       setDetailNavContext(rows.map(s => s.code), el.dataset.code);
