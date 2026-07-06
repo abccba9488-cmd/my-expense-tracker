@@ -1470,23 +1470,23 @@ function openExpertModal(i) {
   const selectItems = s.breakdown.filter(b => b.type === 'select');
   const scoreItems = s.breakdown.filter(b => b.type === 'score');
   const metIcon = (met) => met === null ? '<span class="ann-dot-empty">—</span>' : (met ? '✅' : '❌');
+  const expertLabel = (_expertList.find(e => e.expert_key === _expertKey) || {}).expert_label || '';
   document.getElementById('expert-modal-body').innerHTML = `
+    <div class="stock-expert-total">${expertLabel}　總分 <span class="stock-expert-total-num">${s.score} / ${s.max_score}</span> 分</div>
     <div class="ann-modal-subject">選股標準（${s.passed ? '✅ 全部符合' : '❌ 未全部符合'}）</div>
     <ul class="expert-criteria-list">
       ${selectItems.map(b => `<li>${metIcon(b.met)} ${b.label}</li>`).join('')}
     </ul>
     <hr class="ann-modal-divider">
     <div class="ann-modal-subject">評分明細（${s.score} / ${s.max_score} 分）</div>
-    <ul class="expert-criteria-list">
-      ${scoreItems.map(b => `<li>${metIcon(b.met)} ${b.label}${b.approx ? ' <em>（近似）</em>' : ''}
-        <span class="expert-points">${b.met === null ? '資料不足' : (b.gained != null ? b.gained : (b.met ? b.points : 0)) + ' / ' + b.points}</span></li>`).join('')}
-    </ul>
   `;
+  renderModalExpertChart(scoreItems);
   document.getElementById('expert-modal').classList.remove('hidden');
 }
 
 function closeExpertModal() {
   document.getElementById('expert-modal').classList.add('hidden');
+  if (state.modalExpertChart) { state.modalExpertChart.destroy(); state.modalExpertChart = null; }
 }
 
 /* ── 個股詳情頁：達人選股評分圖表 ── */
@@ -1546,9 +1546,9 @@ function renderStockExpertDetail() {
   renderStockExpertChart(s.breakdown.filter(b => b.type === 'score'));
 }
 
-function renderStockExpertChart(scoreItems) {
-  const canvas = document.getElementById('stock-expert-chart');
-  if (state.stockExpertChart) { state.stockExpertChart.destroy(); state.stockExpertChart = null; }
+function _renderExpertChart(scoreItems, canvasId, wrapId, chartKey) {
+  const canvas = document.getElementById(canvasId);
+  if (state[chartKey]) { state[chartKey].destroy(); state[chartKey] = null; }
   if (!scoreItems.length) return;
 
   const labels   = scoreItems.map(b => b.label.replace(/（[^）]*次）/, ''));
@@ -1556,9 +1556,9 @@ function renderStockExpertChart(scoreItems) {
   const missing  = scoreItems.map((b, i) => Math.max(0, b.points - gained[i]));
   const barColor = scoreItems.map(b => b.met === null ? getCssVar('--text2') : (b.met ? getCssVar('--pos') : getCssVar('--neg')));
 
-  document.getElementById('stock-expert-chart-wrap').style.height = `${Math.max(240, scoreItems.length * 26)}px`;
+  document.getElementById(wrapId).style.height = `${Math.max(240, scoreItems.length * 26)}px`;
 
-  state.stockExpertChart = new Chart(canvas, {
+  state[chartKey] = new Chart(canvas, {
     type: 'bar',
     data: {
       labels,
@@ -1581,6 +1581,14 @@ function renderStockExpertChart(scoreItems) {
       },
     },
   });
+}
+
+function renderStockExpertChart(scoreItems) {
+  _renderExpertChart(scoreItems, 'stock-expert-chart', 'stock-expert-chart-wrap', 'stockExpertChart');
+}
+
+function renderModalExpertChart(scoreItems) {
+  _renderExpertChart(scoreItems, 'expert-modal-chart', 'expert-modal-chart-wrap', 'modalExpertChart');
 }
 
 /* ── Crawler status panel ── */
