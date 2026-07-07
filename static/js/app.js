@@ -204,6 +204,7 @@ function renderStockTable() {
       pageLength: 25,
       order:      [[0, 'asc']],
       language:   dtLang(),
+      scrollX:    true,
       columnDefs: [
         { targets: [3, 4, 5, 6, 7, 9, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 8, 14, 15], className: 'dt-left' },
@@ -456,7 +457,7 @@ function renderPriceTable(prices) {
   ]);
   state.priceDt = $('#price-table').DataTable({
     data: rows, pageLength: 10, order: [],
-    language: dtLang(), destroy: true,
+    language: dtLang(), destroy: true, scrollX: true,
   });
 }
 
@@ -521,7 +522,7 @@ function renderRevenueTable(revenues) {
   ]);
   state.revenueDt = $('#revenue-table').DataTable({
     data: rows, pageLength: 24, order: [],
-    language: dtLang(), destroy: true,
+    language: dtLang(), destroy: true, scrollX: true,
   });
 }
 
@@ -574,7 +575,7 @@ function renderQuarterlyTable(financials) {
   ]);
   state.quarterlyDt = $('#quarterly-table').DataTable({
     data: rows, pageLength: 20, order: [],
-    language: dtLang(), destroy: true,
+    language: dtLang(), destroy: true, scrollX: true,
   });
 }
 
@@ -817,6 +818,7 @@ function renderStarTable() {
       pageLength: 25,
       order: [[7, 'desc']],
       language: dtLang(),
+      scrollX: true,
       columnDefs: [
         { targets: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 9], className: 'dt-left' },
@@ -1007,7 +1009,7 @@ function renderWlTable() {
     wlDt.clear().rows.add(rows).draw();
   } else {
     wlDt = $('#wl-table').DataTable({
-      data: rows, pageLength: 25, order: [], language: dtLang(), destroy: true,
+      data: rows, pageLength: 25, order: [], language: dtLang(), destroy: true, scrollX: true,
       columnDefs: [
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
         { targets: [4,5,6,7,8,9,11,12,13,14], className: 'dt-right', type: 'num-cell' },

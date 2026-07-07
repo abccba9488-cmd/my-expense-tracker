@@ -39,6 +39,17 @@ body {
 a { color: var(--primary); text-decoration: none; }
 button { cursor: pointer; font-family: inherit; }
 
+/* Horizontally-scrollable row that never wraps — used by the nav bar's
+   icon row, page tabs, and filter-button groups so they degrade to a
+   swipeable strip on narrow screens instead of wrapping into a broken
+   multi-line block. */
+.hscroll {
+  overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap !important;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.hscroll::-webkit-scrollbar { display: none; }
+.hscroll > * { flex-shrink: 0; }
+
 /* ── Nav ── */
 #nav {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100;
@@ -51,11 +62,24 @@ button { cursor: pointer; font-family: inherit; }
   padding: 0 20px;
   display: flex; align-items: center; justify-content: space-between;
 }
-.logo-group { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.logo { font-weight: 700; font-size: 22px; letter-spacing: .02em; }
+.logo-group { display: flex; align-items: baseline; gap: 10px; flex-shrink: 0; white-space: nowrap; }
+.logo { font-weight: 700; font-size: 22px; letter-spacing: .02em; white-space: nowrap; }
 .slogan { font-size: 12px; color: var(--text2); white-space: nowrap; }
 @media (max-width: 640px) { .slogan { display: none; } }
-.nav-right { display: flex; align-items: center; gap: 12px; }
+/* Icon row shrinks to fit, then scrolls horizontally rather than wrapping
+   into a broken multi-line nav on narrow screens. */
+.nav-right {
+  display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0;
+  justify-content: flex-end;
+  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.nav-right::-webkit-scrollbar { display: none; }
+.nav-right > * { flex-shrink: 0; }
+@media (max-width: 640px) {
+  .logo { font-size: 18px; }
+  .nav-right { justify-content: flex-start; }
+}
 
 .stats-badge {
   font-size: 12px; color: var(--text2);
@@ -89,11 +113,17 @@ main { padding-top: 52px; min-height: 100vh; }
   position: sticky; top: 52px; z-index: 90;
   background: var(--bg2); border-bottom: 1px solid var(--border);
 }
-.page-tabs { max-width: 1400px; margin: 0 auto; padding: 0 20px; display: flex; }
+.page-tabs {
+  max-width: 1400px; margin: 0 auto; padding: 0 20px; display: flex;
+  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.page-tabs::-webkit-scrollbar { display: none; }
 .page-tab {
   padding: 10px 22px; border: none; background: none;
   color: var(--text2); font-size: 14px; font-family: var(--font);
   border-bottom: 2px solid transparent; transition: all .15s; cursor: pointer;
+  white-space: nowrap; flex-shrink: 0;
 }
 .page-tab:hover { color: var(--text); background: var(--bg3); }
 .page-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
@@ -121,11 +151,16 @@ main { padding-top: 52px; min-height: 100vh; }
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 14px; flex-wrap: wrap; gap: 10px;
 }
-.filter-group { display: flex; gap: 6px; }
+.filter-group {
+  display: flex; gap: 6px; max-width: 100%;
+  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.filter-group::-webkit-scrollbar { display: none; }
 .filter-btn {
   background: var(--bg3); border: 1px solid var(--border);
   color: var(--text2); padding: 5px 14px; border-radius: 20px;
-  font-size: 13px; transition: all .15s;
+  font-size: 13px; transition: all .15s; white-space: nowrap; flex-shrink: 0;
 }
 .filter-btn.active, .filter-btn:hover {
   background: var(--primary); border-color: var(--primary);
@@ -203,7 +238,6 @@ main { padding-top: 52px; min-height: 100vh; }
 .days-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 
 /* ── Table (DataTables overrides) ── */
-.table-scroll { overflow-x: auto; }
 
 table.dataTable { border-collapse: collapse !important; width: 100% !important; }
 table.dataTable thead th {
