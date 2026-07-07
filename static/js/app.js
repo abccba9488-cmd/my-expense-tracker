@@ -1520,9 +1520,16 @@ async function loadStockExpertScores(code) {
   if (!scored.length) { card.classList.add('hidden'); return; }
   card.classList.remove('hidden');
 
-  // Default to the first ruleset this stock passed, else just the first one.
-  const preferred = scored.find(s => s.passed) || scored[0];
-  _stockExpertKey = preferred.expert_key;
+  // Keep whichever ruleset tab the user already had selected (e.g. after
+  // clicking prev/next to browse to a different stock) instead of resetting
+  // it to this stock's own "first passed" ruleset on every navigation —
+  // that reset made the selected tab appear to jump around at random as
+  // you stepped through stocks. Only pick a fresh default when there's no
+  // prior selection, or it doesn't apply to this stock.
+  if (!scored.some(s => s.expert_key === _stockExpertKey)) {
+    const preferred = scored.find(s => s.passed) || scored[0];
+    _stockExpertKey = preferred.expert_key;
+  }
 
   document.getElementById('stock-expert-tabs').innerHTML = scored.map(s => `
     <button class="filter-btn ${s.expert_key === _stockExpertKey ? 'active' : ''}" data-expert-key="${s.expert_key}">
