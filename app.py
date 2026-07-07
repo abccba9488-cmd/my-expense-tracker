@@ -524,6 +524,8 @@ def api_stock_expert_scores(code):
             'score': by_key[key].score if key in by_key else None,
             'max_score': by_key[key].max_score if key in by_key else None,
             'breakdown': _json.loads(by_key[key].breakdown_json) if key in by_key and by_key[key].breakdown_json else [],
+            'entered_at': str(by_key[key].entered_at) if key in by_key and by_key[key].entered_at else None,
+            'transition': by_key[key].transition if key in by_key else None,
             'computed_at': str(by_key[key].computed_at) if key in by_key else None,
         } for key, label in experts.EXPERT_LABELS.items()])
     finally:

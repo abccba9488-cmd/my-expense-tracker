@@ -1699,9 +1699,12 @@ async function loadTodayUpdates() {
           : '<div class="today-empty">尚未更新</div>'}
       </div>
     `;
-    el.querySelectorAll('.today-stock-chip').forEach(chip => {
+    const chips = el.querySelectorAll('.today-stock-chip');
+    const codes = Array.from(chips).map(c => c.dataset.code);
+    chips.forEach(chip => {
       chip.addEventListener('click', () => {
         closeTodayPanel();
+        setDetailNavContext(codes, chip.dataset.code);
         loadStockDetail(chip.dataset.code);
       });
     });

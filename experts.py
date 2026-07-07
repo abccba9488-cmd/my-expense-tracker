@@ -442,7 +442,7 @@ def _gutai(ctx, bull=True):
     week_break = (ctx['close'] > t['week_low_4']) == bull if (ctx['close'] and t.get('week_low_4') is not None) else None
     month_break = (ctx['close'] > t['month_low_20']) == bull if (ctx['close'] and t.get('month_low_20') is not None) else None
 
-    s.award('週K/週D同向', k_w_ge_d, 3)
+    s.award('週K/週D同向', k_w_ge_d if t.get('k_weekly') is not None else None, 3)
     s.award('月K/月D同向', k_m_ge_d if t.get('k_monthly') is not None else None, 3)
     s.award('日MACD柱狀同向增強', macd_daily_trend, 3)
     s.award('日MACD柱狀方向一致', macd_daily_sign, 3)
