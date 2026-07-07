@@ -1469,6 +1469,10 @@ function renderExpertTable() {
     : `<tr><td colspan="${colspan}" class="ann-empty">目前沒有符合選股標準的個股</td></tr>`;
   tbody.querySelectorAll('[data-code]').forEach(el => {
     el.addEventListener('click', () => {
+      // Land on the same ruleset tab the user was browsing from — without
+      // this, loadStockExpertScores() would keep whatever tab was left
+      // selected from some earlier, unrelated visit to the detail page.
+      _stockExpertKey = _expertKey;
       setDetailNavContext(rows.map(s => s.code), el.dataset.code);
       loadStockDetail(el.dataset.code);
     });
