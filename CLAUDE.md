@@ -365,6 +365,8 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 `#detail-nav-btns`（`prev-stock-btn`/`next-stock-btn`）在詳情頁沿用「使用者是從哪個列表點進來的」那份清單與目前排序/篩選，而不是固定用代號順序：呼叫進入前的表格用 `setDetailNavContext(codes, currentCode)` 記下 `state.detailNavList`/`state.detailNavIndex`；DataTables 表格用 `_dtOrderedCodes(dt, codeColIndex)`（`dt.rows({order:'applied', search:'applied'}).data()`）取出「目前排序+篩選後」的完整代號順序，不只是當前頁面那幾筆。`goToAdjacentStock(delta)` 直接呼叫 `loadStockDetail(list[newIdx])` 切換，按鈕在清單頭尾自動 disable。
 
+**重要 gotcha：每一個會呼叫 `loadStockDetail(code)` 的進入點都必須自己呼叫 `setDetailNavContext()`**，這個機制沒有集中在 `loadStockDetail()` 內部統一處理，而是散落在 6 個呼叫點各自負責（主表格、飆股清單、自選股、自結公告、達人選股列表、今日更新面板）。曾經有一個進入點（🆕 今日更新面板點股票晶片）漏掉這一步，導致從那裡點進詳情頁後，上一檔/下一檔會沿用不相關的舊清單。新增任何新的「點股票進詳情頁」進入點時，務必記得同時呼叫 `setDetailNavContext(codes, code)`，否則會重蹈這個 bug。
+
 ## 自結公告（爬蟲 + 決定性解析 + AI 評級）
 
 `crawl_announcements(date_str=None, limit=None)` 於 `crawler.py`，預設爬取前一個交易日的 MOPS 重大訊息；`limit` 只在手動測試時用於只處理清單前 N 筆。所有**數字**欄位（單月EPS、去年同月EPS、年增率、預估全年EPS、預估本益比）都是決定性解析/計算出來的，**AI 從不自己生數字**；AI 只負責根據這些已知數字 + 即時搜尋到的新聞給出評級與分析文字，邏輯對齊一個已驗證可用的參考實作（n8n 工作流程：先用關鍵字+正則決定性算好數字，再把這些「系統預算值」連同公告內容交給 AI，AI 只負責評級+寫分析，不重算數字）。
@@ -442,3 +444,11 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 - **`#detail-view` 達人選股評分卡**（`#stock-expert-card`）：`loadStockExpertScores(code)` 抓 `/api/stocks/<code>/expert-scores`，`#stock-expert-tabs` 列出該股所有已算出分數的規則，`renderStockExpertDetail()` 一樣先畫「總分 X/Y 分」大字標頭，再選股標準清單，再呼叫 `renderStockExpertChart()`。**圖表繪製邏輯抽成共用的 `_renderExpertChart(scoreItems, canvasId, wrapId, chartKey)`**，`renderStockExpertChart`/`renderModalExpertChart` 只是帶入各自的 canvas/state key 呼叫它——確保列表 modal 跟詳情頁兩處的視覺化永遠同步；`state.stockExpertChart`/`state.modalExpertChart` 各自持有 Chart.js 實例，切換分頁/關閉彈窗時 `.destroy()` 再建新的，避免 canvas 重用衝突。
 - **重要 gotcha：`_stockExpertKey`（目前選中的達人分頁）刻意跨股票延續，不是每次都重置**——`loadStockExpertScores()` 只有在 `_stockExpertKey` 對新股票不存在（`!scored.some(s => s.expert_key === _stockExpertKey)`，理論上不會發生，因為每檔股票都算好全部 8 套規則）時才 fallback 到「第一個通過的規則」。曾經每次都重置成「這檔股票自己第一個通過的規則」，導致用上一檔/下一檔導覽瀏覽時，選中的達人分頁會隨機跳來跳去（每檔股票通過的規則不同）。另外，從 `#expert-view` 列表點股票進入詳情頁時，`renderExpertTable()` 的點擊事件必須在呼叫 `loadStockDetail()` 之前手動把 `_stockExpertKey` 設成該列表目前的 `_expertKey`，否則會沿用使用者上次在別處瀏覽時殘留的分頁，而不是使用者點擊當下所在的那個達人榜單。
 - **總分一定要清楚顯示**：不論在列表的評分明細彈窗、還是詳情頁的評分卡，`.stock-expert-total`（大字、`--primary` 顏色數字）都放在選股標準清單「之前」，不是只靠分頁按鈕上的小字 `(X/Y)` 讓使用者自己找。
+
+### 已知未修復問題（8 角度 code review 找到，優先度較低，故意先擱置）
+
+- **`financial_extra` 千元轉換沒有自動化 migration 防護**：`_to_thousands()`（`crawler.py`）修復千元單位問題那次是手動整表重新回填，`database.py` 的 `init_db()` migration 清單裡沒有對應的自動修復項目。若之後 DB 從 `fetch_db.py` 的舊快照（早於那次修復）還原，或有任何殘留的舊格式資料被 Q4 反算引用，會算出離譜的比率，且無任何錯誤訊息。
+- **`crawl_director_holdings()` 的 `year_month` 只取 TWSE/TPEX 兩個來源中先回應的那個，套用到全部股票**：兩個 OpenAPI 各自獨立按月更新，若剛好其中一邊已進新月份、另一邊還沒，較晚更新的市場那批股票會被貼上錯誤的月份標籤。
+- **`static/js/app.js` 的 `_stockExpertKey` 全域可變狀態設計脆弱**：這個 session 已經因為這個模式修過兩次分頁跳來跳去的 bug（`c8aecf5`、`76cb5ed`），任何新增的「進入股票詳情頁」入口如果忘記手動同步這個變數，會再犯同樣的錯，且沒有機制強制檢查。
+- **`database.py` 的 `PRAGMA journal_mode=WAL` 用不分類的 `except Exception: pass`**：本意是容忍「檔案系統不支援 WAL」，但也會靜默吞掉其他真正的資料庫錯誤。
+- **本機與雲端資料庫的 FinMind 歷史深度不完全一致**：雲端 `dividend_policy` 在 2014–2019 部分年份仍偏稀疏（回填時多次遇到 Zeabur 容器在高負載下當機，過程詳見 git log 附近的操作紀錄），導致同一套規則在本機/雲端算出的通過檔數不同。不是程式錯誤，純粹是資料完整度差異；`888標準2`/`888標準4`/`股海老牛` 這幾套依賴長期股利歷史的規則受影響最大。
