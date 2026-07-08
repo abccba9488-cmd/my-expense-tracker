@@ -152,8 +152,8 @@ main { padding-top: 52px; min-height: 100vh; }
   margin-bottom: 14px; flex-wrap: wrap; gap: 10px;
 }
 .filter-group {
-  display: flex; gap: 6px; max-width: 100%;
-  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+  display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%;
+  overflow-y: hidden; -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
 .filter-group::-webkit-scrollbar { display: none; }
@@ -643,4 +643,5 @@ table.dataTable tbody td {
   .status-panel { width: calc(100vw - 32px); }
   .admin-panel { width: calc(100vw - 32px); }
   .toolbar { flex-direction: column; align-items: flex-start; }
+  .filter-group { flex-wrap: nowrap; overflow-x: auto; }
 }
