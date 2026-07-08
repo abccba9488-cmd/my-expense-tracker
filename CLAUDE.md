@@ -464,3 +464,13 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 - **`static/js/app.js` 的 `_stockExpertKey` 全域可變狀態設計脆弱**：這個 session 已經因為這個模式修過兩次分頁跳來跳去的 bug（`c8aecf5`、`76cb5ed`），任何新增的「進入股票詳情頁」入口如果忘記手動同步這個變數，會再犯同樣的錯，且沒有機制強制檢查。
 - **`database.py` 的 `PRAGMA journal_mode=WAL` 用不分類的 `except Exception: pass`**：本意是容忍「檔案系統不支援 WAL」，但也會靜默吞掉其他真正的資料庫錯誤。
 - **本機與雲端資料庫的 FinMind 歷史深度不完全一致**：雲端 `dividend_policy` 在 2014–2019 部分年份仍偏稀疏（回填時多次遇到 Zeabur 容器在高負載下當機，過程詳見 git log 附近的操作紀錄），導致同一套規則在本機/雲端算出的通過檔數不同。不是程式錯誤，純粹是資料完整度差異；`888標準2`/`888標準4`/`股海老牛` 這幾套依賴長期股利歷史的規則受影響最大。
+
+### 回測（backtest_gutai.py，僅本機、獨立於正式排程）
+
+`backtest_gutai.py` 回測「股泰多方/空方訊號」歷史上是否真的有效——**刻意獨立於 `experts.py` 的 `_build_context()`**（正式排程每天呼叫的那個），只讀取 DB、從不寫入 `expert_scores`，避免任何回測邏輯有機會影響正式評分。
+
+**方法**：每週取一個歷史樣本日，用「只包含當時已知資料」重建 context（月營收用「次月10日後才算已知」、季報用專案既有的公告期限規則 5/15、8/14、11/14、隔年3/31 判斷，避免用到未來資料作弊），直接呼叫 `experts.py` 原封不動的 `score_gutai_bull`/`score_gutai_bear`。當天分數 `passed=True` 且 `score>=--min-score` 才算「發出訊號」，記錄該股之後 `--horizon` 個交易日的報酬，跟當天全市場平均報酬（基準）比較，並依分數級距（60-79/80-89/90+）分組統計。
+
+**已知限制**：`stocks` 表只有目前追蹤中的股票，沒有回測當時的完整名單，下市股票的失敗案例看不到（倖存者偏差）；沒有計入交易成本/滑價；股泰的 TU/TM/TD 真實公式未公開，回測沿用跟正式評分一樣的 `technical.py` 近似值。
+
+**效能規範（往後任何回測腳本都要遵守）：一律用 `multiprocessing` 平行運算，盡量榨乾多核心 CPU，不要寫成單執行緒**。技術指標（EMA/MACD/RSI/KD）對每檔股票只算一次、快取成陣列，用 `bisect` 依日期索引取值，不要每個取樣日都重新計算一次（那樣等於重跑一次完整的 `compute_expert_scores()`，慢上百倍）；平行化的軸是「每個取樣日彼此獨立」，用 `multiprocessing.Pool(initializer=...)` 把大型唯讀資料（技術指標陣列、法人、持股、季報）在每個 worker process 只序列化一次（用 initializer 塞進 worker 自己的全域變數），不要每個 task 都重新 pickle 一次。Windows 用 `spawn` 模式啟動子行程，進入點一定要包在 `if __name__ == '__main__':` 裡。
