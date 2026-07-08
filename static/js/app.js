@@ -1418,7 +1418,7 @@ function _isGutaiKey(key) {
 
 async function loadExpertDetail(key) {
   const tbody = document.getElementById('expert-tbody');
-  const colspan = _isGutaiKey(key) ? 15 : 13;
+  const colspan = _isGutaiKey(key) ? 15 : 14;
   tbody.innerHTML = `<tr><td colspan="${colspan}" class="ann-empty">載入中…</td></tr>`;
   try {
     _expertData = await fetch(`/api/experts/${key}`).then(r => r.json());
@@ -1433,13 +1433,12 @@ async function loadExpertDetail(key) {
 
 function renderExpertTable() {
   const tbody = document.getElementById('expert-tbody');
-  // 入榜日期／轉換（空轉多/多轉空）只對股泰多方/空方訊號這一組有意義
-  // （見 experts.py ExpertScore 的 entered_at/transition 說明），其他 6 套
-  // 規則不顯示這兩欄。
+  // 入榜日期對全部 8 套規則都有意義，一律顯示；轉換（空轉多/多轉空）只對
+  // 股泰多方/空方訊號這一組有意義（見 experts.py ExpertScore 的
+  // entered_at/transition 說明），其他規則不顯示這欄。
   const isGutai = _isGutaiKey(_expertKey);
-  document.getElementById('expert-th-entered').classList.toggle('hidden', !isGutai);
   document.getElementById('expert-th-transition').classList.toggle('hidden', !isGutai);
-  const colspan = isGutai ? 15 : 13;
+  const colspan = isGutai ? 15 : 14;
 
   if (!_expertData.length) {
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>`;
@@ -1464,7 +1463,8 @@ function renderExpertTable() {
           <td class="td-center"><span class="ann-subject-link" data-idx="${_expertData.indexOf(s)}">查看明細</span></td>
           <td>${p.price_date || '—'}</td>
           <td class="td-left">${ma20Cell(p)[1]}</td>
-          ${isGutai ? `<td>${s.entered_at || '—'}</td><td>${s.transition || '—'}</td>` : ''}
+          <td>${s.entered_at || '—'}</td>
+          ${isGutai ? `<td>${s.transition || '—'}</td>` : ''}
         </tr>
       `;
       }).join('')
