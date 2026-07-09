@@ -14,6 +14,7 @@ const state = {
   priceDt:         null,
   revenueDt:       null,
   quarterlyDt:     null,
+  priceDays:       90,
 };
 
 /* ── Theme ── */
@@ -313,9 +314,14 @@ async function loadStockDetail(code) {
   document.getElementById('d-market').textContent   = info.market || '';
   document.getElementById('d-industry').textContent = info.industry || '';
 
+  // Sync days-selector buttons with the persisted period (kept across stock switches)
+  document.querySelectorAll('.days-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.days === String(state.priceDays));
+  });
+
   // Load data in parallel
   const [prices, revenues, financials] = await Promise.all([
-    fetch(`/api/stocks/${code}/prices?days=90`).then(r => r.json()).catch(() => []),
+    fetch(`/api/stocks/${code}/prices?days=${state.priceDays}`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/revenue`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/financials`).then(r => r.json()).catch(() => []),
   ]);
@@ -393,6 +399,7 @@ document.querySelectorAll('.days-btn').forEach(btn => {
     document.querySelectorAll('.days-btn').forEach(b => b.classList.remove('active'));
     this.classList.add('active');
     const days = this.dataset.days;
+    state.priceDays = Number(days);
     const prices = await fetch(`/api/stocks/${state.currentCode}/prices?days=${days}`)
       .then(r => r.json()).catch(() => []);
     renderPriceChart(prices);
