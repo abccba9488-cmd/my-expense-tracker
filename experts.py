@@ -872,9 +872,18 @@ def get_stock_fundamentals(db, code):
         total = cash + stock
         annual_eps = _annual_eps_sum(merged, y)
         payout = (total / annual_eps * 100) if annual_eps else None
+        # Yield basis: that fiscal year's year-end close (or nearest prior
+        # trading day) — the most common convention for a historical
+        # per-year dividend yield series.
+        year_end_close = db.execute(text('''
+            SELECT close FROM daily_prices
+            WHERE stock_code = :code AND date <= :d
+            ORDER BY date DESC LIMIT 1
+        '''), {'code': code, 'd': f'{y}-12-31'}).scalar()
+        div_yield = (total / year_end_close * 100) if year_end_close else None
         dividends.append({
             'fiscal_year': y, 'cash_dividend': cash, 'stock_dividend': stock,
-            'total': total, 'payout_ratio': payout,
+            'total': total, 'payout_ratio': payout, 'dividend_yield': div_yield,
         })
 
     since_div = (datetime.now(_TZ).date() - timedelta(days=5 * 365)).isoformat()

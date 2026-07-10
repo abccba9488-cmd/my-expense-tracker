@@ -747,6 +747,11 @@ function renderFundDividendChart(dividends) {
           data: sorted.map(d => d.payout_ratio),
           borderColor: getCssVar('--neg'), borderWidth: 2, pointRadius: 3, tension: 0.3,
         },
+        {
+          type: 'line', label: '殖利率%', yAxisID: 'y2',
+          data: sorted.map(d => d.dividend_yield),
+          borderColor: getCssVar('--text2'), borderWidth: 2, pointRadius: 3, tension: 0.3,
+        },
       ],
     },
     options: {
@@ -768,6 +773,7 @@ function renderFundDividendTable(dividends) {
     d.stock_dividend != null ? d.stock_dividend.toFixed(2) : '—',
     d.total          != null ? d.total.toFixed(2)          : '—',
     d.payout_ratio   != null ? fmt.pct(d.payout_ratio)     : '—',
+    d.dividend_yield != null ? fmt.pct(d.dividend_yield)   : '—',
   ]);
   state.fundDividendDt = $('#fund-dividend-table').DataTable({
     data: rows, pageLength: 10, order: [],
