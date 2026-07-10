@@ -392,6 +392,111 @@ def _migrate_q4_to_individual(conn):
     '''))
 
 
+def _fix_finmind_decumulate(conn):
+    """One-time repair for financial_extra rows written by an earlier,
+    flawed version of crawl_finmind_financials() (crawler.py), which treated
+    all six income-statement/cash-flow fields as "Q4 = annual cumulative"
+    (mirroring quarterly_financials' own Q4 convention) and de-cumulated
+    accordingly. Verified against real data this premise was wrong for both
+    field groups, in opposite directions:
+
+      - Income-statement fields (gross_profit/cost_of_goods_sold/
+        pretax_income): FinMind already reports these as single-quarter
+        values for every quarter — the old crawler wrongly subtracted
+        Q1+Q2+Q3 from Q4 as if it were cumulative, corrupting ~86% of all Q4
+        rows into large negative numbers (spot-checked: 2330/2317/2454/1301
+        showed a negative Q4 gross margin in *every single year* on record).
+        Fix: add Q1+Q2+Q3 back onto Q4.
+
+      - Cash-flow-statement fields (operating_cash_flow/interest_expense/
+        capex): FinMind reports these as year-to-date cumulative for every
+        quarter (Taiwan's official cash-flow disclosure convention) — the
+        old crawler never de-cumulated Q2/Q3 at all (left as raw cumulative)
+        and de-cumulated Q4 by subtracting Q1+Q2+Q3 (each itself still
+        cumulative), which is not the correct subtrahend. Fix, using each
+        row's original pre-fix value: Q2 -= Q1, Q3 -= Q2, Q4 = Q4 + Q1 + Q2
+        (derivable algebraically from the old buggy Q4 formula — no need to
+        re-fetch from FinMind). Statements run Q4-then-Q3-then-Q2 so each
+        still reads the not-yet-overwritten earlier quarter it needs.
+
+    crawl_finmind_financials() itself is already fixed for future crawls;
+    this only repairs historical rows already sitting in the database."""
+    for field in ('gross_profit', 'cost_of_goods_sold', 'pretax_income'):
+        conn.execute(text(f'''
+            UPDATE financial_extra
+            SET {field} = {field}
+                + (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 1)
+                + (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 2)
+                + (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 3)
+            WHERE quarter = 4
+              AND {field} IS NOT NULL
+              AND (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 1) IS NOT NULL
+              AND (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 2) IS NOT NULL
+              AND (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 3) IS NOT NULL
+        '''))
+
+    for field in ('operating_cash_flow', 'interest_expense', 'capex'):
+        # Q4 = Q4 + Q1 + Q2 (original values) — must run before Q2 is
+        # overwritten by the statement below.
+        conn.execute(text(f'''
+            UPDATE financial_extra
+            SET {field} = {field}
+                + (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 1)
+                + (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 2)
+            WHERE quarter = 4
+              AND {field} IS NOT NULL
+              AND (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 1) IS NOT NULL
+              AND (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 2) IS NOT NULL
+        '''))
+        # Q3 = Q3 - Q2 (original value) — must run before Q2 is overwritten
+        # by the statement below.
+        conn.execute(text(f'''
+            UPDATE financial_extra
+            SET {field} = {field}
+                - (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 2)
+            WHERE quarter = 3
+              AND {field} IS NOT NULL
+              AND (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 2) IS NOT NULL
+        '''))
+        # Q2 = Q2 - Q1 — run last.
+        conn.execute(text(f'''
+            UPDATE financial_extra
+            SET {field} = {field}
+                - (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 1)
+            WHERE quarter = 2
+              AND {field} IS NOT NULL
+              AND (SELECT q.{field} FROM financial_extra q
+                   WHERE q.stock_code = financial_extra.stock_code
+                     AND q.year = financial_extra.year AND q.quarter = 1) IS NOT NULL
+        '''))
+
+
 def init_db():
     Base.metadata.create_all(engine)
 
@@ -482,6 +587,18 @@ def init_db():
         if not done:
             _migrate_q4_to_individual(conn)
             conn.execute(text("INSERT INTO schema_migrations(name) VALUES('q4_annual_to_individual')"))
+            conn.commit()
+
+    # Migration: repair financial_extra rows corrupted by the old (wrong)
+    # FinMind Q4/cumulative de-cumulation logic — see _fix_finmind_decumulate
+    # docstring for the full story.
+    with engine.connect() as conn:
+        done = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name='fix_finmind_decumulate'"
+        )).scalar()
+        if not done:
+            _fix_finmind_decumulate(conn)
+            conn.execute(text("INSERT INTO schema_migrations(name) VALUES('fix_finmind_decumulate')"))
             conn.commit()
 
     # Migration: add new announcements columns (redesigned, AI-free crawler)

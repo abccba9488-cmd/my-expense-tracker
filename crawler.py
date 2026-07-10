@@ -1617,9 +1617,23 @@ _QUARTER_END = {1: '03-31', 2: '06-30', 3: '09-30', 4: '12-31'}
 def crawl_finmind_financials(year: int, quarter: int):
     """資產負債表 + 財報毛利項目 + 現金流量表（季資料，補 quarterly_financials
     沒有的欄位；quarterly_financials 本身來自 MOPS，這裡刻意存成獨立表不混用
-    兩個資料來源）。Q4 的損益/現金流項目是年度累計值，比照 quarterly_financials
-    的作法減去 Q1+Q2+Q3 還原為單季值；資產負債表項目本身是期末時點值，
-    不需要調整。單位：千元。"""
+    兩個資料來源）。單位：千元。
+
+    三組欄位分屬不同的累計慣例，處理方式不同（曾經誤把三組都當成「Q4是年度
+    累計」處理，導致 Q4 損益表欄位被多扣一次、現金流欄位 Q2/Q3 從未還原、
+    Q4 用錯的減項——已用真實資料驗證修復，見 database.py 的
+    fix_finmind_decumulate migration 對歷史資料的說明）：
+      - 資產負債表（inventories/equity/total_assets 等）：本身是期末時點值，
+        不需要任何調整。
+      - 損益表（gross_profit/cost_of_goods_sold/pretax_income，來自
+        TaiwanStockFinancialStatements）：FinMind 每一季给的都已經是單季值，
+        不需要調整。
+      - 現金流量表（operating_cash_flow/interest_expense/capex，來自
+        TaiwanStockCashFlowsStatement）：依台灣官方揭露慣例是「年初至今累計
+        值」，每季都要減去同年度前面已存的單季值才能還原成單季值——Q1 本身
+        即為單季不用處理；Q2 減去 Q1；Q3 減去 Q2；Q4 減去 Q3。因為排程保證
+        同一年度的季別依序（Q1→Q2→Q3→Q4）爬取，處理 Qn 時前面幾季在
+        financial_extra 裡必定已經是還原後的單季值，可以直接當減項來源。"""
     period_end = f'{year}-{_QUARTER_END[quarter]}'
     _log('finmind_financials', 'running', f'{year}Q{quarter}')
     db = SessionLocal()
@@ -1640,16 +1654,16 @@ def crawl_finmind_financials(year: int, quarter: int):
         fs = _pivot('TaiwanStockFinancialStatements', _FS_KEYS)
         cf = _pivot('TaiwanStockCashFlowsStatement', _CF_KEYS)
 
-        def _de_cumulate(val, existing, field):
-            """Q4 fields from FinMind are annual cumulative; subtract Q1-Q3
-            (already stored in financial_extra) to get the individual quarter,
-            same convention as quarterly_financials' own Q4 handling."""
-            if val is None or existing is None:
+        def _de_cumulate_cf(val, code, field):
+            """Subtract this year's prior quarter's already-stored (single-
+            quarter) value for a year-to-date cumulative cash-flow-statement
+            field. Q1 needs no adjustment."""
+            if val is None or quarter == 1:
                 return val
-            parts = [getattr(e, field) for e in existing]
-            if any(p is None for p in parts):
+            prev = db.query(FinancialExtra).filter_by(stock_code=code, year=year, quarter=quarter - 1).first()
+            if prev is None or getattr(prev, field) is None:
                 return val
-            return val - sum(parts)
+            return val - getattr(prev, field)
 
         records = []
         for code in set(bs) | set(fs) | set(cf):
@@ -1661,27 +1675,17 @@ def crawl_finmind_financials(year: int, quarter: int):
             gross_profit, cogs, pretax = f.get('GrossProfit'), f.get('CostOfGoodsSold'), f.get('PreTaxIncome')
             interest_expense = c.get('InterestExpense')
 
-            # Convert FinMind's plain-NT$ values to 千元 *before* the Q4
-            # de-cumulate subtraction below, since the Q1-Q3 values already
-            # stored in financial_extra are in 千元 — subtracting mismatched
-            # scales would produce garbage.
-            gross_profit     = _to_thousands(gross_profit)
-            cogs              = _to_thousands(cogs)
-            pretax            = _to_thousands(pretax)
-            ocf               = _to_thousands(ocf)
-            interest_expense  = _to_thousands(interest_expense)
-            capex             = _to_thousands(capex)
+            # Income-statement items: FinMind already reports single-quarter
+            # values for every quarter, no adjustment needed.
+            gross_profit = _to_thousands(gross_profit)
+            cogs         = _to_thousands(cogs)
+            pretax       = _to_thousands(pretax)
 
-            if quarter == 4:
-                q123 = [db.query(FinancialExtra).filter_by(stock_code=code, year=year, quarter=q).first()
-                        for q in (1, 2, 3)]
-                if all(q123):
-                    gross_profit     = _de_cumulate(gross_profit, q123, 'gross_profit')
-                    cogs              = _de_cumulate(cogs, q123, 'cost_of_goods_sold')
-                    pretax            = _de_cumulate(pretax, q123, 'pretax_income')
-                    ocf               = _de_cumulate(ocf, q123, 'operating_cash_flow')
-                    interest_expense  = _de_cumulate(interest_expense, q123, 'interest_expense')
-                    capex             = _de_cumulate(capex, q123, 'capex')
+            # Cash-flow-statement items: year-to-date cumulative, de-cumulate
+            # against the already-stored prior quarter.
+            ocf              = _de_cumulate_cf(_to_thousands(ocf), code, 'operating_cash_flow')
+            interest_expense = _de_cumulate_cf(_to_thousands(interest_expense), code, 'interest_expense')
+            capex            = _de_cumulate_cf(_to_thousands(capex), code, 'capex')
 
             records.append({
                 'stock_code': code, 'year': year, 'quarter': quarter,
