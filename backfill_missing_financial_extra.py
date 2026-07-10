@@ -19,6 +19,16 @@ again for exactly these periods re-fetches and overwrites every column
 (not just the missing ones) — safe and idempotent regardless of how many
 times it's re-run.
 
+RESULT (2026-07-11, run on Zeabur): re-running this did NOT fix the gap —
+balance-sheet row counts stayed at 0 for every period. Follow-up diagnostics
+(diagnose_balance_sheet.py, diagnose_balance_sheet2.py) confirmed FinMind's
+own TaiwanStockBalanceSheet dataset is genuinely empty for these exact dates
+even for 2330 (TSMC, the best-covered stock on the platform) — this is an
+upstream FinMind data gap, not a bug in our crawler, and cannot be fixed by
+re-crawling. See CLAUDE.md's "已知未修復問題" for the full writeup. Kept
+here for the record / in case FinMind backfills their own gap later, at
+which point re-running this would pick it up automatically.
+
 Usage (run on Zeabur terminal — needs FINMIND_TOKEN + network):
     python backfill_missing_financial_extra.py
 """

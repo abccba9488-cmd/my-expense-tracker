@@ -6,6 +6,11 @@ two possibilities:
   (b) it returns rows, but with 'type' values that don't match _BS_KEYS,
       so crawler.py's _pivot() silently filters everything out.
 
+RESULT (2026-07-11): every tested date came back with 0 raw rows — genuinely
+empty API response, not a type-name filtering issue. See
+diagnose_balance_sheet2.py for the follow-up that confirmed this is an
+upstream FinMind data gap (see CLAUDE.md's "已知未修復問題").
+
 Usage: python diagnose_balance_sheet.py
 """
 import finmind_client

@@ -7,6 +7,13 @@ _QUARTER_END assumption (03-31/06-30/09-30/12-31) is simply the wrong date
 for some years, or whether the data is missing entirely even for a single
 well-covered stock (2330, TSMC).
 
+RESULT (2026-07-11): even 2330 (TSMC, the best-covered stock) is missing
+data for exactly the expected quarter-end dates in each problem year, and
+has no data under any nearby date either — confirms the gap is in FinMind's
+own TaiwanStockBalanceSheet dataset, not a date-mismatch in our own
+_QUARTER_END assumption. See CLAUDE.md's "已知未修復問題" for the full
+writeup and impact analysis.
+
 Usage: python diagnose_balance_sheet2.py
 """
 import finmind_client
