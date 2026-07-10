@@ -528,7 +528,7 @@ function renderRevenueTable(revenues) {
       ? `<span class="${pctClass(r.revenue_yoy)}">${fmt.pct(r.revenue_yoy)}</span>` : '—',
   ]);
   state.revenueDt = $('#revenue-table').DataTable({
-    data: rows, pageLength: 24, order: [],
+    data: rows, pageLength: 10, order: [],
     language: dtLang(), destroy: true, scrollX: true,
   });
 }
@@ -581,7 +581,7 @@ function renderQuarterlyTable(financials) {
       ? `<span class="${pctClass(f.eps)}">${fmt.eps(f.eps)}</span>` : '—',
   ]);
   state.quarterlyDt = $('#quarterly-table').DataTable({
-    data: rows, pageLength: 20, order: [],
+    data: rows, pageLength: 10, order: [],
     language: dtLang(), destroy: true, scrollX: true,
   });
 }
