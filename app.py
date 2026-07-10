@@ -511,6 +511,15 @@ def api_financials(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/fundamentals')
+def api_stock_fundamentals(code):
+    db = SessionLocal()
+    try:
+        return jsonify(experts.get_stock_fundamentals(db, code))
+    finally:
+        db.close()
+
+
 @app.route('/api/stocks/<code>/expert-scores')
 def api_stock_expert_scores(code):
     db = SessionLocal()

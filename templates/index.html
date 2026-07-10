@@ -476,6 +476,38 @@
         </table>
       </div>
 
+      <!-- 進階財報指標（達人選股用） -->
+      <div class="card">
+        <div class="card-header">
+          <h3>📊 進階財報指標（達人選股用）</h3>
+          <label class="fund-toggle">
+            <input type="checkbox" id="fund-toggle-chk" onchange="toggleFundamentals(this.checked)">
+            顯示詳細指標
+          </label>
+        </div>
+        <div id="fund-body" class="hidden">
+          <div class="fund-stats" id="fund-stats"></div>
+
+          <h4 class="fund-subtitle">獲利能力（毛利率／營業利益率／ROE／ROA）</h4>
+          <div class="chart-wrap"><canvas id="fund-profit-chart"></canvas></div>
+
+          <h4 class="fund-subtitle">財務體質（流動比率／速動比率／負債比率）</h4>
+          <div class="chart-wrap"><canvas id="fund-health-chart"></canvas></div>
+
+          <h4 class="fund-subtitle">週轉天數（存貨／應收帳款）</h4>
+          <div class="chart-wrap"><canvas id="fund-turnover-chart"></canvas></div>
+
+          <h4 class="fund-subtitle">股利政策</h4>
+          <div class="chart-wrap"><canvas id="fund-dividend-chart"></canvas></div>
+          <table id="fund-dividend-table" class="display compact" style="width:100%">
+            <thead>
+              <tr><th>年度</th><th>現金股利</th><th>股票股利</th><th>合計</th><th>配發率%</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
   </div>
 </main>

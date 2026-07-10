@@ -802,3 +802,109 @@ def compute_expert_scores():
         raise
     finally:
         db.close()
+
+
+# ── per-stock fundamentals (detail page) ────────────────────────────────────
+
+def get_stock_fundamentals(db, code):
+    """Per-quarter profitability/financial-health ratios + dividend history +
+    latest valuation snapshot for one stock's detail page. Reuses the exact
+    same ratio formulas as the scoring engine (_ratio_series /
+    _quick_ratio_series / _turnover_days) so the numbers always match what
+    達人選股 used to score this stock — but per-quarter (not trailing-N
+    averaged) so the frontend can chart the trend."""
+    qf = {}
+    for r in db.execute(text('''
+        SELECT year, quarter, revenue, operating_income, net_income, eps
+        FROM quarterly_financials WHERE stock_code = :code
+    '''), {'code': code}).mappings():
+        qf[(r['year'], r['quarter'])] = dict(r)
+    fe = {}
+    for r in db.execute(text('''
+        SELECT year, quarter, inventories, accounts_receivable, current_assets,
+               current_liabilities, liabilities, equity, total_assets,
+               gross_profit, cost_of_goods_sold
+        FROM financial_extra WHERE stock_code = :code
+    '''), {'code': code}).mappings():
+        fe[(r['year'], r['quarter'])] = dict(r)
+
+    keys = sorted(set(qf) | set(fe), reverse=True)
+    merged = []
+    for key in keys:
+        row = {'year': key[0], 'quarter': key[1]}
+        row.update(qf.get(key, {}))
+        row.update({k: v for k, v in fe.get(key, {}).items() if k not in ('year', 'quarter')})
+        merged.append(row)
+
+    gross_margin  = _ratio_series(merged, 'gross_profit', 'revenue')
+    op_margin     = _ratio_series(merged, 'operating_income', 'revenue')
+    roe           = _ratio_series(merged, 'net_income', 'equity', annualize=True)
+    roa           = _ratio_series(merged, 'net_income', 'total_assets', annualize=True)
+    current_ratio = _ratio_series(merged, 'current_assets', 'current_liabilities')
+    quick_ratio   = _quick_ratio_series(merged)
+    debt_ratio    = _ratio_series(merged, 'liabilities', 'total_assets')
+    inv_days      = _turnover_days(merged, 'inventories', 'cost_of_goods_sold')
+    ar_days       = _turnover_days(merged, 'accounts_receivable', 'revenue')
+
+    quarterly = [{
+        'year': row['year'], 'quarter': row['quarter'],
+        'gross_margin':     gross_margin[i],
+        'operating_margin': op_margin[i],
+        'roe':              roe[i],
+        'roa':              roa[i],
+        'current_ratio':    current_ratio[i],
+        'quick_ratio':      quick_ratio[i],
+        'debt_ratio':       debt_ratio[i],
+        'inventory_turnover_days': inv_days[i] if i < len(inv_days) else None,
+        'ar_turnover_days':        ar_days[i] if i < len(ar_days) else None,
+    } for i, row in enumerate(merged)]
+
+    div_by_year = {}
+    for r in db.execute(text('''
+        SELECT fiscal_year, SUM(cash_dividend) AS cash, SUM(stock_dividend) AS stock
+        FROM dividend_policy WHERE stock_code = :code GROUP BY fiscal_year
+    '''), {'code': code}).mappings():
+        div_by_year[r['fiscal_year']] = {'cash': r['cash'] or 0.0, 'stock': r['stock'] or 0.0}
+
+    dividends = []
+    for y in sorted(div_by_year, reverse=True):
+        cash, stock = div_by_year[y]['cash'], div_by_year[y]['stock']
+        total = cash + stock
+        annual_eps = _annual_eps_sum(merged, y)
+        payout = (total / annual_eps * 100) if annual_eps else None
+        dividends.append({
+            'fiscal_year': y, 'cash_dividend': cash, 'stock_dividend': stock,
+            'total': total, 'payout_ratio': payout,
+        })
+
+    since_div = (datetime.now(_TZ).date() - timedelta(days=5 * 365)).isoformat()
+    fill_known = [r['filled'] for r in db.execute(text('''
+        SELECT filled FROM dividend_fill_events
+        WHERE stock_code = :code AND ex_date >= :since AND filled IS NOT NULL
+    '''), {'code': code, 'since': since_div}).mappings()]
+    fill_rate_5y = (sum(fill_known) / len(fill_known) * 100) if fill_known else None
+
+    # per/pbr/dividend_yield: latest row where they're actually populated,
+    # same lag-tolerant approach as _build_context (see its comment above).
+    snap = db.execute(text('''
+        SELECT per, pbr, dividend_yield FROM daily_prices
+        WHERE stock_code = :code AND pbr IS NOT NULL
+        ORDER BY date DESC LIMIT 1
+    '''), {'code': code}).mappings().first()
+
+    dh = db.execute(text('''
+        SELECT holding_pct FROM director_holdings
+        WHERE stock_code = :code ORDER BY year_month DESC LIMIT 1
+    '''), {'code': code}).mappings().first()
+
+    return {
+        'quarterly': quarterly,
+        'dividends': dividends,
+        'snapshot': {
+            'per':                   snap['per'] if snap else None,
+            'pbr':                   snap['pbr'] if snap else None,
+            'dividend_yield':        snap['dividend_yield'] if snap else None,
+            'director_holding_pct':  dh['holding_pct'] if dh else None,
+            'fill_rate_5y':          fill_rate_5y,
+        },
+    }

@@ -228,6 +228,25 @@ main { padding-top: 52px; min-height: 100vh; }
 }
 .badge-code { background: var(--primary); color: #fff; font-weight: 600; }
 
+/* ── Fundamentals panel ── */
+.fund-toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--text2); cursor: pointer; white-space: nowrap;
+}
+.fund-toggle input[type="checkbox"] { cursor: pointer; accent-color: var(--primary); width: 14px; height: 14px; }
+.fund-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px; margin-bottom: 20px;
+}
+.fund-stat-tile {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; text-align: center;
+}
+.fund-stat-label { font-size: 12px; color: var(--text2); margin-bottom: 4px; }
+.fund-stat-value { font-size: 17px; font-weight: 700; }
+.fund-subtitle { font-size: 13px; font-weight: 600; color: var(--text2); margin: 18px 0 8px; }
+.fund-subtitle:first-of-type { margin-top: 0; }
+
 /* ── Chart ── */
 .chart-wrap { position: relative; height: 260px; }
 .days-selector { display: flex; gap: 6px; }

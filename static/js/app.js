@@ -15,6 +15,13 @@ const state = {
   revenueDt:       null,
   quarterlyDt:     null,
   priceDays:       90,
+  fundamentals:      null,
+  showFundamentals:  false,
+  fundProfitChart:   null,
+  fundHealthChart:   null,
+  fundTurnoverChart: null,
+  fundDividendChart: null,
+  fundDividendDt:    null,
 };
 
 /* ── Theme ── */
@@ -320,10 +327,11 @@ async function loadStockDetail(code) {
   });
 
   // Load data in parallel
-  const [prices, revenues, financials] = await Promise.all([
+  const [prices, revenues, financials, fundamentals] = await Promise.all([
     fetch(`/api/stocks/${code}/prices?days=${state.priceDays}`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/revenue`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/financials`).then(r => r.json()).catch(() => []),
+    fetch(`/api/stocks/${code}/fundamentals`).then(r => r.json()).catch(() => null),
   ]);
 
   renderPriceChart(prices);
@@ -332,6 +340,7 @@ async function loadStockDetail(code) {
   renderRevenueTable(revenues);
   renderEpsChart(financials);
   renderQuarterlyTable(financials);
+  renderFundamentalsPanel(fundamentals);
   loadStockExpertScores(code);
 
   if (state.user && state.user.is_admin) loadStockAiAnalysis(code);
@@ -581,6 +590,186 @@ function renderQuarterlyTable(financials) {
       ? `<span class="${pctClass(f.eps)}">${fmt.eps(f.eps)}</span>` : '—',
   ]);
   state.quarterlyDt = $('#quarterly-table').DataTable({
+    data: rows, pageLength: 10, order: [],
+    language: dtLang(), destroy: true, scrollX: true,
+  });
+}
+
+/* ── Fundamentals panel (達人選股用進階財報指標) ── */
+function toggleFundamentals(checked) {
+  state.showFundamentals = checked;
+  document.getElementById('fund-body').classList.toggle('hidden', !checked);
+  if (checked) renderFundCharts(state.fundamentals);
+}
+
+function renderFundamentalsPanel(data) {
+  state.fundamentals = data;
+  document.getElementById('fund-toggle-chk').checked = state.showFundamentals;
+  document.getElementById('fund-body').classList.toggle('hidden', !state.showFundamentals);
+  renderFundStats(data ? data.snapshot : null);
+  if (state.showFundamentals) renderFundCharts(data);
+}
+
+function renderFundStats(snap) {
+  const wrap = document.getElementById('fund-stats');
+  if (!snap) { wrap.innerHTML = ''; return; }
+  const tiles = [
+    ['本益比',        snap.per                  != null ? snap.per.toFixed(2)                  : '—'],
+    ['股價淨值比',    snap.pbr                  != null ? snap.pbr.toFixed(2)                  : '—'],
+    ['殖利率',        snap.dividend_yield       != null ? `${snap.dividend_yield.toFixed(2)}%`  : '—'],
+    ['董監持股比例',  snap.director_holding_pct != null ? `${snap.director_holding_pct.toFixed(2)}%` : '—'],
+    ['近5年填息機率', snap.fill_rate_5y         != null ? `${snap.fill_rate_5y.toFixed(1)}%`     : '—'],
+  ];
+  wrap.innerHTML = tiles.map(([label, value]) => `
+    <div class="fund-stat-tile">
+      <div class="fund-stat-label">${label}</div>
+      <div class="fund-stat-value">${value}</div>
+    </div>
+  `).join('');
+}
+
+function renderFundCharts(data) {
+  const quarterly = (data && data.quarterly) || [];
+  const dividends = (data && data.dividends) || [];
+  renderFundProfitChart(quarterly);
+  renderFundHealthChart(quarterly);
+  renderFundTurnoverChart(quarterly);
+  renderFundDividendChart(dividends);
+  renderFundDividendTable(dividends);
+}
+
+function _fundGroupedBarOptions(n) {
+  const maxTicks = n > 30 ? 12 : n > 16 ? 16 : n;
+  return {
+    ...chartOptions('%'),
+    scales: {
+      x: { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), maxRotation: 45, maxTicksLimit: maxTicks } },
+      y: { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+    },
+  };
+}
+
+function renderFundProfitChart(quarterly) {
+  const canvas = document.getElementById('fund-profit-chart');
+  if (state.fundProfitChart) { state.fundProfitChart.destroy(); state.fundProfitChart = null; }
+  if (!quarterly.length) return;
+  const sorted = [...quarterly].reverse();
+  const labels = sorted.map(q => `${q.year}/Q${q.quarter}`);
+  const mk = field => sorted.map(q => q[field] != null ? Number(q[field].toFixed(2)) : null);
+
+  state.fundProfitChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '毛利率%',     data: mk('gross_margin'),     backgroundColor: getCssVar('--primary') + 'bb' },
+        { label: '營業利益率%', data: mk('operating_margin'), backgroundColor: getCssVar('--pos') + 'bb' },
+        { label: 'ROE%',        data: mk('roe'),              backgroundColor: getCssVar('--neg') + 'bb' },
+        { label: 'ROA%',        data: mk('roa'),              backgroundColor: getCssVar('--text2') + 'bb' },
+      ],
+    },
+    options: _fundGroupedBarOptions(sorted.length),
+  });
+}
+
+function renderFundHealthChart(quarterly) {
+  const canvas = document.getElementById('fund-health-chart');
+  if (state.fundHealthChart) { state.fundHealthChart.destroy(); state.fundHealthChart = null; }
+  if (!quarterly.length) return;
+  const sorted = [...quarterly].reverse();
+  const labels = sorted.map(q => `${q.year}/Q${q.quarter}`);
+  const mk = field => sorted.map(q => q[field] != null ? Number(q[field].toFixed(2)) : null);
+
+  state.fundHealthChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '流動比率%', data: mk('current_ratio'), backgroundColor: getCssVar('--primary') + 'bb' },
+        { label: '速動比率%', data: mk('quick_ratio'),   backgroundColor: getCssVar('--pos') + 'bb' },
+        { label: '負債比率%', data: mk('debt_ratio'),    backgroundColor: getCssVar('--neg') + 'bb' },
+      ],
+    },
+    options: _fundGroupedBarOptions(sorted.length),
+  });
+}
+
+function renderFundTurnoverChart(quarterly) {
+  const canvas = document.getElementById('fund-turnover-chart');
+  if (state.fundTurnoverChart) { state.fundTurnoverChart.destroy(); state.fundTurnoverChart = null; }
+  if (!quarterly.length) return;
+  const sorted = [...quarterly].reverse();
+  const labels = sorted.map(q => `${q.year}/Q${q.quarter}`);
+  const mk = field => sorted.map(q => q[field] != null ? Number(q[field].toFixed(1)) : null);
+
+  state.fundTurnoverChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '存貨週轉天數',     data: mk('inventory_turnover_days'), backgroundColor: getCssVar('--primary') + 'bb' },
+        { label: '應收帳款週轉天數', data: mk('ar_turnover_days'),        backgroundColor: getCssVar('--pos') + 'bb' },
+      ],
+    },
+    options: {
+      ...chartOptions('天'),
+      scales: {
+        x: { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), maxRotation: 45, maxTicksLimit: sorted.length > 30 ? 12 : sorted.length > 16 ? 16 : sorted.length } },
+        y: { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+      },
+    },
+  });
+}
+
+function renderFundDividendChart(dividends) {
+  const canvas = document.getElementById('fund-dividend-chart');
+  if (state.fundDividendChart) { state.fundDividendChart.destroy(); state.fundDividendChart = null; }
+  if (!dividends.length) return;
+  const sorted = [...dividends].reverse();
+  const labels = sorted.map(d => d.fiscal_year);
+
+  state.fundDividendChart = new Chart(canvas, {
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar', label: '現金股利', stack: 'div', yAxisID: 'y',
+          data: sorted.map(d => d.cash_dividend),
+          backgroundColor: getCssVar('--primary') + '99', borderColor: getCssVar('--primary'), borderWidth: 1,
+        },
+        {
+          type: 'bar', label: '股票股利', stack: 'div', yAxisID: 'y',
+          data: sorted.map(d => d.stock_dividend),
+          backgroundColor: getCssVar('--pos') + '99', borderColor: getCssVar('--pos'), borderWidth: 1,
+        },
+        {
+          type: 'line', label: '配發率%', yAxisID: 'y2',
+          data: sorted.map(d => d.payout_ratio),
+          borderColor: getCssVar('--neg'), borderWidth: 2, pointRadius: 3, tension: 0.3,
+        },
+      ],
+    },
+    options: {
+      ...chartOptions(),
+      scales: {
+        y:  { position: 'left',  stacked: true, grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+        y2: { position: 'right', grid: { drawOnChartArea: false },        ticks: { color: getCssVar('--neg'), callback: v => v + '%' } },
+        x:  { stacked: true, grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+      },
+    },
+  });
+}
+
+function renderFundDividendTable(dividends) {
+  if (state.fundDividendDt) { state.fundDividendDt.destroy(); state.fundDividendDt = null; }
+  const rows = dividends.map(d => [
+    d.fiscal_year,
+    d.cash_dividend  != null ? d.cash_dividend.toFixed(2)  : '—',
+    d.stock_dividend != null ? d.stock_dividend.toFixed(2) : '—',
+    d.total          != null ? d.total.toFixed(2)          : '—',
+    d.payout_ratio   != null ? fmt.pct(d.payout_ratio)     : '—',
+  ]);
+  state.fundDividendDt = $('#fund-dividend-table').DataTable({
     data: rows, pageLength: 10, order: [],
     language: dtLang(), destroy: true, scrollX: true,
   });
