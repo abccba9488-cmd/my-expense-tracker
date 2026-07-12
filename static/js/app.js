@@ -53,19 +53,21 @@ function pctClass(v) {
   return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neutral';
 }
 
-// "甜蜜點"：highlights the cell when price is within ±3% of MA20/MA60/MA120,
-// colour-coded red/yellow/green respectively (shorter-term MA wins if the
-// price happens to be near more than one at once).
+// "甜蜜點"：highlights the cell when price is within ±3% of MA20/MA60/MA120/
+// MA240, colour-coded red/yellow/green/purple respectively (shorter-term MA
+// wins if the price happens to be near more than one at once).
 // Returns [sortVal, displayHtml] so DataTables can sort by colour block:
 //   0 = near MA20 (red)          → sorts first
 //   1 = near MA60 (yellow)
 //   2 = near MA120 (green)
-//   3 = has MA data but not near any of the three
-//   4 = no MA data at all        → sorts last
+//   3 = near MA240 (purple)
+//   4 = has MA data but not near any of the four
+//   5 = no MA data at all        → sorts last
 const _SWEET_SPOT_TIERS = [
   ['ma20',  '#ef4444', '#fff'],
   ['ma60',  '#eab308', '#000'],
   ['ma120', '#22c55e', '#fff'],
+  ['ma240', '#a855f7', '#fff'],
 ];
 function sweetSpotCell(s) {
   if (s.close != null) {
@@ -79,8 +81,8 @@ function sweetSpotCell(s) {
       }
     }
   }
-  if (s.ma20 != null) return [3, fmt.price(s.ma20)];
-  return [4, '—'];
+  if (s.ma20 != null) return [4, fmt.price(s.ma20)];
+  return [5, '—'];
 }
 
 // Icon-only signal (no cell fill): set by the monthly-revenue crawler when

@@ -127,10 +127,10 @@ data/stocks.db         SQLite 資料庫（自動建立）
 7=revenue, 8=revenue_yoy, 9=rev_year, 10=rev_month,
 11=eps, 12=eps_year, 13=eps_quarter,
 14=qf_revenue, 15=pe_ratio, 16=start_price, 17=ma20, 18=turnaround_signal,
-19=ma60, 20=ma120
+19=ma60, 20=ma120, 21=ma240
 ```
 
-`ma20`/`ma60`/`ma120`：各自以相關子查詢取該股最近 20／60／120 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT N`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端四個表格（主表格／飆股清單／自選股／達人選股列表）最後一欄「**甜蜜點**」皆呼叫 `app.js` 的 `sweetSpotCell(s)` 顯示此值：股價落在其中某條均線上下 3% 內時儲存格變色＋🔔 圖示提示——**紅＝接近 `ma20`、黃＝接近 `ma60`、綠＝接近 `ma120`**（若同時接近多條，優先顯示天期較短的那條，`_SWEET_SPOT_TIERS` 陣列依序 20→60→120 檢查）；都不接近但至少有 `ma20` 時顯示樸素數值，完全沒有均線資料才顯示「—」。這欄原本只看 `ma20`（單色黃底），2026-07-12 改版加入 `ma60`/`ma120` 並更名「甜蜜點」，`ma20Cell()` 已重新命名為 `sweetSpotCell()`。
+`ma20`/`ma60`/`ma120`/`ma240`：各自以相關子查詢取該股最近 20／60／120／240 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT N`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端四個表格（主表格／飆股清單／自選股／達人選股列表）最後一欄「**甜蜜點**」皆呼叫 `app.js` 的 `sweetSpotCell(s)` 顯示此值：股價落在其中某條均線上下 3% 內時儲存格變色＋🔔 圖示提示——**紅＝接近 `ma20`、黃＝接近 `ma60`、綠＝接近 `ma120`、紫＝接近 `ma240`**（若同時接近多條，優先顯示天期較短的那條，`_SWEET_SPOT_TIERS` 陣列依序 20→60→120→240 檢查）；都不接近但至少有 `ma20` 時顯示樸素數值，完全沒有均線資料才顯示「—」。這欄原本只看 `ma20`（單色黃底），2026-07-12 改版加入 `ma60`/`ma120` 並更名「甜蜜點」，`ma20Cell()` 已重新命名為 `sweetSpotCell()`；2026-07-13 再加入 `ma240`（紫色）。
 
 `turnaround_signal`：**不是即時計算，是 `crawl_monthly_revenue()`（`crawler.py`）每次爬到新月營收時直接算好存進 `monthly_revenue` 表的**。邏輯：該股最新一季 `quarterly_financials.eps < 0`（還在虧損）**且**本月 `revenue_yoy >= 20`（跟營收飆股用同一個門檻）→ 寫入 1，否則 0；每次爬蟲都重算覆寫（不像 `start_price` 只在新增時寫一次）。前端 `app.js` 的 `turnaroundCell(s)` 為真時顯示 🔥 圖示、假則顯示「—」，**純圖示不塗滿底色**（跟 `sweetSpotCell` 的變色不同）。四個表格（主表格／飆股清單／自選股／達人選股列表）都有這欄；**飆股清單表格（`#star-table`）這欄會永遠顯示「—」**——`calcEst()` 要求 `eps > 0` 才會回傳值，飆股清單本身的篩選邏輯已排除所有虧損股，使用者要求三表一致才加上，不是邏輯漏洞。內容只有「—」/🔥 太窄，三個表格（主/飆股/自選）的這一欄都用 `columnDefs` 的 `width: '64px'` 固定寬度，避免 DataTables 自動欄寬把標題擠出欄位（曾經發生過對不齊的問題）。
 

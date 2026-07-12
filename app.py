@@ -280,7 +280,7 @@ def api_updates_today():
 #    4=close,5=change_pct,6=price_date,7=revenue,8=revenue_yoy,
 #    9=rev_year,10=rev_month,11=eps,12=eps_year,13=eps_quarter,
 #    14=qf_revenue,15=pe_ratio,16=start_price,17=ma20,18=turnaround_signal,
-#    19=ma60,20=ma120)
+#    19=ma60,20=ma120,21=ma240)
 _SUMMARY_SQL = '''
     WITH lp AS (
         SELECT stock_code, MAX(date) AS max_date
@@ -334,7 +334,14 @@ _SUMMARY_SQL = '''
                 WHERE d120.stock_code = s.code
                 ORDER BY d120.date DESC LIMIT 120
             )
-        ) AS ma120
+        ) AS ma120,
+        (
+            SELECT AVG(close) FROM (
+                SELECT close FROM daily_prices d240
+                WHERE d240.stock_code = s.code
+                ORDER BY d240.date DESC LIMIT 240
+            )
+        ) AS ma240
     FROM stocks s
     LEFT JOIN lp ON s.code = lp.stock_code
     LEFT JOIN daily_prices dp
@@ -377,6 +384,7 @@ def _row_to_dict(r):
         'turnaround_signal': bool(r[18]) if r[18] is not None else False,
         'ma60':         round(r[19], 2) if r[19] is not None else None,
         'ma120':        round(r[20], 2) if r[20] is not None else None,
+        'ma240':        round(r[21], 2) if r[21] is not None else None,
     }
 
 
@@ -410,7 +418,7 @@ def api_market_summary_csv():
                     '月營收(千元)', '月營收年增%', '月營收期別',
                     '季營收(千元)',
                     '最新EPS', 'EPS期別',
-                    '資料日期', '本益比', '20日均', '虧轉盈訊號', '60日均', '120日均'])
+                    '資料日期', '本益比', '20日均', '虧轉盈訊號', '60日均', '120日均', '240日均'])
         for r in rows:
             eps_period = f"{r[12]}Q{r[13]}" if r[12] else ''
             rev_period = f"{r[9]}/{r[10]:02d}" if r[9] else ''
@@ -432,6 +440,7 @@ def api_market_summary_csv():
                 '是' if r[18] else '',
                 round(r[19], 2) if r[19] is not None else '',
                 round(r[20], 2) if r[20] is not None else '',
+                round(r[21], 2) if r[21] is not None else '',
             ])
         # utf-8-sig adds BOM so Excel opens Chinese correctly
         csv_bytes = buf.getvalue().encode('utf-8-sig')
