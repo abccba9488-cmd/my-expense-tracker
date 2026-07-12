@@ -126,12 +126,13 @@ data/stocks.db         SQLite 資料庫（自動建立）
 4=close, 5=change_pct, 6=price_date,
 7=revenue, 8=revenue_yoy, 9=rev_year, 10=rev_month,
 11=eps, 12=eps_year, 13=eps_quarter,
-14=qf_revenue, 15=pe_ratio, 16=start_price, 17=ma20, 18=turnaround_signal
+14=qf_revenue, 15=pe_ratio, 16=start_price, 17=ma20, 18=turnaround_signal,
+19=ma60, 20=ma120
 ```
 
-`ma20`：以相關子查詢取該股最近 20 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT 20`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端三個表格（主表格／飆股清單／自選股）最後一欄「20日均」皆呼叫 `app.js` 的 `ma20Cell(s)` 顯示此值，股價落在 `ma20` 上下 3% 內時儲存格變色＋🔔 圖示提示。
+`ma20`/`ma60`/`ma120`：各自以相關子查詢取該股最近 20／60／120 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT N`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端四個表格（主表格／飆股清單／自選股／達人選股列表）最後一欄「**甜蜜點**」皆呼叫 `app.js` 的 `sweetSpotCell(s)` 顯示此值：股價落在其中某條均線上下 3% 內時儲存格變色＋🔔 圖示提示——**紅＝接近 `ma20`、黃＝接近 `ma60`、綠＝接近 `ma120`**（若同時接近多條，優先顯示天期較短的那條，`_SWEET_SPOT_TIERS` 陣列依序 20→60→120 檢查）；都不接近但至少有 `ma20` 時顯示樸素數值，完全沒有均線資料才顯示「—」。這欄原本只看 `ma20`（單色黃底），2026-07-12 改版加入 `ma60`/`ma120` 並更名「甜蜜點」，`ma20Cell()` 已重新命名為 `sweetSpotCell()`。
 
-`turnaround_signal`：**不是即時計算，是 `crawl_monthly_revenue()`（`crawler.py`）每次爬到新月營收時直接算好存進 `monthly_revenue` 表的**。邏輯：該股最新一季 `quarterly_financials.eps < 0`（還在虧損）**且**本月 `revenue_yoy >= 20`（跟營收飆股用同一個門檻）→ 寫入 1，否則 0；每次爬蟲都重算覆寫（不像 `start_price` 只在新增時寫一次）。前端 `app.js` 的 `turnaroundCell(s)` 為真時顯示 🔥 圖示、假則顯示「—」，**純圖示不塗滿底色**（跟 `ma20Cell` 的變色不同）。三個表格（主表格／飆股清單／自選股）都有這欄；**飆股清單表格（`#star-table`）這欄會永遠顯示「—」**——`calcEst()` 要求 `eps > 0` 才會回傳值，飆股清單本身的篩選邏輯已排除所有虧損股，使用者要求三表一致才加上，不是邏輯漏洞。內容只有「—」/🔥 太窄，三個表格的這一欄都用 `columnDefs` 的 `width: '64px'` 固定寬度，避免 DataTables 自動欄寬把標題擠出欄位（曾經發生過對不齊的問題）。
+`turnaround_signal`：**不是即時計算，是 `crawl_monthly_revenue()`（`crawler.py`）每次爬到新月營收時直接算好存進 `monthly_revenue` 表的**。邏輯：該股最新一季 `quarterly_financials.eps < 0`（還在虧損）**且**本月 `revenue_yoy >= 20`（跟營收飆股用同一個門檻）→ 寫入 1，否則 0；每次爬蟲都重算覆寫（不像 `start_price` 只在新增時寫一次）。前端 `app.js` 的 `turnaroundCell(s)` 為真時顯示 🔥 圖示、假則顯示「—」，**純圖示不塗滿底色**（跟 `sweetSpotCell` 的變色不同）。四個表格（主表格／飆股清單／自選股／達人選股列表）都有這欄；**飆股清單表格（`#star-table`）這欄會永遠顯示「—」**——`calcEst()` 要求 `eps > 0` 才會回傳值，飆股清單本身的篩選邏輯已排除所有虧損股，使用者要求三表一致才加上，不是邏輯漏洞。內容只有「—」/🔥 太窄，三個表格（主/飆股/自選）的這一欄都用 `columnDefs` 的 `width: '64px'` 固定寬度，避免 DataTables 自動欄寬把標題擠出欄位（曾經發生過對不齊的問題）。
 
 ## 爬蟲資料來源
 
@@ -345,7 +346,7 @@ python backfill_finmind.py --financials --from-year 2013   # financial_extra 只
 
 ### 主表格欄位（18 欄，index 0–17）
 
-代號 → 名稱 → 產業 → **起始股價** → 收盤價 → **價差%** → 漲跌幅% → **營收預估股價** → 營收月份 → 月營收 → 月營收年增% → 季營收 → 最新EPS → 本益比 → EPS期別 → 資料日期 → **20日均** → **虧轉盈**
+代號 → 名稱 → 產業 → **起始股價** → 收盤價 → **價差%** → 漲跌幅% → **營收預估股價** → 營收月份 → 月營收 → 月營收年增% → 季營收 → 最新EPS → 本益比 → EPS期別 → 資料日期 → **甜蜜點** → **虧轉盈**
 
 **價差%**：`(close - start_price) / start_price × 100`，在 `_row_to_dict()` 計算（非來自 SQL），`price_diff` 欄位直接放入 JSON 回傳。正值綠色，負值紅色。
 
@@ -353,7 +354,7 @@ python backfill_finmind.py --financials --from-year 2013   # financial_extra 只
 
 **本益比**計算：Q1–Q3 用 `close / (eps / quarter × 4)`（年化）；Q4 用 `close / year_eps`（`yeps` CTE 全年加總）。
 
-自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**、**價差%**、**20日均**、**虧轉盈**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。飆股清單（`#star-table`）欄位則無**季營收**、**EPS期別**、**資料日期**，最後兩欄是**20日均**、**虧轉盈**（後者在此表必為「—」，見上方 `turnaround_signal` 說明）。
+自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**、**價差%**、**甜蜜點**、**虧轉盈**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。飆股清單（`#star-table`）欄位則無**季營收**、**EPS期別**、**資料日期**，最後兩欄是**甜蜜點**、**虧轉盈**（後者在此表必為「—」，見上方 `turnaround_signal` 說明）。
 
 ### 重要 gotcha：jQuery `.data()` 型別轉換
 
@@ -460,7 +461,7 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 ### 前端
 
-- **`#expert-view`**（列表）：`#expert-tabs` 8 個規則切換鈕（`loadExperts()`/`renderExpertTabs()`），下方純表格 13 欄：排名/代號/名稱/產業/營收月份/起始股價/收盤價/價差%/漲跌幅%/評分/評分明細/資料日期/20日均。**`gutai_bull`/`gutai_bear` 這兩個分頁額外多兩欄**（入榜日期/轉換，來自 `expert_scores.entered_at`/`transition`）：`renderExpertTable()` 用 `_isGutaiKey(_expertKey)` 判斷，動態 toggle 這兩個 `<th>`（`#expert-th-entered`/`#expert-th-transition`，預設 `.hidden`）並在列資料多帶兩個 `<td>`，其他 6 套規則不顯示。點「評分明細」呼叫 `openExpertModal(i)` 開 `#expert-modal`，內容：頂部「總分 X/Y 分」大字標頭（`.stock-expert-total`）→ 選股標準 ✅/❌ 清單 → 評分明細標題 → `renderModalExpertChart()` 畫出的 Chart.js 橫向堆疊長條圖（每項：綠=取得分數，灰=未取得/上限；`met===null`（資料不足）顯示灰色）。
+- **`#expert-view`**（列表）：`#expert-tabs` 8 個規則切換鈕（`loadExperts()`/`renderExpertTabs()`），下方純表格 13 欄：排名/代號/名稱/產業/營收月份/起始股價/收盤價/價差%/漲跌幅%/評分/評分明細/資料日期/甜蜜點。**`gutai_bull`/`gutai_bear` 這兩個分頁額外多兩欄**（入榜日期/轉換，來自 `expert_scores.entered_at`/`transition`）：`renderExpertTable()` 用 `_isGutaiKey(_expertKey)` 判斷，動態 toggle 這兩個 `<th>`（`#expert-th-entered`/`#expert-th-transition`，預設 `.hidden`）並在列資料多帶兩個 `<td>`，其他 6 套規則不顯示。點「評分明細」呼叫 `openExpertModal(i)` 開 `#expert-modal`，內容：頂部「總分 X/Y 分」大字標頭（`.stock-expert-total`）→ 選股標準 ✅/❌ 清單 → 評分明細標題 → `renderModalExpertChart()` 畫出的 Chart.js 橫向堆疊長條圖（每項：綠=取得分數，灰=未取得/上限；`met===null`（資料不足）顯示灰色）。
 - **`#detail-view` 達人選股評分卡**（`#stock-expert-card`）：`loadStockExpertScores(code)` 抓 `/api/stocks/<code>/expert-scores`，`#stock-expert-tabs` 列出該股所有已算出分數的規則，`renderStockExpertDetail()` 一樣先畫「總分 X/Y 分」大字標頭，再選股標準清單，再呼叫 `renderStockExpertChart()`。**圖表繪製邏輯抽成共用的 `_renderExpertChart(scoreItems, canvasId, wrapId, chartKey)`**，`renderStockExpertChart`/`renderModalExpertChart` 只是帶入各自的 canvas/state key 呼叫它——確保列表 modal 跟詳情頁兩處的視覺化永遠同步；`state.stockExpertChart`/`state.modalExpertChart` 各自持有 Chart.js 實例，切換分頁/關閉彈窗時 `.destroy()` 再建新的，避免 canvas 重用衝突。
 - **重要 gotcha：`_stockExpertKey`（目前選中的達人分頁）刻意跨股票延續，不是每次都重置**——`loadStockExpertScores()` 只有在 `_stockExpertKey` 對新股票不存在（`!scored.some(s => s.expert_key === _stockExpertKey)`，理論上不會發生，因為每檔股票都算好全部 8 套規則）時才 fallback 到「第一個通過的規則」。曾經每次都重置成「這檔股票自己第一個通過的規則」，導致用上一檔/下一檔導覽瀏覽時，選中的達人分頁會隨機跳來跳去（每檔股票通過的規則不同）。另外，從 `#expert-view` 列表點股票進入詳情頁時，`renderExpertTable()` 的點擊事件必須在呼叫 `loadStockDetail()` 之前手動把 `_stockExpertKey` 設成該列表目前的 `_expertKey`，否則會沿用使用者上次在別處瀏覽時殘留的分頁，而不是使用者點擊當下所在的那個達人榜單。
 - **總分一定要清楚顯示**：不論在列表的評分明細彈窗、還是詳情頁的評分卡，`.stock-expert-total`（大字、`--primary` 顏色數字）都放在選股標準清單「之前」，不是只靠分頁按鈕上的小字 `(X/Y)` 讓使用者自己找。

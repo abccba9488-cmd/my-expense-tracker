@@ -53,19 +53,34 @@ function pctClass(v) {
   return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neutral';
 }
 
-// Highlights the cell when price is within ±3% of the 20-day MA.
+// "甜蜜點"：highlights the cell when price is within ±3% of MA20/MA60/MA120,
+// colour-coded red/yellow/green respectively (shorter-term MA wins if the
+// price happens to be near more than one at once).
 // Returns [sortVal, displayHtml] so DataTables can sort by colour block:
-//   0 = highlighted (near MA20)  → sorts first
-//   1 = has value but not near   → sorts second
-//   2 = no data                  → sorts last
-function ma20Cell(s) {
-  if (s.ma20 == null) return [2, '—'];
-  const val = fmt.price(s.ma20);
-  if (s.close == null) return [1, val];
-  const near = Math.abs(s.close - s.ma20) / s.ma20 <= 0.03;
-  if (!near) return [1, val];
-  const fill = 'display:block;margin:-9px -12px;padding:9px 12px;font-weight:600;';
-  return [0, `<span style="${fill}background:#eab308;color:#000">🔔 ${val}</span>`];
+//   0 = near MA20 (red)          → sorts first
+//   1 = near MA60 (yellow)
+//   2 = near MA120 (green)
+//   3 = has MA data but not near any of the three
+//   4 = no MA data at all        → sorts last
+const _SWEET_SPOT_TIERS = [
+  ['ma20',  '#ef4444', '#fff'],
+  ['ma60',  '#eab308', '#000'],
+  ['ma120', '#22c55e', '#fff'],
+];
+function sweetSpotCell(s) {
+  if (s.close != null) {
+    for (let i = 0; i < _SWEET_SPOT_TIERS.length; i++) {
+      const [key, bg, fg] = _SWEET_SPOT_TIERS[i];
+      const ma = s[key];
+      if (ma == null) continue;
+      if (Math.abs(s.close - ma) / ma <= 0.03) {
+        const fill = 'display:block;margin:-9px -12px;padding:9px 12px;font-weight:600;';
+        return [i, `<span style="${fill}background:${bg};color:${fg}">🔔 ${fmt.price(ma)}</span>`];
+      }
+    }
+  }
+  if (s.ma20 != null) return [3, fmt.price(s.ma20)];
+  return [4, '—'];
 }
 
 // Icon-only signal (no cell fill): set by the monthly-revenue crawler when
@@ -199,7 +214,7 @@ function renderStockTable() {
     s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
     (s.eps_year && s.eps_quarter) ? `${s.eps_year}Q${s.eps_quarter}` : '—',
     s.price_date || '—',
-    ma20Cell(s),
+    sweetSpotCell(s),
     turnaroundCell(s),
   ]);
 
@@ -1006,7 +1021,7 @@ function renderStarTable() {
       s.revenue_yoy != null ? `<span class="${pctClass(s.revenue_yoy)}">${fmt.pct(s.revenue_yoy)}</span>` : '—',
       s.eps != null ? `<span class="${pctClass(s.eps)}">${fmt.eps(s.eps)}</span>` : '—',
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
-      ma20Cell(s),
+      sweetSpotCell(s),
       turnaroundCell(s),
     ];
   });
@@ -1202,7 +1217,7 @@ function renderWlTable() {
       s.eps != null ? `<span class="${pctClass(s.eps)}">${fmt.eps(s.eps)}</span>` : '—',
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
       s.price_date || '—',
-      ma20Cell(s),
+      sweetSpotCell(s),
       turnaroundCell(s),
     ];
   });
@@ -1664,7 +1679,7 @@ function renderExpertTable() {
           <td class="num">${s.score} / ${s.max_score}</td>
           <td class="td-center"><span class="ann-subject-link" data-idx="${_expertData.indexOf(s)}">查看明細</span></td>
           <td>${p.price_date || '—'}</td>
-          <td class="td-left">${ma20Cell(p)[1]}</td>
+          <td class="td-left">${sweetSpotCell(p)[1]}</td>
           <td>${s.entered_at || '—'}</td>
           ${isGutai ? `<td>${s.transition || '—'}</td>` : ''}
         </tr>
