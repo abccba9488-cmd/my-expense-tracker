@@ -1643,10 +1643,62 @@ async function loadExpertDetail(key) {
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="ann-empty">載入失敗</td></tr>`;
     return;
   }
+  // Keep whatever sort the user had picked on a previous tab applied to the
+  // freshly-fetched data for this ruleset, instead of silently reverting to
+  // API order while the header arrow still claims a sort is active.
+  if (_expertSortField) _applyExpertSort();
   const passedCount = _expertData.filter(s => s.passed).length;
   document.getElementById('expert-count').textContent = `符合選股標準 ${passedCount} / 共 ${_expertData.length} 支`;
   renderExpertTable();
 }
+
+/* ── Expert table sorting ── */
+let _expertSortField = null, _expertSortDir = 1;
+
+function _expertP(code) {
+  return state.allData.find(d => d.code === code) || {};
+}
+
+const _EXPERT_SORT_GETTERS = {
+  code:       s => s.code,
+  name:       s => s.name || '',
+  industry:   s => s.industry || '',
+  rev:        s => { const p = _expertP(s.code); return (p.rev_year && p.rev_month) ? p.rev_year * 100 + p.rev_month : null; },
+  start:      s => _expertP(s.code).start_price,
+  close:      s => _expertP(s.code).close,
+  diff:       s => _expertP(s.code).price_diff,
+  chg:        s => _expertP(s.code).change_pct,
+  score:      s => s.score,
+  date:       s => _expertP(s.code).price_date,
+  sweet:      s => sweetSpotCell(_expertP(s.code))[0],
+  entered:    s => s.entered_at,
+  transition: s => s.transition || '',
+};
+
+function _applyExpertSort() {
+  const getter = _EXPERT_SORT_GETTERS[_expertSortField];
+  if (!getter) return;
+  _expertData.sort((x, y) => {
+    const vx = getter(x), vy = getter(y);
+    const vxNull = vx == null || vx === '';
+    const vyNull = vy == null || vy === '';
+    if (vxNull || vyNull) return vxNull === vyNull ? 0 : (vxNull ? 1 : -1);
+    if (typeof vx === 'string') return vx.localeCompare(vy) * _expertSortDir;
+    return (vx - vy) * _expertSortDir;
+  });
+}
+
+function sortExpertTable(field) {
+  if (!_EXPERT_SORT_GETTERS[field]) return;
+  _expertSortDir = (_expertSortField === field) ? -_expertSortDir : 1;
+  _expertSortField = field;
+  _applyExpertSort();
+  renderExpertTable();
+}
+
+document.querySelectorAll('#expert-table thead .ann-sortable').forEach(th => {
+  th.addEventListener('click', () => sortExpertTable(th.dataset.sort));
+});
 
 function renderExpertTable() {
   const tbody = document.getElementById('expert-tbody');
@@ -1698,6 +1750,10 @@ function renderExpertTable() {
   });
   tbody.querySelectorAll('.ann-subject-link').forEach(el => {
     el.addEventListener('click', () => openExpertModal(+el.dataset.idx));
+  });
+  document.querySelectorAll('#expert-table .ann-sortable').forEach(th => {
+    const arrow = th.querySelector('.ann-sort-arrow');
+    if (arrow) arrow.textContent = th.dataset.sort === _expertSortField ? (_expertSortDir > 0 ? ' ▲' : ' ▼') : '';
   });
 }
 
