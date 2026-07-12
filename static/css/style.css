@@ -8,6 +8,7 @@
   --text2:     #8b90a7;
   --primary:   #4f7cff;
   --primary2:  #3a61d4;
+  --primary-rgb: 79, 124, 255;
   --pos:       #22c55e;
   --neg:       #ef4444;
   --neutral:   #94a3b8;
@@ -271,7 +272,11 @@ table.dataTable tbody tr {
   background: var(--bg2) !important;
   transition: background .1s;
 }
-table.dataTable tbody tr:hover { background: var(--bg3) !important; cursor: pointer; }
+table.dataTable tbody tr:hover {
+  background: rgba(var(--primary-rgb), .12) !important;
+  box-shadow: inset 3px 0 0 var(--primary);
+  cursor: pointer;
+}
 table.dataTable tbody td {
   border-bottom: 1px solid var(--border) !important;
   color: var(--text) !important;
@@ -383,7 +388,8 @@ table.dataTable tbody td {
   vertical-align: middle; white-space: nowrap;
 }
 .ann-table tr:last-child td { border-bottom: none; }
-.ann-table tr:hover td { background: var(--bg2); }
+.ann-table tbody tr:hover td { background: rgba(var(--primary-rgb), .12); }
+.ann-table tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--primary); }
 .ann-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .ann-table .td-center { text-align: center; }
 .ann-subject-link { cursor: pointer; }
