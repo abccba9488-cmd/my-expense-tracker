@@ -53,35 +53,37 @@ function pctClass(v) {
   return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neutral';
 }
 
-// "甜蜜點"：each MA is a long-term value line rather than a support/
-// resistance test — ANY price below a given MA counts (however far below),
+// "甜蜜點"：MA20/MA60/MA120 are support/resistance tests — highlighted
+// whenever price is within ±3% either side (red/yellow/green). MA240 is
+// different on purpose — treated as a long-term value line rather than a
+// support/resistance test: ANY price below it counts (however far below),
 // but above it only counts up to +3% (deep-overbought territory above the
-// average isn't a "sweet spot"). Same asymmetric rule for all four MAs,
-// colour-coded red/yellow/green/purple (shorter-term MA wins if the price
-// happens to qualify under more than one at once).
+// 240-day average isn't a "sweet spot").
 // Returns [sortVal, displayHtml] so DataTables can sort by colour block:
-//   0 = at/below MA20, or up to 3% above it (red)     → sorts first
-//   1 = at/below MA60, or up to 3% above it (yellow)
-//   2 = at/below MA120, or up to 3% above it (green)
+//   0 = near MA20 (red)          → sorts first
+//   1 = near MA60 (yellow)
+//   2 = near MA120 (green)
 //   3 = at/below MA240, or up to 3% above it (purple)
-//   4 = has MA data but doesn't qualify under any of the four
-//   5 = no MA data at all                              → sorts last
+//   4 = has MA data but not near/qualifying for any of the four
+//   5 = no MA data at all        → sorts last
 const _SWEET_SPOT_TIERS = [
   ['ma20',  '#ef4444', '#fff'],
   ['ma60',  '#eab308', '#000'],
   ['ma120', '#22c55e', '#fff'],
-  ['ma240', '#a855f7', '#fff'],
 ];
 function sweetSpotCell(s) {
+  const fill = 'display:block;margin:-9px -12px;padding:9px 12px;font-weight:600;';
   if (s.close != null) {
     for (let i = 0; i < _SWEET_SPOT_TIERS.length; i++) {
       const [key, bg, fg] = _SWEET_SPOT_TIERS[i];
       const ma = s[key];
       if (ma == null) continue;
-      if ((s.close - ma) / ma <= 0.03) {
-        const fill = 'display:block;margin:-9px -12px;padding:9px 12px;font-weight:600;';
+      if (Math.abs(s.close - ma) / ma <= 0.03) {
         return [i, `<span style="${fill}background:${bg};color:${fg}">🔔 ${fmt.price(ma)}</span>`];
       }
+    }
+    if (s.ma240 != null && (s.close - s.ma240) / s.ma240 <= 0.03) {
+      return [3, `<span style="${fill}background:#a855f7;color:#fff">🔔 ${fmt.price(s.ma240)}</span>`];
     }
   }
   if (s.ma20 != null) return [4, fmt.price(s.ma20)];
