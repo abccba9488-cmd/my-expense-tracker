@@ -1074,11 +1074,50 @@ function showDetailView() {
 }
 
 function showListView() {
+  const returningCode = state.currentCode;
   document.getElementById('detail-view').classList.remove('active');
   document.getElementById('page-tabs-bar').classList.remove('hidden');
   const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view', expert: 'expert-view' };
   document.getElementById(viewMap[state.activeTab] || 'list-view').classList.add('active');
   state.currentCode = null;
+  if (returningCode) requestAnimationFrame(() => _scrollToStockRow(returningCode));
+}
+
+// DataTables-backed views (list/star/watchlist) only keep the *current
+// page's* rows in the DOM, so the stock we're returning to may not be
+// there yet — flip to whichever page it's actually on (recomputed from the
+// table's live filter+sort order, not the possibly-unrelated
+// detailNavList/-Index some other entry point set) before scrolling.
+// ann-view/expert-view render every row unconditionally, so the direct
+// lookup already succeeds and this never reaches the DataTables branch.
+const _VIEW_DT_INFO = {
+  list:      () => ({ dt: mainDt, col: 0 }),
+  star:      () => ({ dt: starDt, col: 0 }),
+  watchlist: () => ({ dt: wlDt,   col: 1 }),
+};
+
+function _scrollToStockRow(code) {
+  const tryScroll = () => {
+    const el = document.querySelector(`[data-code="${code}"]`);
+    if (!el) return false;
+    const row = el.closest('tr') || el;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('row-flash');
+    setTimeout(() => row.classList.remove('row-flash'), 1600);
+    return true;
+  };
+  if (tryScroll()) return;
+
+  const info = _VIEW_DT_INFO[state.activeTab];
+  const dt = info && info().dt;
+  if (!dt) return;
+  const { col } = info();
+  const idx = _dtOrderedCodes(dt, col).indexOf(String(code));
+  if (idx === -1) return;
+  const pageLen = dt.page.len();
+  if (pageLen === -1) { requestAnimationFrame(tryScroll); return; }
+  dt.one('draw', () => requestAnimationFrame(tryScroll));
+  dt.page(Math.floor(idx / pageLen)).draw('page');
 }
 
 /* ── Watchlists ── */
