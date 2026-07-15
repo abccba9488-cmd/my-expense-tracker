@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from sqlalchemy import (
@@ -21,15 +22,29 @@ engine = create_engine(
 )
 
 
+# Zeabur's container is memory-constrained (mmap/page cache blew past its
+# limit before — see below), but the Windows dev box this also runs on has
+# plenty of RAM to spare. Gate the aggressive cap to the actual deployment
+# target (Linux container) instead of punishing local dev with the same
+# tiny cache, which turns the market-summary query's ~8000 correlated
+# subquery calls against the now multi-million-row daily_prices into a
+# disk-thrashing, multi-minute request.
+_IS_CLOUD = sys.platform != 'win32'
+
+
 @event.listens_for(engine, 'connect')
 def _set_sqlite_pragma(dbapi_conn, _):
     """Cap SQLite's per-connection memory use (mmap/page cache) so large
     queries against the multi-year DB don't blow past the container's
     memory limit."""
     cur = dbapi_conn.cursor()
-    cur.execute('PRAGMA mmap_size=0')
-    cur.execute('PRAGMA cache_size=-2000')   # ~2MB page cache
-    cur.execute('PRAGMA temp_store=FILE')
+    if _IS_CLOUD:
+        cur.execute('PRAGMA mmap_size=0')
+        cur.execute('PRAGMA cache_size=-2000')   # ~2MB page cache
+        cur.execute('PRAGMA temp_store=FILE')
+    else:
+        cur.execute('PRAGMA cache_size=-131072')  # ~128MB page cache
+        cur.execute('PRAGMA temp_store=MEMORY')
     # WAL: readers no longer block a writer's commit (the default rollback
     # journal does — a long-running read like compute_expert_scores() could
     # stall a concurrent backfill/crawler write past any busy_timeout).

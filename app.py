@@ -46,8 +46,16 @@ def _is_admin():
 
 # ── summary cache ─────────────────────────────────────────────────────────────
 
-_SUMMARY_CACHE_TTL = 300  # seconds
+_SUMMARY_CACHE_TTL = 1800  # seconds — MA lines are smoothed indicators, staleness
+                            # is a non-issue; longer TTL mainly to reduce how often
+                            # anyone pays for the expensive rebuild (see lock below)
 _summary_cache: dict = {'body': None, 'ts': 0.0}
+# daily_prices has grown to millions of rows — a cold rebuild of the market
+# summary (ma20/60/120/240 per stock) can take well over a minute. Without
+# this lock, every concurrent request that lands during a cache miss would
+# each kick off its own copy of that expensive query (cache stampede),
+# compounding the slowdown instead of just paying it once.
+_summary_rebuild_lock = threading.Lock()
 
 
 def _invalidate_summary_cache():
@@ -405,15 +413,20 @@ def api_market_summary():
     now = _time.time()
     if _summary_cache['body'] and (now - _summary_cache['ts']) < _SUMMARY_CACHE_TTL:
         return Response(_summary_cache['body'], mimetype='application/json')
-    db = SessionLocal()
-    try:
-        rows = db.execute(text(_SUMMARY_SQL)).fetchall()
-        body = _json.dumps([_row_to_dict(r) for r in rows], ensure_ascii=False)
-        _summary_cache['body'] = body
-        _summary_cache['ts'] = now
-        return Response(body, mimetype='application/json')
-    finally:
-        db.close()
+    with _summary_rebuild_lock:
+        # Another thread may have just rebuilt it while we were waiting on the lock.
+        now = _time.time()
+        if _summary_cache['body'] and (now - _summary_cache['ts']) < _SUMMARY_CACHE_TTL:
+            return Response(_summary_cache['body'], mimetype='application/json')
+        db = SessionLocal()
+        try:
+            rows = db.execute(text(_SUMMARY_SQL)).fetchall()
+            body = _json.dumps([_row_to_dict(r) for r in rows], ensure_ascii=False)
+            _summary_cache['body'] = body
+            _summary_cache['ts'] = _time.time()
+            return Response(body, mimetype='application/json')
+        finally:
+            db.close()
 
 
 @app.route('/api/market/summary.csv')
