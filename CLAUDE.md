@@ -174,9 +174,12 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | Q3 | 11 月每天 23:00（公告期限 11/14） |
 | Q4 | 隔年 3 月每天 23:00（公告期限 3/31） |
 | 達人選股（FinMind 增量 + 重算分數） | 每天 17:00（股價爬蟲與 watchdog 之後），見「達人選股」章節 |
+| 達人選股（FinMind，watchdog，2026-07-16 新增） | 週一〜五 17:00 起每 30 分鐘檢查一次，若當天還沒有成功的 `finmind_institutional` log 就補跑整個 `_finmind_job()`（`_finmind_watchdog`，啟動時也會立即跑一次），跟 `_daily_price_watchdog` 同一個模式，補的是「程序在 17:00 當下沒在跑」這種情況 |
 | 達人選股（financial_extra） | 與官方季報同月份、每天 23:30（比官方季報 job 晚 30 分） |
 
 **注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
+
+**`FINMIND_TOKEN` 沒設定是一個容易忽略的靜默失敗陷阱**：2026-07-16 發生過本機常駐服務（`autostart_server.bat`）從某次重啟後就沒帶到這個環境變數，導致 5 個 `finmind_*` 任務**每天** 17:00 都準時觸發、但每次都馬上失敗（`crawler_logs` 裡訊息一模一樣：`FINMIND_TOKEN environment variable not set`），`institutional_trades`/`holding_concentration` 因此在使用者沒發現的情況下卡在舊資料整整 11 天——`director_holdings`（TWSE/TPEX OpenAPI，不需要金鑰）仍然每天成功，容易誤以為「排程本身有在跑就是正常」而沒注意到部分子任務其實都在失敗。修法：`app.py` 模組層級啟動時檢查 `os.environ.get('FINMIND_TOKEN')`，沒設定就寫一筆 `finmind_token_check` / `failed` 的 `crawler_logs`，讓 ⚙ 爬蟲狀態面板一開就看得到，不用等到手動比對各表 `MAX(date)` 才發現。本機修復方式：`setx FINMIND_TOKEN "your-token"`（永久使用者環境變數，`set` 只在當次終端機有效）之後**重啟**本機服務（環境變數只在程序啟動當下被讀取，已經在跑的舊程序不會生效）。
 
 手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `director_holdings` / `expert_scores`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
 
@@ -433,9 +436,11 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 - **同步執行**：`POST /api/stocks/<code>/ai-analysis` 不像 `crawl_*` 系列用 `_run_bg()` 背景執行，是直接 block 住等 OpenRouter 回應（最長 90 秒逾時）——因為這是管理員主動點擊、正在等結果的單次操作，不是排程批次任務，不需要輪詢機制。
 - **前端**：`#detail-view` 最上方有個 `.admin-only.hidden` 卡片（非管理員完全看不到，連 `GET` 都不會打，省一次無意義的請求），`loadStockDetail()` 載入時若 `state.user.is_admin` 才順便抓快取結果；點「重新分析」呼叫 `runStockAiAnalysis()`，按鈕 disable 防止重複點擊（同一檔股票短時間連點兩次會疊加成兩筆 OpenRouter 費用）。評級 dot 重用 `_annRatingDot()`，跟自結公告同一套 🔴🟠🟡🟢 視覺語言。
 
-## 達人選股（8 套規則計分引擎）
+## 達人選股（8 套規則計分引擎 + 1 套本站自製實驗規則）
 
 編碼 4 位台股達人（股泰多方/空方、888/巔峰標準1–4、股魚、股海老牛）公開的選股/評分邏輯，對本站 DB + FinMind 補充資料即時計分，`expert_key`：`gutai_bull`/`gutai_bear`/`flag888_1`–`flag888_4`/`guyu`/`laoniu`，中文標籤見 `experts.py` 的 `EXPERT_LABELS`。
+
+**`momentum_guard`（動能防雷，2026-07-16 新增）是第 9 套，跟前 8 套性質不同**：不是抄錄自某個公開達人的選股法，是本站自製的實驗性規則，記在 `EXPERIMENTAL_EXPERTS` 集合裡，`app.py` 的 `/api/experts`、`/api/experts/<key>`、`/api/stocks/<code>/expert-scores` 三個端點都會多回傳一個 `is_experimental` 布林欄位，前端 `renderExpertTabs()`/`loadStockExpertScores()` 據此在分頁按鈕加掛 `<span class="new-badge">NEW</span>`。設計目的是避開「統計上便宜、但基本面正在惡化」的價值陷阱（起因：2496 卓越在 2026-07 遇到的狀況——6月營收年增在連續5個月遞減後首度轉負，但PBR/PE看起來還是便宜）：選股門檻 `require()` 直接排除「近月營收年增率剛由正轉負」的股票，加分項則看毛利率/營業利益率/ROE/單季EPS 的年增率是否轉強（`_yoy_diff` 算出的變化量，不是絕對水準）。
 
 ### 資料來源
 
@@ -468,6 +473,29 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 - **重要 gotcha：`_stockExpertKey`（目前選中的達人分頁）刻意跨股票延續，不是每次都重置**——`loadStockExpertScores()` 只有在 `_stockExpertKey` 對新股票不存在（`!scored.some(s => s.expert_key === _stockExpertKey)`，理論上不會發生，因為每檔股票都算好全部 8 套規則）時才 fallback 到「第一個通過的規則」。曾經每次都重置成「這檔股票自己第一個通過的規則」，導致用上一檔/下一檔導覽瀏覽時，選中的達人分頁會隨機跳來跳去（每檔股票通過的規則不同）。另外，從 `#expert-view` 列表點股票進入詳情頁時，`renderExpertTable()` 的點擊事件必須在呼叫 `loadStockDetail()` 之前手動把 `_stockExpertKey` 設成該列表目前的 `_expertKey`，否則會沿用使用者上次在別處瀏覽時殘留的分頁，而不是使用者點擊當下所在的那個達人榜單。
 - **總分一定要清楚顯示**：不論在列表的評分明細彈窗、還是詳情頁的評分卡，`.stock-expert-total`（大字、`--primary` 顏色數字）都放在選股標準清單「之前」，不是只靠分頁按鈕上的小字 `(X/Y)` 讓使用者自己找。
 - **`#expert-table` 表格排序**（2026-07-13 新增）：跟自結公告表格（`#ann-table`）同一套純前端排序機制（`class="ann-sortable" data-sort="<field>"` + `.ann-sort-arrow`，兩個表格都是 `class="ann-table"` 所以共用同一份 CSS），但獨立實作一份 `_EXPERT_SORT_GETTERS`/`sortExpertTable()`/`_applyExpertSort()`，**沒有**跟 `sortAnnTable()` 共用程式碼——刻意保持兩份獨立，因為欄位取值邏輯不同：達人選股表格排序用到的價格類欄位（起始股價/收盤價/價差%/漲跌幅%/資料日期/甜蜜點）並不在 `_expertData` 本身上，而是要透過 `_expertP(code)`（`state.allData.find(...)`）另外查表，`_ANN_SORT_GETTERS` 沒有這個需求。`sortExpertTable(field)` 對 `_expertData` 原地排序（`openExpertModal(i)` 的 `data-idx="${_expertData.indexOf(s)}"` 因此不受排序影響，永遠對應正確列）。**排序偏好跨切換達人分頁（`_expertKey`）延續**：`loadExpertDetail()` fetch 到新規則的資料後，若 `_expertSortField` 已設定就呼叫 `_applyExpertSort()` 套用同一個排序，不會因為換分頁就悄悄變回 API 預設順序、卻讓表頭箭頭誤導使用者以為還在排序中。「排名」（純序號）與「評分明細」（操作按鈕）兩欄不可排序，理由同自結公告表格的主旨/AI分析/自選股欄。
+
+### 持股健康檢查（`compute_holding_health`，本站自製、實驗性，2026-07-16 新增）
+
+跟上面 9 套「找買點」的達人選股規則用途不同——這個是給**已經持有**的自選股看要不要注意出場的三階段預警：`正常`／`早期警告`／`注意`／`撤退`。**不是批次跑全市場**，而是 `GET /api/stocks/<code>/health` 單股即時查詢時才計算（技術指標只抓該股近 400 天 OHLC 算 `technical.snapshot()`，比 `_build_context()` 的全市場批次快很多，適合自選股清單這種小數量、即時查詢的場景）。
+
+- **技術面異常**（0–4 項）：跌破 20 日均線、跌破 60 日均線、日 MACD 柱狀由正轉負、較 60 日高點回落逾 15%。
+- **基本面異常**（0–3 項）：最新月營收年增率 <0、單季EPS年增率 <0、毛利率年增率 <0（惡化）。
+- **升級邏輯**：技術≥2 且基本面≥2 → `撤退`；技術≥1 且基本面≥1 → `注意`；只有其中一邊 ≥1 → `早期警告`；都沒有 → `正常`。門檻是本站自訂的近似值，沒有對外公開的原始出處可以核對。
+- 前端只用在 `#watchlist-view` 的 `#wl-table`（最後一欄，`healthBadgeCell()`，紅=撤退/黃=注意/灰=早期警告/綠=正常，`title` 顯示觸發幾項技術面/基本面異常）：`renderWlTable()` 改成 `async`，先用 `Promise.all` 平行抓自選股清單裡每一支股票的健康度、組成 `healthByCode` 對照表，才建立 rows 陣列——不是每支股票各自觸發一次表格重繪。主表格／飆股清單／達人選股列表**沒有**這一欄，只有自選股清單有（用途上只對「已持有」有意義）。
+
+### 投資組合壓力測試（`portfolio_risk.py`，本站自製、實驗性，2026-07-16 新增）
+
+獨立模組，不在 `experts.py` 裡（性質上是「整包清單」風險分析，跟單股計分是不同的關注層級）。`GET /api/watchlists/<wl_id>/stress-test`（需登入且是清單擁有者，沿用 `_wl_rows(db, wl_id)` 取代號清單）呼叫 `portfolio_risk.run_stress_test(db, codes)`，前端 `runWlStressTest()`（`#watchlist-view` 工具列的「🧪 壓力測試」按鈕）觸發、結果渲染進 `#wl-stress-panel`。
+
+**核心限制、務必先知道**：`watchlist_stocks` 只存代號，不存股數/金額，所以整個模組**一律假設等權重**——這不是真實持股的風險模型，只能看出「這份清單本身」在各面向的風險輪廓，前端面板文字有明講這個限制。
+
+四個分析面向：
+1. **歷史情境回放**（`STRESS_SCENARIOS`）：不是假設性的總經因子模型（本站沒有 beta/因子曝險資料能做那種模型），是直接回放 5 段台股史上真實的系統性下跌期間（2011歐債危機/2015中國股災/2018中美貿易戰/2020 COVID崩盤/2022全球升息熊市），用清單裡每一檔股票「當時真實的股價走勢」算出期間報酬率與最大回檔，等權重平均。某檔股票若在情境起始日之前還沒有價格資料（例如當時尚未上市），該情境會自動跳過該股不硬湊，`covered`/`total` 兩個欄位讓前端可以誠實標示涵蓋家數。
+2. **產業集中度 HHI**：依 `stocks.industry`、等權重（依檔數，不是依市值/金額）算標準 0–10000 尺度 HHI，>2500 高度集中／1500–2500 中度／<1500 分散。
+3. **相關性**：近 400 個日曆天（≈近1年交易日）逐日報酬率兩兩 Pearson 相關係數，共同交易日 <30 天的配對直接跳過（`_pearson()`），回傳平均值 + 相關性最高的一對（含股票名稱，方便前端顯示）。
+4. **歷史模擬法 VaR（95%/99%）**：把清單「等權重平均每日報酬率」的完整序列由小到大排序取 5%/1% 分位數（`_percentile()`）——是用實際歷史分布抓尾部風險，不是常態分布假設的參數法 VaR，這是刻意的方法選擇（不需要額外估計波動率/相關矩陣，用同一份日報酬率資料就能算，跟情境回放同樣「直接用歷史資料說話」的精神一致）。
+
+本機測試過一組台積電/鴻海/聯發科/聯電/葡萄王的清單，結果合理：HHI 4400（高度集中，3檔半導體業佔60%）、2022升息熊市衝擊最大（期間報酬-32.32%、最大回檔-34.6%）、台積電與鴻海相關性最高（0.843）。
 
 ### 已知未修復問題（8 角度 code review 找到，優先度較低，故意先擱置）
 

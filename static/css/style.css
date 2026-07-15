@@ -167,6 +167,11 @@ main { padding-top: 52px; min-height: 100vh; }
   background: var(--primary); border-color: var(--primary);
   color: #fff;
 }
+.new-badge {
+  display: inline-block; margin-left: 5px; font-size: 9.5px; font-weight: 700;
+  background: var(--pos); color: #fff; padding: 1px 5px; border-radius: 8px;
+  vertical-align: 1px; letter-spacing: .03em;
+}
 .toolbar-right { display: flex; gap: 8px; }
 .industry-select {
   background: var(--bg3); border: 1px solid var(--border);

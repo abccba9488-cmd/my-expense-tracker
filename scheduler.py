@@ -86,6 +86,33 @@ def _announcements_test_job():
         logger.error('Announcements test job failed: %s', e)
 
 
+def _finmind_watchdog():
+    """Every 30 min (weekday, 17:00 onward): if today's FinMind incremental
+    crawl hasn't succeeded yet, trigger it. Mirrors _daily_price_watchdog's
+    pattern — this project's normal fix for "process wasn't running at the
+    scheduled cron time" (e.g. computer was off, or the autostart server got
+    restarted after 17:00), which otherwise leaves institutional_trades/
+    holding_concentration silently stale until the *next* day's 17:00 run."""
+    from database import SessionLocal
+    from sqlalchemy import text
+    now = datetime.now(_TZ)
+    if now.weekday() >= 5 or now.hour < 17:
+        return
+    today_str = now.strftime('%Y%m%d')
+    db = SessionLocal()
+    try:
+        done = db.execute(
+            text("SELECT 1 FROM crawler_logs WHERE task='finmind_institutional' AND status='success'"
+                 " AND message LIKE :pat LIMIT 1"),
+            {'pat': f'{today_str}:%'},
+        ).first()
+    finally:
+        db.close()
+    if not done:
+        logger.info('Watchdog: FinMind data not yet updated for %s — triggering catch-up', today_str)
+        _finmind_job()
+
+
 def _finmind_job():
     """達人選股資料日增量：三大法人買賣超/股權分散/PER-PBR/股利政策/填息事件，
     跑完後重新計算 7 套達人的評分快取（expert_scores）。放在凌晨、股價/月營收/
@@ -176,6 +203,12 @@ def start():
     # 達人選股 (FinMind): daily incremental crawl + score recompute, 17:00 —
     # after the day's price crawls (14:00/15:00) and watchdog window.
     _scheduler.add_job(_finmind_job, CronTrigger(hour=17, minute=0))
+
+    # Watchdog: every 30 min from 17:00 onward, fires immediately on startup
+    # too — catches "the process wasn't running at 17:00" the same way
+    # _daily_price_watchdog does for daily_price.
+    _scheduler.add_job(_finmind_watchdog, 'interval', minutes=30,
+                       next_run_time=datetime.now(_TZ))
 
     # 達人選股 financial_extra: same disclosure-month cadence as the official
     # quarterly job, 30 min later.

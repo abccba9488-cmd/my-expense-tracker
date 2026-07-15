@@ -16,6 +16,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 import crawler
 import experts
+import portfolio_risk
 import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
@@ -280,11 +281,15 @@ def api_updates_today():
 #    4=close,5=change_pct,6=price_date,7=revenue,8=revenue_yoy,
 #    9=rev_year,10=rev_month,11=eps,12=eps_year,13=eps_quarter,
 #    14=qf_revenue,15=pe_ratio,16=start_price,17=ma20,18=turnaround_signal,
-#    19=ma60,20=ma120,21=ma240)
+#    19=ma60,20=ma120,21=ma240,22=dividend_yield)
 _SUMMARY_SQL = '''
     WITH lp AS (
         SELECT stock_code, MAX(date) AS max_date
         FROM daily_prices GROUP BY stock_code
+    ),
+    ldy AS (
+        SELECT stock_code, MAX(date) AS max_date
+        FROM daily_prices WHERE dividend_yield IS NOT NULL GROUP BY stock_code
     ),
     lr AS (
         SELECT stock_code, MAX(year * 100 + month) AS max_ym
@@ -341,11 +346,15 @@ _SUMMARY_SQL = '''
                 WHERE d240.stock_code = s.code
                 ORDER BY d240.date DESC LIMIT 240
             )
-        ) AS ma240
+        ) AS ma240,
+        dy.dividend_yield
     FROM stocks s
     LEFT JOIN lp ON s.code = lp.stock_code
     LEFT JOIN daily_prices dp
         ON dp.stock_code = lp.stock_code AND dp.date = lp.max_date
+    LEFT JOIN ldy ON s.code = ldy.stock_code
+    LEFT JOIN daily_prices dy
+        ON dy.stock_code = ldy.stock_code AND dy.date = ldy.max_date
     LEFT JOIN lr ON s.code = lr.stock_code
     LEFT JOIN monthly_revenue mr
         ON mr.stock_code = lr.stock_code
@@ -385,6 +394,7 @@ def _row_to_dict(r):
         'ma60':         round(r[19], 2) if r[19] is not None else None,
         'ma120':        round(r[20], 2) if r[20] is not None else None,
         'ma240':        round(r[21], 2) if r[21] is not None else None,
+        'dividend_yield': round(r[22], 2) if r[22] is not None else None,
     }
 
 
@@ -548,6 +558,15 @@ def api_stock_fundamentals(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/health')
+def api_stock_health(code):
+    db = SessionLocal()
+    try:
+        return jsonify(experts.compute_holding_health(db, code))
+    finally:
+        db.close()
+
+
 @app.route('/api/stocks/<code>/expert-scores')
 def api_stock_expert_scores(code):
     db = SessionLocal()
@@ -564,6 +583,7 @@ def api_stock_expert_scores(code):
             'entered_at': str(by_key[key].entered_at) if key in by_key and by_key[key].entered_at else None,
             'transition': by_key[key].transition if key in by_key else None,
             'computed_at': str(by_key[key].computed_at) if key in by_key else None,
+            'is_experimental': key in experts.EXPERIMENTAL_EXPERTS,
         } for key, label in experts.EXPERT_LABELS.items()])
     finally:
         db.close()
@@ -667,6 +687,7 @@ def api_experts_list():
             'passed_count': (by_key[key].passed_count or 0) if key in by_key else 0,
             'total': by_key[key].total if key in by_key else 0,
             'computed_at': str(by_key[key].computed_at) if key in by_key else None,
+            'is_experimental': key in experts.EXPERIMENTAL_EXPERTS,
         } for key, label in experts.EXPERT_LABELS.items()])
     finally:
         db.close()
@@ -1011,6 +1032,20 @@ def api_wl_remove_stock(wl_id, code):
         db.close()
 
 
+@app.route('/api/watchlists/<int:wl_id>/stress-test')
+def api_wl_stress_test(wl_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'unauthorized'}), 401
+    db = SessionLocal()
+    try:
+        if not db.query(Watchlist).filter_by(id=wl_id, user_id=session['user_id']).first():
+            return jsonify({'error': 'not found'}), 404
+        codes = _wl_rows(db, wl_id)
+        return jsonify(portfolio_risk.run_stress_test(db, codes))
+    finally:
+        db.close()
+
+
 # ── admin ──────────────────────────────────────────────────────────────────────
 
 @app.route('/api/admin/users')
@@ -1091,6 +1126,20 @@ else:
         if not _done:
             logger.info('Daily price not yet run today (%s) — triggering catch-up crawl', _today_str)
             _run_bg(crawler.crawl_daily_prices, _today_str)
+
+# FINMIND_TOKEN missing is a silent-failure trap: every finmind_* crawler
+# task fails with the same message every single day (crawler_logs shows it,
+# but nobody checks that panel proactively), so institutional_trades /
+# holding_concentration / PER-PBR / dividend data quietly goes stale for
+# weeks without anything loud enough to notice — this is exactly what
+# happened locally on 2026-07-16 (11 days stale, only found by manually
+# diffing table max(date) values). Surface it immediately at startup
+# instead of waiting to be rediscovered the same way again.
+if not os.environ.get('FINMIND_TOKEN'):
+    logger.warning('FINMIND_TOKEN is not set — every finmind_* crawl task will fail until it is')
+    crawler._log('finmind_token_check', 'failed',
+                  'FINMIND_TOKEN environment variable not set — 達人選股相關資料（法人買賣超/股權分散表/'
+                  'PER-PBR/股利政策）將無法更新。設定方式：setx FINMIND_TOKEN "your-token"，然後重啟本機服務。')
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

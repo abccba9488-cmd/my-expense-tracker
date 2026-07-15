@@ -48,7 +48,12 @@ EXPERT_LABELS = {
     'flag888_4':   '標準4 填息穩定',
     'guyu':        '價值K線',
     'laoniu':      '抱緊股',
+    'momentum_guard': '動能防雷',
 }
+
+# 非公開已知選股法（不像 gutai/888/guyu/laoniu 4 套是抄錄自對外公開的達人選股
+# 法），是本站自製的實驗性規則，前端會加註 NEW 徽章。詳見 score_momentum_guard()。
+EXPERIMENTAL_EXPERTS = {'momentum_guard'}
 
 
 # ── small math helpers ──────────────────────────────────────────────────────
@@ -729,6 +734,46 @@ def score_laoniu(ctx):
     return s.result()
 
 
+# ── 動能防雷（本站自製，實驗性）────────────────────────────────────────────────
+
+def score_momentum_guard(ctx):
+    """不像其他 8 套規則抄錄自公開的達人選股法，這套是本站自己設計的實驗性
+    規則：專門用「變化/改善速度」而非「絕對水準」打分，目的是避開「統計上
+    便宜、但基本面正在惡化」的價值陷阱——選股門檻直接排除「近月營收年增率
+    剛由正轉負」的股票（例如 2496 卓越在 2026-07 遇到的狀況：連續5個月營收
+    年增遞減後６月首度翻負，這種型態即使 PBR/PE 顯示便宜，也不會通過這套
+    門檻），加分項則看毛利率/營業利益率/ROE/EPS 年增率是否轉強（由劣轉優，
+    不是絕對數字高低）。"""
+    q = ctx['q']
+    s = ScoreCard()
+    yoy2 = ctx['rev_yoy_recent']
+
+    just_turned_negative = (len(yoy2) >= 2 and yoy2[0] is not None and yoy2[1] is not None
+                             and yoy2[1] > 0 and yoy2[0] < 0)
+    s.require('近月營收年增率未剛由正轉負（防雷核心）', not just_turned_negative)
+
+    pbr_ok = (ctx['pbr'] is not None and ctx['pbr_avg_hist'] is not None and ctx['pbr'] < ctx['pbr_avg_hist'])
+    s.require('淨值比<歷史平均(近似10年平均，統計上便宜)', pbr_ok)
+
+    gm = _ratio_series(q[:8], 'gross_profit', 'revenue')
+    op_margin = _ratio_series(q[:8], 'operating_income', 'revenue')
+    roe = _ratio_series(q[:8], 'net_income', 'equity', annualize=True)
+    eps_series = [r.get('eps') for r in q]
+    gm_yoy = _yoy_diff(gm)
+    op_margin_yoy = _yoy_diff(op_margin)
+    roe_yoy = _yoy_diff(roe)
+    eps_yoy = _yoy_diff(eps_series)
+
+    rev_improving = (len(yoy2) >= 2 and yoy2[0] is not None and yoy2[1] is not None and yoy2[0] > yoy2[1])
+    s.award('月營收年增率較上月回升（動能轉強）', rev_improving if len(yoy2) >= 2 else None, 20)
+    s.award('毛利率年增率>0（體質轉強）', gm_yoy[0] > 0 if gm_yoy and gm_yoy[0] is not None else None, 20)
+    s.award('營業利益率年增率>0（體質轉強）', op_margin_yoy[0] > 0 if op_margin_yoy and op_margin_yoy[0] is not None else None, 20)
+    s.award('ROE年增率>0（體質轉強）', roe_yoy[0] > 0 if roe_yoy and roe_yoy[0] is not None else None, 20)
+    s.award('單季EPS年增率>0（獲利轉強）', eps_yoy[0] > 0 if eps_yoy and eps_yoy[0] is not None else None, 20)
+
+    return s.result()
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -738,6 +783,7 @@ SCORERS = {
     'flag888_4': score_flag888_4,
     'guyu': score_guyu,
     'laoniu': score_laoniu,
+    'momentum_guard': score_momentum_guard,
 }
 
 
@@ -916,4 +962,111 @@ def get_stock_fundamentals(db, code):
             'director_holding_pct':  dh['holding_pct'] if dh else None,
             'fill_rate_5y':          fill_rate_5y,
         },
+    }
+
+
+# ── 持股健康檢查（本站自製，實驗性）──────────────────────────────────────────────
+
+_HEALTH_TIER_LABELS = {
+    'retreat': '撤退', 'caution': '注意', 'early': '早期警告', 'normal': '正常',
+}
+
+
+def compute_holding_health(db, code):
+    """本站自製、實驗性的「持股健康檢查」，跟其餘 8+1 套選股規則的用途不同：
+    那些是拿來「找買點」（全市場批次跑），這個是拿來對「已經持有的一檔股票」
+    做三階段出場預警（給自選股清單單股即時查詢用）——技術面訊號 + 基本面
+    惡化訊號各自累計 0-N 個異常，兩邊都有才會升級到「注意」、兩邊都到達
+    一定數量才會到「撤退」，只有其中一邊異常則是最輕的「早期警告」。
+
+    技術面異常（0-4）：跌破20日均、跌破60日均、日MACD柱狀由正轉負、
+    較60日高點回落超過15%。
+    基本面異常（0-3）：最新月營收年增率<0、單季EPS年增率<0、
+    毛利率年增率<0（惡化）。
+
+    這套規則沒有對外公開的原始出處可以核對，門檻是本站自訂的近似值，
+    跟其他 8 套「抄錄自公開達人選股法」的規則性質不同。"""
+    since_tech = (datetime.now(_TZ).date() - timedelta(days=400)).isoformat()
+    rows = db.execute(text('''
+        SELECT date, open, high, low, close FROM daily_prices
+        WHERE stock_code = :code AND date >= :since ORDER BY date ASC
+    '''), {'code': code, 'since': since_tech}).mappings().all()
+    price_rows = []
+    for r in rows:
+        d = r['date']
+        if isinstance(d, str):
+            d = datetime.strptime(d, '%Y-%m-%d').date()
+        price_rows.append({'date': d, 'open': r['open'], 'high': r['high'], 'low': r['low'], 'close': r['close']})
+    tech = technical.snapshot(price_rows) if len(price_rows) >= 30 else {}
+
+    closes60 = [r['close'] for r in price_rows[-60:] if r['close'] is not None]
+    ma20 = _mean([r['close'] for r in price_rows[-20:]]) if len(price_rows) >= 20 else None
+    ma60 = _mean(closes60) if len(closes60) >= 60 else None
+    high60 = max(closes60) if closes60 else None
+    close = price_rows[-1]['close'] if price_rows else None
+
+    tech_flags = []
+    if close is not None and ma20 is not None:
+        tech_flags.append(('跌破20日均線', close < ma20))
+    if close is not None and ma60 is not None:
+        tech_flags.append(('跌破60日均線', close < ma60))
+    macd_hist, macd_prev = tech.get('macd_hist'), tech.get('macd_hist_prev')
+    if macd_hist is not None and macd_prev is not None:
+        tech_flags.append(('日MACD柱狀由正轉負', macd_hist < 0 and macd_prev >= 0))
+    if close is not None and high60 is not None and high60 > 0:
+        tech_flags.append(('較60日高點回落逾15%', close <= high60 * 0.85))
+    tech_score = sum(1 for _, hit in tech_flags if hit)
+
+    qf = {}
+    for r in db.execute(text('''
+        SELECT year, quarter, revenue, eps FROM quarterly_financials WHERE stock_code = :code
+    '''), {'code': code}).mappings():
+        qf[(r['year'], r['quarter'])] = dict(r)
+    fe = {}
+    for r in db.execute(text('''
+        SELECT year, quarter, gross_profit, cost_of_goods_sold FROM financial_extra WHERE stock_code = :code
+    '''), {'code': code}).mappings():
+        fe[(r['year'], r['quarter'])] = dict(r)
+    keys = sorted(set(qf) | set(fe), reverse=True)[:12]
+    merged = []
+    for key in keys:
+        row = {'year': key[0], 'quarter': key[1]}
+        row.update(qf.get(key, {}))
+        row.update({k: v for k, v in fe.get(key, {}).items() if k not in ('year', 'quarter')})
+        merged.append(row)
+
+    rev_rows = list(db.execute(text('''
+        SELECT revenue_yoy FROM monthly_revenue WHERE stock_code = :code
+        ORDER BY year DESC, month DESC LIMIT 1
+    '''), {'code': code}).mappings())
+    latest_rev_yoy = rev_rows[0]['revenue_yoy'] if rev_rows else None
+
+    gm = _ratio_series(merged, 'gross_profit', 'revenue')
+    eps_series = [r.get('eps') for r in merged]
+    gm_yoy = _yoy_diff(gm)
+    eps_yoy = _yoy_diff(eps_series)
+
+    fund_flags = [
+        ('最新月營收年增率<0', latest_rev_yoy is not None and latest_rev_yoy < 0),
+        ('單季EPS年增率<0', bool(eps_yoy) and eps_yoy[0] is not None and eps_yoy[0] < 0),
+        ('毛利率年增率<0（惡化）', bool(gm_yoy) and gm_yoy[0] is not None and gm_yoy[0] < 0),
+    ]
+    fund_score = sum(1 for _, hit in fund_flags if hit)
+
+    if tech_score >= 2 and fund_score >= 2:
+        tier = 'retreat'
+    elif tech_score >= 1 and fund_score >= 1:
+        tier = 'caution'
+    elif tech_score >= 1 or fund_score >= 1:
+        tier = 'early'
+    else:
+        tier = 'normal'
+
+    return {
+        'tier': tier,
+        'tier_label': _HEALTH_TIER_LABELS[tier],
+        'tech_score': tech_score,
+        'fund_score': fund_score,
+        'tech_flags': [{'label': label, 'hit': hit} for label, hit in tech_flags],
+        'fund_flags': [{'label': label, 'hit': hit} for label, hit in fund_flags],
     }

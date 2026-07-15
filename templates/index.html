@@ -253,7 +253,17 @@
           <span class="stats-badge" id="wl-count"></span>
           <button class="btn btn-sm" onclick="copyWlForAI()" style="background:var(--accent);color:#fff;">🤖 複製給 AI</button>
           <a class="btn btn-sm" href="https://gemini.google.com" target="_blank" rel="noopener noreferrer" style="background:#1a73e8;color:#fff;">✨ Gemini</a>
+          <button class="btn btn-sm" id="wl-stress-btn" onclick="runWlStressTest()" style="background:#7c3aed;color:#fff;">🧪 壓力測試<span class="new-badge">NEW</span></button>
         </div>
+
+        <div id="wl-stress-panel" class="card hidden">
+          <div class="card-header">
+            <h3>🧪 投資組合壓力測試<span class="new-badge">NEW</span></h3>
+            <button class="icon-btn" onclick="document.getElementById('wl-stress-panel').classList.add('hidden')">✕</button>
+          </div>
+          <div id="wl-stress-body"></div>
+        </div>
+
         <div class="card">
           <table id="wl-table" class="display nowrap" style="width:100%">
             <thead>
@@ -263,6 +273,7 @@
                 <th>收盤價</th><th>價差%</th><th>漲跌幅%</th><th>營收預估股價</th><th>預估倍數</th>
                 <th>營收月份</th><th>月營收(千元)</th><th>月營收年增%</th>
                 <th>最新EPS</th><th>本益比</th><th>資料日期</th><th>甜蜜點</th><th>虧轉盈</th>
+                <th>健康度<span class="new-badge">NEW</span></th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -345,6 +356,7 @@
                 <th class="ann-sortable" data-sort="sweet">甜蜜點<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="entered">入榜日期<span class="ann-sort-arrow"></span></th>
                 <th id="expert-th-transition" class="ann-sortable hidden" data-sort="transition">轉換<span class="ann-sort-arrow"></span></th>
+                <th id="expert-th-yield" class="ann-sortable hidden" data-sort="yield">殖利率<span class="ann-sort-arrow"></span></th>
               </tr>
             </thead>
             <tbody id="expert-tbody"></tbody>
@@ -679,6 +691,31 @@
       </p>
       <p>
         每個分頁最後都有「入榜日期」欄位，記錄該股連續符合這套規則從哪天開始；「多方/空方訊號」還多了「轉換」欄，直接從空方轉進多方（或反過來）當天會標示「空轉多」／「多轉空」，方便觀察訊號翻轉的時機。
+      </p>
+
+      <h4>🧪 動能防雷（NEW，實驗性）</h4>
+      <p>
+        達人選股第 9 個分頁，跟其他 8 套「抄錄自公開達人選股法」的規則不同，這是本站自己設計的實驗性規則，還在測試階段。
+        設計目的是避開「統計上便宜、但基本面正在惡化」的價值陷阱：選股門檻直接排除「最近月營收年增率剛由正轉負」的股票，
+        加分項則看毛利率／營業利益率／ROE／單季EPS 的年增率是否轉強（改善速度，不是絕對水準高低）。
+      </p>
+
+      <h4>🩺 持股健康檢查（NEW，實驗性）</h4>
+      <p>
+        自選股表格最後一欄，跟達人選股用途不同——達人選股是幫你找「買點」，這個是幫你看「已經持有的股票要不要注意出場」。
+        技術面（跌破20/60日均線、日MACD由正轉負、較60日高點回落逾15%）跟基本面（月營收年增率、單季EPS年增率、毛利率年增率轉負）
+        各自累計異常項目數，兩邊都有異常才會升級成<strong>「注意」</strong>，兩邊異常項目數都夠多才會到<strong>「撤退」</strong>，
+        只有單一邊出現異常則是最輕的<strong>「早期警告」</strong>，都沒有則顯示「正常」。
+        滑鼠移到色塊上可以看到觸發了幾項技術面／基本面異常。這套規則沒有對外公開的原始出處可以核對，門檻是本站自訂的近似值。
+      </p>
+
+      <h4>🧪 投資組合壓力測試（NEW，實驗性）</h4>
+      <p>
+        自選股清單頁面上方的「壓力測試」按鈕，對整份清單做整包風險分析（不是逐股評分）。
+        因為系統沒有記錄每檔股票實際的股數/金額，一律假設<strong>等權重</strong>計算，只能反映持股組合本身的風險輪廓，不是真實部位風險。
+        內容包含：①<strong>歷史情境回放</strong>——不是假設性的總經模型，是直接回放 2011歐債危機／2015中國股災／2018中美貿易戰／2020 COVID崩盤／2022全球升息熊市 這幾段台股史上真實的下跌期間，
+        用清單裡每一檔股票當時真實的股價走勢算出期間報酬與最大回檔；②<strong>產業集中度 HHI</strong>；③近一年逐日報酬率的<strong>相關性</strong>；
+        ④用歷史模擬法（不是常態分布假設）算出的<strong>單日 VaR</strong>（95%/99%）。
       </p>
 
       <h4>⭐ 自選股</h4>

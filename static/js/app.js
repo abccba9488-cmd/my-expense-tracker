@@ -1127,6 +1127,83 @@ function wlActive() {
   return state.watchlists.find(w => w.id === state.activeWlId) || state.watchlists[0] || null;
 }
 
+// 投資組合壓力測試（本站自製、實驗性 NEW 功能）：對整份自選股清單做等權重
+// 假設下的歷史情境回放/產業集中度HHI/相關性/歷史模擬法VaR，見
+// portfolio_risk.py 的模組說明。跟 sweetSpotCell/healthBadgeCell 那種「單股
+// 一格」的呈現方式不同，這是觸發後才載入的獨立面板。
+async function runWlStressTest() {
+  const wl = wlActive();
+  if (!wl) return;
+  const panel = document.getElementById('wl-stress-panel');
+  const body = document.getElementById('wl-stress-body');
+  panel.classList.remove('hidden');
+  body.innerHTML = '<p style="color:var(--text2);">計算中…</p>';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  let data;
+  try {
+    data = await fetch(`/api/watchlists/${wl.id}/stress-test`).then(r => r.json());
+  } catch (_) {
+    body.innerHTML = '<p style="color:var(--neg);">計算失敗，請稍後再試</p>';
+    return;
+  }
+  if (!data.holdings_count) {
+    body.innerHTML = '<p style="color:var(--text2);">這份清單目前沒有股票，先加幾檔再試試看。</p>';
+    return;
+  }
+
+  const scenarioRows = data.scenarios.map(s => {
+    const ret = s.portfolio_return_pct;
+    const dd = s.portfolio_max_drawdown_pct;
+    const retHtml = ret != null ? `<span class="${pctClass(ret)}">${fmt.pct(ret)}</span>` : '—';
+    const ddHtml = dd != null ? `<span class="neg">${dd.toFixed(2)}%</span>` : '—';
+    return `<tr>
+      <td>${s.label}<div style="font-size:11px;color:var(--text2);">${s.start} ~ ${s.end}</div></td>
+      <td class="num">${retHtml}</td>
+      <td class="num">${ddHtml}</td>
+      <td class="num" style="color:var(--text2);">${s.covered}/${s.total}</td>
+    </tr>`;
+  }).join('');
+
+  const ic = data.industry_concentration;
+  const icBreakdown = ic.breakdown.map(b =>
+    `<span class="badge" style="margin-right:6px;">${b.industry} ${b.count}檔（${b.pct}%）</span>`).join('');
+  const icColor = ic.level === '高度集中' ? 'var(--neg)' : (ic.level === '中度集中' ? '#eab308' : 'var(--pos)');
+
+  const corr = data.correlation;
+  const corrPairHtml = corr.most_correlated_pair
+    ? `${corr.most_correlated_pair.a_name}(${corr.most_correlated_pair.a}) 與 ${corr.most_correlated_pair.b_name}(${corr.most_correlated_pair.b})：<b>${corr.most_correlated_pair.corr}</b>`
+    : '資料不足';
+
+  const v = data.var;
+
+  body.innerHTML = `
+    <p style="color:var(--text2);font-size:12.5px;margin-bottom:14px;">
+      共 ${data.holdings_count} 檔持股，因自選股清單未記錄實際股數/金額，以下一律假設<b>等權重</b>計算，僅反映持股組合本身的風險輪廓，不是真實部位風險。
+    </p>
+
+    <h4 style="font-size:14px;margin-bottom:8px;">📉 歷史情境回放</h4>
+    <div class="ann-table-wrap">
+      <table class="ann-table" style="width:100%;font-size:13px;margin-bottom:16px;">
+        <thead><tr><th>情境</th><th class="num">期間報酬</th><th class="num">最大回檔</th><th class="num">涵蓋家數</th></tr></thead>
+        <tbody>${scenarioRows}</tbody>
+      </table>
+    </div>
+
+    <h4 style="font-size:14px;margin-bottom:8px;">🏭 產業集中度</h4>
+    <p style="margin-bottom:8px;">HHI = <b style="color:${icColor};">${ic.hhi}</b>（<span style="color:${icColor};">${ic.level}</span>，>2500高度集中／1500-2500中度／&lt;1500分散）</p>
+    <p style="margin-bottom:16px;">${icBreakdown}</p>
+
+    <h4 style="font-size:14px;margin-bottom:8px;">🔗 相關性（近1年逐日報酬）</h4>
+    <p style="margin-bottom:16px;">平均兩兩相關係數：<b>${corr.avg_pairwise != null ? corr.avg_pairwise : '資料不足'}</b>（${corr.pairs_computed} 組配對）<br>相關性最高的一對：${corrPairHtml}</p>
+
+    <h4 style="font-size:14px;margin-bottom:8px;">📊 歷史模擬法 VaR（單日）</h4>
+    <p>95% VaR：<b class="neg">${v.var_95_pct != null ? v.var_95_pct + '%' : '資料不足'}</b>　99% VaR：<b class="neg">${v.var_99_pct != null ? v.var_99_pct + '%' : '資料不足'}</b>
+      <span style="color:var(--text2);font-size:12px;">（用近 ${v.days_used} 個交易日的等權重每日報酬率分布估算，不是常態分布假設的參數法）</span>
+    </p>
+  `;
+}
+
 async function wlCreate(name) {
   if (!state.user) return;
   try {
@@ -1226,15 +1303,33 @@ function renderWatchlistView() {
   if (wls.length > 0) renderWlTable();
 }
 
-function renderWlTable() {
+// 撤退=紅／注意=黃／早期警告=灰／正常=綠。這一整套「持股健康檢查」是本站
+// 自製的實驗性功能（NEW），跟達人選股用途不同：那邊是找買點，這裡是給
+// 已持有的自選股看要不要出場，見 experts.compute_holding_health()。
+function healthBadgeCell(health) {
+  if (!health) return '—';
+  const styles = { retreat: ['#ef4444', '#fff'], caution: ['#eab308', '#000'],
+                    early: ['#94a3b8', '#000'], normal: ['#22c55e', '#fff'] };
+  const [bg, fg] = styles[health.tier] || ['#94a3b8', '#000'];
+  const fill = 'display:block;margin:-9px -12px;padding:9px 12px;font-weight:600;';
+  return `<span style="${fill}background:${bg};color:${fg}" title="技術面異常${health.tech_score}項／基本面異常${health.fund_score}項">${health.tier_label}</span>`;
+}
+
+async function renderWlTable() {
   const wl = wlActive();
   if (!wl) return;
   document.getElementById('wl-count').textContent = `${wl.codes.length} 支`;
 
+  const healthList = await Promise.all(wl.codes.map(code =>
+    fetch(`/api/stocks/${code}/health`).then(r => r.json()).catch(() => null)
+  ));
+  const healthByCode = {};
+  wl.codes.forEach((code, i) => { healthByCode[code] = healthList[i]; });
+
   const rows = wl.codes.map(code => {
     const s = state.allData.find(d => d.code === code);
     const rmBtn = `<button class="wl-remove-btn" data-rm-code="${code}" title="移除">✕</button>`;
-    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
+    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
     const est = calcEst(s);
     const ratio = (est != null && s.close) ? est / s.close : null;
     let estCell = '—';
@@ -1265,6 +1360,7 @@ function renderWlTable() {
       s.price_date || '—',
       sweetSpotCell(s),
       turnaroundCell(s),
+      healthBadgeCell(healthByCode[code]),
     ];
   });
 
@@ -1279,6 +1375,7 @@ function renderWlTable() {
         { targets: [1,2,3,10,15],             className: 'dt-left' },
         { targets: 16, className: 'dt-right', render: { _: 0, display: 1 } },
         { targets: 17, className: 'dt-left', width: '64px' },
+        { targets: 18, className: 'dt-left', width: '76px' },
       ],
     });
     $('#wl-table tbody').on('click', '.wl-remove-btn', function(e) {
@@ -1663,7 +1760,7 @@ async function loadExperts() {
 function renderExpertTabs() {
   document.getElementById('expert-tabs').innerHTML = _expertList.map(e => `
     <button class="filter-btn ${e.expert_key === _expertKey ? 'active' : ''}" data-expert-key="${e.expert_key}">
-      ${e.expert_label}（${e.passed_count}/${e.total}）
+      ${e.expert_label}（${e.passed_count}/${e.total}）${e.is_experimental ? '<span class="new-badge">NEW</span>' : ''}
     </button>
   `).join('');
   document.querySelectorAll('#expert-tabs [data-expert-key]').forEach(btn => {
@@ -1681,7 +1778,7 @@ function _isGutaiKey(key) {
 
 async function loadExpertDetail(key) {
   const tbody = document.getElementById('expert-tbody');
-  const colspan = _isGutaiKey(key) ? 15 : 14;
+  const colspan = 15; // 14 shared cols + 1 (轉換 for gutai tabs, 殖利率 for the rest)
   tbody.innerHTML = `<tr><td colspan="${colspan}" class="ann-empty">載入中…</td></tr>`;
   try {
     _expertData = await fetch(`/api/experts/${key}`).then(r => r.json());
@@ -1719,6 +1816,7 @@ const _EXPERT_SORT_GETTERS = {
   sweet:      s => sweetSpotCell(_expertP(s.code))[0],
   entered:    s => s.entered_at,
   transition: s => s.transition || '',
+  yield:      s => _expertP(s.code).dividend_yield,
 };
 
 function _applyExpertSort() {
@@ -1753,7 +1851,8 @@ function renderExpertTable() {
   // entered_at/transition 說明），其他規則不顯示這欄。
   const isGutai = _isGutaiKey(_expertKey);
   document.getElementById('expert-th-transition').classList.toggle('hidden', !isGutai);
-  const colspan = isGutai ? 15 : 14;
+  document.getElementById('expert-th-yield').classList.toggle('hidden', isGutai);
+  const colspan = 15;
 
   if (!_expertData.length) {
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="ann-empty">尚無資料，請先執行「達人選股資料」爬蟲</td></tr>`;
@@ -1779,7 +1878,9 @@ function renderExpertTable() {
           <td>${p.price_date || '—'}</td>
           <td class="td-left">${sweetSpotCell(p)[1]}</td>
           <td>${s.entered_at || '—'}</td>
-          ${isGutai ? `<td>${s.transition || '—'}</td>` : ''}
+          ${isGutai
+            ? `<td>${s.transition || '—'}</td>`
+            : `<td class="num">${p.dividend_yield != null ? `${p.dividend_yield.toFixed(2)}%` : '—'}</td>`}
         </tr>
       `;
       }).join('')
@@ -1858,7 +1959,7 @@ async function loadStockExpertScores(code) {
 
   document.getElementById('stock-expert-tabs').innerHTML = scored.map(s => `
     <button class="filter-btn ${s.expert_key === _stockExpertKey ? 'active' : ''}" data-expert-key="${s.expert_key}">
-      ${s.passed ? '✅ ' : ''}${s.expert_label}（${s.score}/${s.max_score}）
+      ${s.passed ? '✅ ' : ''}${s.expert_label}（${s.score}/${s.max_score}）${s.is_experimental ? '<span class="new-badge">NEW</span>' : ''}
     </button>
   `).join('');
   document.querySelectorAll('#stock-expert-tabs [data-expert-key]').forEach(btn => {
