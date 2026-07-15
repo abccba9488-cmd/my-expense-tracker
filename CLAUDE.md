@@ -74,9 +74,15 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 ### 效能快取
 
-- **Server side**：`_summary_cache`（`app.py`）快取 JSON 字串，TTL 5 分鐘。`_run_bg()` 在背景任務完成後自動呼叫 `_invalidate_summary_cache()`。
+- **Server side**：`_summary_cache`（`app.py`）快取 JSON 字串，TTL 30 分鐘（2026-07-16 從 5 分鐘拉長，原因見下方）。`_run_bg()` 在背景任務完成後自動呼叫 `_invalidate_summary_cache()`。
 - **Gzip**：`compress_response` after_request handler 自動壓縮 JSON / HTML / CSS / JS 回應。
 - **Client side**：`app.js` 以 `localStorage`（key `bao_sum_v1`，TTL 5 分鐘）做 stale-while-revalidate；頁面重載時先渲染快取，背景靜默更新。
+
+**`_SUMMARY_SQL` 冷查詢在大型 DB 上可能耗時數分鐘、甚至逾時（2026-07-16 發現並修復）**：`daily_prices` 成長到 622 萬筆後，`ma20`/`ma60`/`ma120`/`ma240` 這四個「每檔股票各自關聯子查詢」的寫法（見下方欄位索引說明）等於每次冷查詢要跑約 8,000 次獨立查詢；問題在本機被 `database.py` 原本統一套用的極小 SQLite `cache_size`（2MB）+ `temp_store=FILE` 放大到誇張的程度（temp b-tree 落地磁碟，大量小額 I/O）——同一份查詢在本機曾實測「15 分鐘沒跑完直接被中止」，改成本機用大快取後降到約 25 秒。兩處修復：
+1. **`app.py`**：`_summary_rebuild_lock`（`threading.Lock`）包住快取重建區塊，做成 single-flight——快取過期時若同時有多個請求進來，只有一個真的觸發昂貴查詢，其餘等鎖釋放後直接吃剛寫好的快取，不會每個請求各自重跑一次（cache stampede）。
+2. **`database.py`**：SQLite PRAGMA 依 `sys.platform` 分流（`_IS_CLOUD = sys.platform != 'win32'`）——雲端（Zeabur/Linux）維持原本 `mmap_size=0`／`cache_size=-2000`／`temp_store=FILE` 不變（避免容器 OOM，這組設定本來就是為了解決那個問題）；本機（Windows）改用 `cache_size=-131072`（~128MB）+ `temp_store=MEMORY`。
+
+**重點**：頻繁重啟本機伺服器（改 code 後重啟）每次都會清空記憶體內的 `_summary_cache`，下一個請求就會撞到冷查詢——這是這個問題在本機格外容易被踩到的原因，日常開發改動非資料庫相關程式碼時，能不重啟就不重啟。
 
 ## 資料庫 Schema
 
@@ -119,7 +125,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 12. `backfill_price_change`：一次性回填 `daily_prices.change`/`change_pct`（某段期間曾因（已修復的）程式問題留空，用該股前一交易日收盤價回推補上，OHLCV 本身沒問題）
 13. `fix_finmind_decumulate`：修復 `financial_extra` 被舊版 `crawl_finmind_financials()` 錯誤處理的 Q4/累計值問題（詳見 `database.py` 的 `_fix_finmind_decumulate()` docstring）——損益表三欄（`gross_profit`/`cost_of_goods_sold`/`pretax_income`）FinMind 每季給的本來就是單季值，舊版誤當成「Q4=年度累計」多扣一次 Q1+Q2+Q3，修復前全庫 86% 的 Q4 毛利率是負的；現金流量表三欄（`operating_cash_flow`/`interest_expense`/`capex`）依台灣官方揭露慣例才是「年初至今累計」，舊版從未處理 Q2/Q3、Q4 又用錯減項。修復後兩組欄位的處理邏輯完全對調（前者不調整、後者逐季減去前一季），`crawl_finmind_financials()` 已同步修正，這個 migration 只補救歷史資料
 
-## _SUMMARY_SQL 欄位索引（r[0]–r[18]）
+## _SUMMARY_SQL 欄位索引（r[0]–r[22]）
 
 ```
 0=code, 1=name, 2=market, 3=industry,
@@ -127,8 +133,10 @@ data/stocks.db         SQLite 資料庫（自動建立）
 7=revenue, 8=revenue_yoy, 9=rev_year, 10=rev_month,
 11=eps, 12=eps_year, 13=eps_quarter,
 14=qf_revenue, 15=pe_ratio, 16=start_price, 17=ma20, 18=turnaround_signal,
-19=ma60, 20=ma120, 21=ma240
+19=ma60, 20=ma120, 21=ma240, 22=dividend_yield
 ```
+
+`dividend_yield`（2026-07-16 新增）：跟 `per`/`pbr` 一樣來自 FinMind、存在 `daily_prices`，用「抓最近一筆這個欄位實際有值的日期」而非嚴格最新日期 JOIN（`ldy` CTE），避開估值爬蟲落後股價爬蟲時的空值問題（同 `experts.py` `_build_context()` 既有的處理方式）。前端只在達人選股 7 個基本面規則分頁（`flag888_1`–`4`／`guyu`／`laoniu`／`momentum_guard`）顯示這個欄位，`gutai_bull`/`gutai_bear`（技術面訊號、跟股利無關）不顯示。
 
 `ma20`/`ma60`/`ma120`/`ma240`：各自以相關子查詢取該股最近 20／60／120／240 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT N`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端四個表格（主表格／飆股清單／自選股／達人選股列表）最後一欄「**甜蜜點**」皆呼叫 `app.js` 的 `sweetSpotCell(s)` 顯示此值——**紅＝接近 `ma20`、黃＝接近 `ma60`、綠＝接近 `ma120`**：股價距離這三條均線正負 3% 內時儲存格變色＋🔔 圖示提示（`_SWEET_SPOT_TIERS` 陣列依序 20→60→120 檢查，同時接近多條時優先顯示天期較短的那條），這三條是「支撐/壓力測試」語意。**紫＝ `ma240`，判定規則刻意不對稱**（不是 ±3%）：`(close - ma240) / ma240 <= 0.03`，股價只要在 `ma240` 之下（不論低多少都算）、或高於 `ma240` 但漲幅不超過 3%，就顯示紫色；漲超過 3% 以上就不顯示——把 240 日均線當成「長期價值區」而非單純的支撐/壓力測試，只有「跌破或剛站上」才算，漲多了就不算。四條均線都不符合但至少有 `ma20` 時顯示樸素數值，完全沒有均線資料才顯示「—」。這欄原本只看 `ma20`（單色黃底），2026-07-12 改版加入 `ma60`/`ma120` 並更名「甜蜜點」，`ma20Cell()` 已重新命名為 `sweetSpotCell()`；2026-07-13 加入 `ma240` 並確立「20/60/120 對稱±3%、240 不對稱」這個最終版本（中途曾短暫改成四條都用不對稱規則，隨即依需求改回）。
 
@@ -179,7 +187,9 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 **注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
-**`FINMIND_TOKEN` 沒設定是一個容易忽略的靜默失敗陷阱**：2026-07-16 發生過本機常駐服務（`autostart_server.bat`）從某次重啟後就沒帶到這個環境變數，導致 5 個 `finmind_*` 任務**每天** 17:00 都準時觸發、但每次都馬上失敗（`crawler_logs` 裡訊息一模一樣：`FINMIND_TOKEN environment variable not set`），`institutional_trades`/`holding_concentration` 因此在使用者沒發現的情況下卡在舊資料整整 11 天——`director_holdings`（TWSE/TPEX OpenAPI，不需要金鑰）仍然每天成功，容易誤以為「排程本身有在跑就是正常」而沒注意到部分子任務其實都在失敗。修法：`app.py` 模組層級啟動時檢查 `os.environ.get('FINMIND_TOKEN')`，沒設定就寫一筆 `finmind_token_check` / `failed` 的 `crawler_logs`，讓 ⚙ 爬蟲狀態面板一開就看得到，不用等到手動比對各表 `MAX(date)` 才發現。本機修復方式：`setx FINMIND_TOKEN "your-token"`（永久使用者環境變數，`set` 只在當次終端機有效）之後**重啟**本機服務（環境變數只在程序啟動當下被讀取，已經在跑的舊程序不會生效）。
+**`FINMIND_TOKEN` 沒設定是一個容易忽略的靜默失敗陷阱**：2026-07-16 發生過本機常駐服務（`autostart_server.bat`）從某次重啟後就沒帶到這個環境變數，導致 5 個 `finmind_*` 任務**每天** 17:00 都準時觸發、但每次都馬上失敗（`crawler_logs` 裡訊息一模一樣：`FINMIND_TOKEN environment variable not set`），`institutional_trades`/`holding_concentration` 因此在使用者沒發現的情況下卡在舊資料整整 11 天——`director_holdings`（TWSE/TPEX OpenAPI，不需要金鑰）仍然每天成功，容易誤以為「排程本身有在跑就是正常」而沒注意到部分子任務其實都在失敗。修法：`app.py` 模組層級啟動時檢查 `os.environ.get('FINMIND_TOKEN')`，沒設定就寫一筆 `finmind_token_check` / `failed` 的 `crawler_logs`，讓 ⚙ 爬蟲狀態面板一開就看得到，不用等到手動比對各表 `MAX(date)` 才發現。本機修復方式：`setx FINMIND_TOKEN "your-token"`（永久使用者環境變數，`set` 只在當次終端機有效）之後**重啟**本機服務（環境變數只在程序啟動當下被讀取，已經在跑的舊程序不會生效；已經開著的終端機/PowerShell session 也不會自動拿到新值，要嘛開一個全新的 session，要嘛在該 session 內手動 `$env:FINMIND_TOKEN = [Environment]::GetEnvironmentVariable("FINMIND_TOKEN","User")` 後再啟動）。
+
+**`crawl_finmind_institutional()`（以及其餘 4 個 `crawl_finmind_*`）沒有回填缺口的機制，`_finmind_watchdog` 也補不了**：這幾個函式每次只抓「傳入的那一天」（`start_date=end_date=iso`，見上方「Bulk 模式」說明），`_finmind_watchdog` 的邏輯是「今天還沒成功就補跑今天」，並不會回頭補「過去缺的那幾天」。2026-07-16 那次 token 斷線 11 天的事故修好 token 後，`institutional_trades` 仍然停在斷線前最後一天，因為 watchdog 觸發的補跑只補了「當天」（且股價公布通常有 T+1 delay，當天往往還是 0 筆）——實際造成 `gutai_bull`/`gutai_bear` 全市場 0 檔通過（近5日窗口只剩1筆舊資料，天生不可能滿足「至少2日」門檻）。當時是手動逐日呼叫 `crawler.crawl_finmind_institutional(date_str)` 補齊缺的 7 個交易日才修復。若未來又發生多日斷線，同樣需要手動回填，不會自動復原。
 
 手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `director_holdings` / `expert_scores`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
 
@@ -238,7 +248,7 @@ DELETE /api/admin/users/<id>       刪除會員（連同其自選股清單與留
   - **必須帶 `--bind 0.0.0.0:$PORT`**，否則 gunicorn 預設綁定 `127.0.0.1:8000`，Zeabur 偵測不到 port 會回 502
   - **單一 worker**：避免每個 worker 各自啟動一份 APScheduler（重複觸發排程爬蟲）與 SQLite 連線池
   - `--timeout 300`：`/api/market/summary` 在大型 DB 上冷啟動查詢耗時較長，避免被 gunicorn 逾時 SIGKILL
-- `database.py` 連線時設定 SQLite PRAGMA（`mmap_size=0`、`cache_size=-2000`、`temp_store=FILE`），避免大型 DB 的 mmap 把記憶體推爆容器限制
+- `database.py` 連線時設定 SQLite PRAGMA（`mmap_size=0`、`cache_size=-2000`、`temp_store=FILE`），避免大型 DB 的 mmap 把記憶體推爆容器限制——**這組設定只套用在雲端（`sys.platform != 'win32'`）**，本機用較大的 cache/記憶體 temp_store，詳見上方「效能快取」章節
 - 服務記憶體限制設定在 Zeabur「設定 → 資源限制」（Mi），與帳號方案的總額度是兩回事
 
 **雲端初始化 DB（跑 backfill 的替代方案）：**
