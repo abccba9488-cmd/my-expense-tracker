@@ -74,21 +74,6 @@ def _run_bg(fn, *args):
     t.start()
 
 
-def _backfill_broker_trades(code):
-    """First time ANY user watchlists `code`: backfill the last 30 trading
-    days of broker-branch buy/sell so the detail page has history right
-    away instead of waiting 30 days for _broker_trades_job to accumulate it.
-    Throttled like backfill_finmind.py (0.3s between calls) — this is a
-    per-stock FinMind call, not the bulk-mode calls the other finmind_*
-    crawlers use."""
-    for d in crawler.get_recent_trading_days(30):
-        try:
-            crawler.crawl_broker_trades(d, code)
-        except Exception as e:
-            logger.warning('Broker trades backfill skip %s %s: %s', code, d, e)
-        _time.sleep(0.3)
-
-
 def _initial_crawl():
     """Background task: populate DB on first run."""
     logger.info('Starting initial data crawl...')
@@ -1073,7 +1058,7 @@ def api_wl_add_stock(wl_id):
             # broker-branch trades in the background instead of waiting for
             # the daily job to accumulate history one day at a time.
             if not db.query(BrokerTrade).filter_by(stock_code=code).first():
-                _run_bg(_backfill_broker_trades, code)
+                _run_bg(crawler.backfill_broker_trades, code)
         return jsonify({'ok': True})
     finally:
         db.close()

@@ -1555,6 +1555,22 @@ def watchlisted_stock_codes(db):
     return {c for (c,) in db.query(WatchlistStock.stock_code).distinct().all()}
 
 
+def backfill_broker_trades(stock_code: str, days: int = 30):
+    """Backfill `days` trading days of broker-branch buy/sell for one stock —
+    used both when a stock is freshly added to a watchlist, and by
+    _broker_trades_job()'s catch-up pass for stocks that were already
+    watchlisted before this feature existed (or before it ever succeeded,
+    e.g. a stale FINMIND_TOKEN). Throttled like backfill_finmind.py (0.3s
+    between calls) since this is a per-stock FinMind call, not the bulk-mode
+    calls the other finmind_* crawlers use."""
+    for d in get_recent_trading_days(days):
+        try:
+            crawl_broker_trades(d, stock_code)
+        except Exception as e:
+            logger.warning('Broker trades backfill skip %s %s: %s', stock_code, d, e)
+        time.sleep(0.3)
+
+
 def crawl_broker_trades(date_str: str, stock_code: str):
     """券商分點單日買賣超（單一股票）。date_str: YYYYMMDD。
 

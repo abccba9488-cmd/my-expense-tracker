@@ -140,19 +140,27 @@ def _finmind_job():
 
 
 def _broker_trades_job():
-    """券商分點進出：只對目前有出現在任一使用者自選清單的股票抓「今天」這一
-    天（日增量）。放在 _finmind_job 之後，避開同一時間點打太多外部請求。"""
+    """券商分點進出：對目前有出現在任一使用者自選清單的股票做日增量；若某檔
+    股票完全沒有歷史資料（例如在這個功能上線前就已經被自選、或先前因
+    FINMIND_TOKEN 失效而從未成功抓過），改成補 30 天歷史而不是只抓今天一
+    天——不然這種「舊自選股」會一直卡在 0 筆，永遠等不到 app.py 新增自選時
+    才會觸發的那次回補。放在 _finmind_job 之後，避開同一時間點打太多外部請求。"""
     import crawler
     from database import SessionLocal
+    from database import BrokerTrade
     today = datetime.now(_TZ).strftime('%Y%m%d')
     db = SessionLocal()
     try:
         codes = crawler.watchlisted_stock_codes(db)
+        has_data = {c for (c,) in db.query(BrokerTrade.stock_code).distinct().all()}
     finally:
         db.close()
     for code in codes:
         try:
-            crawler.crawl_broker_trades(today, code)
+            if code in has_data:
+                crawler.crawl_broker_trades(today, code)
+            else:
+                crawler.backfill_broker_trades(code)
         except Exception as e:
             logger.error('Broker trades job failed for %s: %s', code, e)
 
