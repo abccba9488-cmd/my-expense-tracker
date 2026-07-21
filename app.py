@@ -21,7 +21,7 @@ import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message,
-    Announcement, StockAiAnalysis, ExpertScore, init_db
+    Announcement, StockAiAnalysis, ExpertScore, BrokerTrade, init_db
 )
 
 logging.basicConfig(
@@ -72,6 +72,21 @@ def _run_bg(fn, *args):
             _invalidate_summary_cache()
     t = threading.Thread(target=_wrapper, daemon=True)
     t.start()
+
+
+def _backfill_broker_trades(code):
+    """First time ANY user watchlists `code`: backfill the last 30 trading
+    days of broker-branch buy/sell so the detail page has history right
+    away instead of waiting 30 days for _broker_trades_job to accumulate it.
+    Throttled like backfill_finmind.py (0.3s between calls) — this is a
+    per-stock FinMind call, not the bulk-mode calls the other finmind_*
+    crawlers use."""
+    for d in crawler.get_recent_trading_days(30):
+        try:
+            crawler.crawl_broker_trades(d, code)
+        except Exception as e:
+            logger.warning('Broker trades backfill skip %s %s: %s', code, d, e)
+        _time.sleep(0.3)
 
 
 def _initial_crawl():
@@ -519,6 +534,32 @@ def api_prices(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/broker-trades')
+def api_broker_trades(code):
+    """券商分點單日買賣超，近 N 天（預設30）。只有已被自選過的股票才有資料
+    ——沒資料回傳空陣列，由前端決定是否顯示這張卡片。日/30日累計前十大買超/
+    賣超排序交給前端算，比照 /api/market/summary 的既有慣例。"""
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 30))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+        rows = (
+            db.query(BrokerTrade)
+            .filter(BrokerTrade.stock_code == code, BrokerTrade.date >= cutoff)
+            .order_by(BrokerTrade.date)
+            .all()
+        )
+        return jsonify([{
+            'date':        str(r.date),
+            'broker_id':   r.broker_id,
+            'broker_name': r.broker_name,
+            'buy_volume':  r.buy_volume,
+            'sell_volume': r.sell_volume,
+        } for r in rows])
+    finally:
+        db.close()
+
+
 @app.route('/api/stocks/<code>/revenue')
 def api_revenue(code):
     db = SessionLocal()
@@ -807,6 +848,9 @@ def api_run_crawler(task):
     elif task == 'finmind_data':
         _run_bg(sched._finmind_job)
 
+    elif task == 'broker_trades':
+        _run_bg(sched._broker_trades_job)
+
     elif task == 'director_holdings':
         _run_bg(crawler.crawl_director_holdings)
 
@@ -1025,6 +1069,11 @@ def api_wl_add_stock(wl_id):
         if not db.query(WatchlistStock).filter_by(watchlist_id=wl_id, stock_code=code).first():
             db.add(WatchlistStock(watchlist_id=wl_id, stock_code=code))
             db.commit()
+            # First time anyone watchlists this stock → backfill 30 days of
+            # broker-branch trades in the background instead of waiting for
+            # the daily job to accumulate history one day at a time.
+            if not db.query(BrokerTrade).filter_by(stock_code=code).first():
+                _run_bg(_backfill_broker_trades, code)
         return jsonify({'ok': True})
     finally:
         db.close()

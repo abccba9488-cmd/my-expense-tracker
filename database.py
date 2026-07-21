@@ -155,6 +155,29 @@ class InstitutionalTrade(Base):
     dealer_sell  = Column(BigInteger)
 
 
+class BrokerTrade(Base):
+    """券商分點單日買賣超，來源 FinMind TaiwanStockTradingDailyReport（回傳的
+    是逐價位明細，同一券商同一天可能有多筆不同成交價的列）——爬蟲端依
+    securities_trader_id 加總 buy/sell 股數後才存這裡，見 crawler.py
+    crawl_broker_trades()。只對「目前有出現在任一使用者自選清單」的股票抓取
+    （這個 dataset 一檔一天就近千筆原始資料，全市場排程不現實也沒必要），不是
+    像 institutional_trades 那樣的全市場資料。"""
+    __tablename__ = 'broker_trades'
+    __table_args__ = (
+        UniqueConstraint('stock_code', 'date', 'broker_id'),
+        Index('ix_bt_code_date', 'stock_code', 'date'),
+    )
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code  = Column(String(10), nullable=False)
+    date        = Column(Date, nullable=False)
+    broker_id   = Column(String(10), nullable=False)
+    broker_name = Column(String(50))
+    buy_volume  = Column(BigInteger)
+    sell_volume = Column(BigInteger)
+    buy_price   = Column(Float)   # 加權平均買進價
+    sell_price  = Column(Float)   # 加權平均賣出價
+
+
 class HoldingConcentration(Base):
     """股權分散表（週資料），來源 FinMind TaiwanStockHoldingSharesPer。
     pct_* 為該張數門檻(含)以上／以下各級距 percent 加總，門檻對應

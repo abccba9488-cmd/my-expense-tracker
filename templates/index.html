@@ -417,6 +417,33 @@
         <div class="chart-wrap" id="stock-expert-chart-wrap"><canvas id="stock-expert-chart"></canvas></div>
       </div>
 
+      <!-- 券商分點進出（僅自選股顯示） -->
+      <div class="card hidden" id="stock-broker-card">
+        <div class="card-header">
+          <h3>🏦 券商分點進出</h3>
+          <select id="broker-date-select" class="industry-select"></select>
+        </div>
+        <div class="broker-trade-grid">
+          <div>
+            <h4 class="broker-trade-subhead">本日買超前10大券商</h4>
+            <table class="broker-trade-table" id="broker-buy-table"><tbody></tbody></table>
+          </div>
+          <div>
+            <h4 class="broker-trade-subhead">本日賣超前10大券商</h4>
+            <table class="broker-trade-table" id="broker-sell-table"><tbody></tbody></table>
+          </div>
+        </div>
+        <h4 class="broker-trade-subhead broker-trade-cumulative-head" id="broker-cumulative-label">近30日累計買超/賣超前10大券商</h4>
+        <div class="broker-trade-grid">
+          <div>
+            <table class="broker-trade-table" id="broker-cum-buy-table"><tbody></tbody></table>
+          </div>
+          <div>
+            <table class="broker-trade-table" id="broker-cum-sell-table"><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
+
       <!-- 股價圖 -->
       <div class="card">
         <div class="card-header">

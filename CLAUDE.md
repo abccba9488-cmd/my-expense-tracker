@@ -98,6 +98,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `dividend_policy` | `(stock_code, event_date)` | 逐筆股利分派事件（非年度加總），FinMind |
 | `dividend_fill_events` | `(stock_code, ex_date)` | 除權息事件 + 填息判斷，FinMind |
 | `director_holdings` | `(stock_code, year_month)` | 董監持股比例，TWSE/TPEX OpenAPI（非 FinMind） |
+| `broker_trades` | `(stock_code, date, broker_id)` | 券商分點單日買賣超（股），FinMind `TaiwanStockTradingDailyReport`，見下方「券商分點進出」章節 |
 | `expert_scores` | `(stock_code, expert_key)` | 達人選股每套規則最新一次計分快取；`entered_at`/`transition` 是唯二跨執行延續（不覆寫）的欄位，見下方「達人選股」章節 |
 | `users` | `id` | 會員帳號，`password_hash` 用 werkzeug |
 | `watchlists` | `id` | 屬於某 `user_id`，可多個 |
@@ -184,6 +185,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 達人選股（FinMind 增量 + 重算分數） | 每天 17:00（股價爬蟲與 watchdog 之後），見「達人選股」章節 |
 | 達人選股（FinMind，watchdog，2026-07-16 新增） | 週一〜五 17:00 起每 30 分鐘檢查一次，若當天還沒有成功的 `finmind_institutional` log 就補跑整個 `_finmind_job()`（`_finmind_watchdog`，啟動時也會立即跑一次），跟 `_daily_price_watchdog` 同一個模式，補的是「程序在 17:00 當下沒在跑」這種情況 |
 | 達人選股（financial_extra） | 與官方季報同月份、每天 23:30（比官方季報 job 晚 30 分） |
+| 券商分點進出（2026-07-22 新增） | 週一〜五 17:30（達人選股 FinMind job 之後），只對目前有人自選的股票抓當天，見「券商分點進出」章節 |
 
 **注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
@@ -191,7 +193,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 **`crawl_finmind_institutional()`（以及其餘 4 個 `crawl_finmind_*`）沒有回填缺口的機制，`_finmind_watchdog` 也補不了**：這幾個函式每次只抓「傳入的那一天」（`start_date=end_date=iso`，見上方「Bulk 模式」說明），`_finmind_watchdog` 的邏輯是「今天還沒成功就補跑今天」，並不會回頭補「過去缺的那幾天」。2026-07-16 那次 token 斷線 11 天的事故修好 token 後，`institutional_trades` 仍然停在斷線前最後一天，因為 watchdog 觸發的補跑只補了「當天」（且股價公布通常有 T+1 delay，當天往往還是 0 筆）——實際造成 `gutai_bull`/`gutai_bear` 全市場 0 檔通過（近5日窗口只剩1筆舊資料，天生不可能滿足「至少2日」門檻）。當時是手動逐日呼叫 `crawler.crawl_finmind_institutional(date_str)` 補齊缺的 7 個交易日才修復。若未來又發生多日斷線，同樣需要手動回填，不會自動復原。
 
-手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `director_holdings` / `expert_scores`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
+手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `broker_trades` / `director_holdings` / `expert_scores`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
 
 ## REST API
 
@@ -205,6 +207,7 @@ GET  /api/stocks/<code>/financials 個股季財報
 GET  /api/stocks/<code>/ai-analysis  讀取該股快取的 AI 分析結果（任何人可讀，不會觸發新分析）
 POST /api/stocks/<code>/ai-analysis  觸發一次全新 AI 分析（僅管理員；同步執行，會產生 OpenRouter 費用）
 GET  /api/stocks/<code>/expert-scores  該股在 8 套達人選股規則下的最新分數/明細
+GET  /api/stocks/<code>/broker-trades  券商分點單日買賣超近N天（?days=30），只有被自選過的股票才有資料，見「券商分點進出」章節
 GET  /api/experts                  8 套達人選股規則清單（標籤、通過檔數/總檔數）
 GET  /api/experts/<key>            該規則下依分數排序的完整清單（含每檔 breakdown）
 GET  /api/stats                    DB 統計（stocks/prices/revenues/quarterly 筆數）
@@ -525,3 +528,17 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 **已知限制**：`stocks` 表只有目前追蹤中的股票，沒有回測當時的完整名單，下市股票的失敗案例看不到（倖存者偏差）；沒有計入交易成本/滑價；股泰的 TU/TM/TD 真實公式未公開，回測沿用跟正式評分一樣的 `technical.py` 近似值。
 
 **效能規範（往後任何回測腳本都要遵守）：一律用 `multiprocessing` 平行運算，盡量榨乾多核心 CPU，不要寫成單執行緒**。技術指標（EMA/MACD/RSI/KD）對每檔股票只算一次、快取成陣列，用 `bisect` 依日期索引取值，不要每個取樣日都重新計算一次（那樣等於重跑一次完整的 `compute_expert_scores()`，慢上百倍）；平行化的軸是「每個取樣日彼此獨立」，用 `multiprocessing.Pool(initializer=...)` 把大型唯讀資料（技術指標陣列、法人、持股、季報）在每個 worker process 只序列化一次（用 initializer 塞進 worker 自己的全域變數），不要每個 task 都重新 pickle 一次。Windows 用 `spawn` 模式啟動子行程，進入點一定要包在 `if __name__ == '__main__':` 裡。
+
+## 券商分點進出（自選股專屬，2026-07-22 新增）
+
+只記錄「有人自選過」的股票，不是全市場資料——來源 FinMind `TaiwanStockTradingDailyReport` 是逐股票呼叫，一檔一天就近千到數千列（2330 實測近 5800 列），全市場每天跑不現實也沒必要。**曾誤以為要用 `TaiwanStockTradingDailyReportSecIdAgg`（需 FinMind 贊助方案）**，實測發現這個 dataset 名稱已不存在（`422` 列出的合法 enum 沒有它），改用 `TaiwanStockTradingDailyReport`——這個現有 `FINMIND_TOKEN` 就能直接呼叫，不需要升級付費方案。
+
+**原始資料是逐價位明細**：同一券商同一天在不同成交價各有一列，`crawler.py` 的 `crawl_broker_trades(date_str, stock_code)` 依 `securities_trader_id` 加總 `buy`/`sell` 股數才存進 `broker_trades`（`buy_price`/`sell_price` 是用金額加權平均出來的，不是原始值直接搬）。這個 dataset 不分上市/上櫃，同一支函式即可，不用像 `daily_prices` 那樣分 TWSE/TPEX。
+
+**觸發機制（兩條路徑）**：
+1. **每日增量**：`scheduler.py` 的 `_broker_trades_job()`，週一〜五 17:30（`_finmind_job` 之後），對 `crawler.watchlisted_stock_codes(db)`（`SELECT DISTINCT stock_code FROM watchlist_stocks`）逐檔呼叫當天。
+2. **首次自選回補 30 天**：`POST /api/watchlists/<id>/stocks` 新增成功後，若 `broker_trades` 裡該股票尚無任何資料（代表全站第一次有人自選），用既有 `_run_bg()` 背景執行緒觸發 `_backfill_broker_trades()`（`app.py`），迴圈呼叫 30 個交易日、每次呼叫間 `sleep(0.3)`（沿用 `backfill_finmind.py` 節流慣例）。已有資料的股票（別人已自選過）不重補，靠每日增量接續。
+
+移除自選不特別處理——`watchlisted_stock_codes()` 重新查詢就會自然排除，舊資料留著（資料量小，不做清理）。
+
+**API**：`GET /api/stocks/<code>/broker-trades?days=30` 回傳近 N 天已聚合的原始列（不分日期排序好），**當日/N日累計前十大買超賣超排序交給前端算**（`app.js` 的 `renderBrokerTrades()`），比照 `/api/market/summary` 前端算飆股的既有慣例，之後想改排序邏輯或天數不用動後端。前端只在 `#stock-broker-card`（詳情頁）顯示，且只在使用者自選清單裡有這檔股票時才顯示（`state.watchlists` 找不到就整卡隱藏）。手動測試：`POST /api/crawler/run/broker_trades`。

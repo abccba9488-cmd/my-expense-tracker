@@ -139,6 +139,24 @@ def _finmind_job():
         logger.error('compute_expert_scores failed: %s', e)
 
 
+def _broker_trades_job():
+    """券商分點進出：只對目前有出現在任一使用者自選清單的股票抓「今天」這一
+    天（日增量）。放在 _finmind_job 之後，避開同一時間點打太多外部請求。"""
+    import crawler
+    from database import SessionLocal
+    today = datetime.now(_TZ).strftime('%Y%m%d')
+    db = SessionLocal()
+    try:
+        codes = crawler.watchlisted_stock_codes(db)
+    finally:
+        db.close()
+    for code in codes:
+        try:
+            crawler.crawl_broker_trades(today, code)
+        except Exception as e:
+            logger.error('Broker trades job failed for %s: %s', code, e)
+
+
 def _finmind_financials_job(quarter):
     """資產負債表/現金流量表/毛利項目，跟官方季報同一批公告時間窗（同
     _quarterly_job 的揭露期限邏輯），比官方季報 job 晚 30 分鐘跑。"""
@@ -209,6 +227,9 @@ def start():
     # _daily_price_watchdog does for daily_price.
     _scheduler.add_job(_finmind_watchdog, 'interval', minutes=30,
                        next_run_time=datetime.now(_TZ))
+
+    # 券商分點進出：只抓自選股，17:30（達人選股 FinMind job 之後）
+    _scheduler.add_job(_broker_trades_job, CronTrigger(day_of_week='mon-fri', hour=17, minute=30))
 
     # 達人選股 financial_extra: same disclosure-month cadence as the official
     # quarterly job, 30 min later.

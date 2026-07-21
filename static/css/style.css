@@ -453,6 +453,21 @@ table.dataTable tbody td {
   font-family: inherit; margin: 0; line-height: 1.7;
 }
 
+/* ── 券商分點進出 ── */
+.broker-trade-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px; margin-top: 8px;
+}
+.broker-trade-subhead { font-size: 13px; color: var(--text2); margin: 4px 0 6px; }
+.broker-trade-cumulative-head { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.broker-trade-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.broker-trade-table td {
+  padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.broker-trade-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.broker-trade-table tr:last-child td { border-bottom: none; }
+.broker-trade-empty { color: var(--text2); font-size: 13px; padding: 6px 0; }
+
 /* ── 達人選股 ── */
 .expert-criteria-list { list-style: none; margin: 6px 0; padding: 0; font-size: 13px; }
 .expert-criteria-list li {

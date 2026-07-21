@@ -364,6 +364,7 @@ async function loadStockDetail(code) {
   renderQuarterlyTable(financials);
   renderFundamentalsPanel(fundamentals);
   loadStockExpertScores(code);
+  loadStockBrokerTrades(code);
 
   if (state.user && state.user.is_admin) loadStockAiAnalysis(code);
 }
@@ -1933,6 +1934,68 @@ function closeExpertModal() {
 /* ── 個股詳情頁：達人選股評分圖表 ── */
 let _stockExpertData = [];
 let _stockExpertKey = null;
+
+/* ── 券商分點進出（僅自選股顯示） ── */
+let _brokerTradeData = [];
+let _brokerTradeDate = null;
+
+async function loadStockBrokerTrades(code) {
+  const card = document.getElementById('stock-broker-card');
+  const inAnyWatchlist = state.watchlists.some(w => (w.codes || []).includes(code));
+  if (!inAnyWatchlist) { card.classList.add('hidden'); return; }
+  try {
+    _brokerTradeData = await fetch(`/api/stocks/${code}/broker-trades?days=30`).then(r => r.json());
+  } catch (_) {
+    card.classList.add('hidden');
+    return;
+  }
+  if (!Array.isArray(_brokerTradeData) || !_brokerTradeData.length) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+
+  const dates = [...new Set(_brokerTradeData.map(r => r.date))].sort().reverse();
+  if (!dates.includes(_brokerTradeDate)) _brokerTradeDate = dates[0];
+
+  const sel = document.getElementById('broker-date-select');
+  sel.innerHTML = dates.map(d =>
+    `<option value="${d}" ${d === _brokerTradeDate ? 'selected' : ''}>${d}</option>`).join('');
+  sel.onchange = () => { _brokerTradeDate = sel.value; renderBrokerTrades(); };
+
+  document.getElementById('broker-cumulative-label').textContent =
+    `近${dates.length}日累計買超/賣超前10大券商`;
+
+  renderBrokerTrades();
+}
+
+function _brokerTradeRows(list, ascending) {
+  const ranked = [...list].sort((a, b) => ascending ? a.net - b.net : b.net - a.net).slice(0, 10);
+  if (!ranked.length) return '<tr><td colspan="2" class="broker-trade-empty">無資料</td></tr>';
+  return ranked.map(r => `
+    <tr>
+      <td>${r.broker_name || r.broker_id}</td>
+      <td><span class="${pctClass(r.net)}">${r.net > 0 ? '+' : ''}${r.net.toLocaleString()}</span></td>
+    </tr>
+  `).join('');
+}
+
+function renderBrokerTrades() {
+  const daily = _brokerTradeData
+    .filter(r => r.date === _brokerTradeDate)
+    .map(r => ({...r, net: (r.buy_volume || 0) - (r.sell_volume || 0)}));
+  document.querySelector('#broker-buy-table tbody').innerHTML = _brokerTradeRows(daily, false);
+  document.querySelector('#broker-sell-table tbody').innerHTML = _brokerTradeRows(daily, true);
+
+  const cumMap = {};
+  for (const r of _brokerTradeData) {
+    const c = cumMap[r.broker_id] || (cumMap[r.broker_id] = {broker_id: r.broker_id, broker_name: r.broker_name, net: 0});
+    c.net += (r.buy_volume || 0) - (r.sell_volume || 0);
+  }
+  const cum = Object.values(cumMap);
+  document.querySelector('#broker-cum-buy-table tbody').innerHTML = _brokerTradeRows(cum, false);
+  document.querySelector('#broker-cum-sell-table tbody').innerHTML = _brokerTradeRows(cum, true);
+}
 
 async function loadStockExpertScores(code) {
   const card = document.getElementById('stock-expert-card');

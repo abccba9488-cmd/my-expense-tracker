@@ -23,6 +23,7 @@ from database import (
     QuarterlyFinancial, CrawlerLog, Announcement, StockAiAnalysis,
     InstitutionalTrade, HoldingConcentration, FinancialExtra,
     DividendPolicy, DividendFillEvent, DirectorHolding,
+    BrokerTrade, WatchlistStock,
 )
 import finmind_client
 
@@ -1540,6 +1541,65 @@ def crawl_finmind_institutional(date_str: str):
         db.rollback()
         _log('finmind_institutional', 'failed', f'{date_str}: {e}')
         logger.exception('crawl_finmind_institutional failed for %s', date_str)
+        raise
+    finally:
+        db.close()
+
+
+def watchlisted_stock_codes(db):
+    """Distinct stock codes currently sitting in ANY user's watchlist.
+    broker_trades only tracks these — TaiwanStockTradingDailyReport returns
+    per-price-tier rows (verified: ~5800 rows for one stock on one day), so
+    crawling the whole market daily like crawl_finmind_institutional() does
+    is neither affordable nor useful here."""
+    return {c for (c,) in db.query(WatchlistStock.stock_code).distinct().all()}
+
+
+def crawl_broker_trades(date_str: str, stock_code: str):
+    """券商分點單日買賣超（單一股票）。date_str: YYYYMMDD。
+
+    FinMind TaiwanStockTradingDailyReport 回傳的是逐價位明細——同一券商同一天
+    在不同成交價各有一列（verified: 2330 一天近5800列）——依 securities_trader_id
+    加總 buy/sell 股數才是「單一券商單日買賣超」，買/賣均價用成交量加權平均。
+    這個 dataset 不分上市/上櫃，同一支呼叫方式即可。"""
+    iso = f'{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}'
+    _log('broker_trades', 'running', f'{stock_code} {date_str}')
+    db = SessionLocal()
+    try:
+        rows = finmind_client.fetch('TaiwanStockTradingDailyReport',
+                                     start_date=iso, end_date=iso, data_id=stock_code)
+        agg = {}
+        for r in rows:
+            bid = r.get('securities_trader_id')
+            if not bid:
+                continue
+            a = agg.setdefault(bid, {'name': r.get('securities_trader'),
+                                      'buy': 0, 'sell': 0,
+                                      'buy_amt': 0.0, 'sell_amt': 0.0})
+            price = r.get('price') or 0
+            buy, sell = r.get('buy') or 0, r.get('sell') or 0
+            a['buy'] += buy
+            a['sell'] += sell
+            a['buy_amt'] += price * buy
+            a['sell_amt'] += price * sell
+
+        d = _parse_iso_date(iso)
+        records = [{
+            'stock_code': stock_code, 'date': d, 'broker_id': bid,
+            'broker_name': a['name'],
+            'buy_volume': a['buy'], 'sell_volume': a['sell'],
+            'buy_price': round(a['buy_amt'] / a['buy'], 2) if a['buy'] else None,
+            'sell_price': round(a['sell_amt'] / a['sell'], 2) if a['sell'] else None,
+        } for bid, a in agg.items()]
+        if records:
+            db.execute(BrokerTrade.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log('broker_trades', 'success', f'{stock_code} {date_str}: {len(records)} brokers')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('broker_trades', 'failed', f'{stock_code} {date_str}: {e}')
+        logger.exception('crawl_broker_trades failed for %s %s', stock_code, date_str)
         raise
     finally:
         db.close()
