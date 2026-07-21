@@ -543,4 +543,6 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 **踩雷**：本機用工具（PowerShell）重啟 `python app.py` 時，子行程繼承的是那個 shell session 當下的環境變數，不是登錄檔即時值——`setx FINMIND_TOKEN` 寫進去之後，沒重新載入 `$env:FINMIND_TOKEN` 就直接 `Start-Process` 會導致爬蟲全部靜默失敗（只在 `crawler_logs` 留一筆 `finmind_token_check`/`failed`，畫面上完全看不出來）。
 
+**券商名稱偶爾亂碼，是 FinMind 上游資料本身的問題，不是我們解碼錯**：實測對比同一 `(stock_id, date, securities_trader_id)` 直接呼叫即時 API 也拿到亂碼（`resp.encoding='utf-8'` 強制設定無效），確認是 FinMind 資料源間歇性把某些券商名稱的字元換成字面上的問號（如 broker_id `6010`/`6012`/`601d`「奔亞」系列，同一 broker_id 在不同日期時而正常時而變成「?亞」）。修法見 `database.py` 的 `_fix_garbled_broker_names()`（每次啟動都跑，用同一 `broker_id` 底下最常見的乾淨名稱覆蓋掉開頭是「?」的列）+ `crawler.py` 的 `crawl_broker_trades()` 寫入前防護（爬到可疑名稱且資料庫已有乾淨名稱時直接用乾淨的）。
+
 **API**：`GET /api/stocks/<code>/broker-trades?days=30` 回傳近 N 天已聚合的原始列（股數，不分日期排序好，單位換算留給前端）。前端（`app.js` 的 `renderBrokerTrades()`）算出「整個時間窗累計買超/賣超前10大券商」決定矩陣的欄位，再攤開成**日期 × 券商矩陣表格**（每一列一天、每一欄一個券商、最後一列合計），比照 `/api/market/summary` 前端算飆股的既有慣例，數字統一 `_brokerLots()` 除以1000四捨五入成張數顯示（2026-07-22 從「選日期看當日前10」改版，使用者要求「不要一天一天查」）。前端只在 `#stock-broker-card`（詳情頁）顯示，且只在使用者自選清單裡有這檔股票時才顯示（`state.watchlists` 找不到就整卡隱藏）。手動測試：`POST /api/crawler/run/broker_trades`。
