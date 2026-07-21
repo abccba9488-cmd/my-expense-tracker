@@ -454,18 +454,21 @@ table.dataTable tbody td {
 }
 
 /* ── 券商分點進出 ── */
-.broker-trade-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px; margin-top: 8px;
-}
 .broker-trade-subhead { font-size: 13px; color: var(--text2); margin: 4px 0 6px; }
 .broker-trade-cumulative-head { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
-.broker-trade-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.broker-trade-table td {
-  padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap;
+.broker-trade-scroll { overflow-x: auto; }
+.broker-trade-matrix {
+  width: 100%; border-collapse: collapse; font-size: 12.5px; white-space: nowrap;
 }
-.broker-trade-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
-.broker-trade-table tr:last-child td { border-bottom: none; }
+.broker-trade-matrix th, .broker-trade-matrix td {
+  padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.broker-trade-matrix th:first-child, .broker-trade-matrix td:first-child {
+  text-align: left; position: sticky; left: 0; background: var(--bg2); z-index: 1;
+}
+.broker-trade-matrix thead th { color: var(--text2); font-weight: 600; background: var(--bg2); }
+.broker-trade-matrix .broker-trade-total-row td { font-weight: 700; border-top: 2px solid var(--border); }
 .broker-trade-empty { color: var(--text2); font-size: 13px; padding: 6px 0; }
 
 /* ── 達人選股 ── */

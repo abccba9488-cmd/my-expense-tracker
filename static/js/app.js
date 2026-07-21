@@ -1937,7 +1937,6 @@ let _stockExpertKey = null;
 
 /* ── 券商分點進出（僅自選股顯示） ── */
 let _brokerTradeData = [];
-let _brokerTradeDate = null;
 
 async function loadStockBrokerTrades(code) {
   const card = document.getElementById('stock-broker-card');
@@ -1954,38 +1953,39 @@ async function loadStockBrokerTrades(code) {
     return;
   }
   card.classList.remove('hidden');
-
-  const dates = [...new Set(_brokerTradeData.map(r => r.date))].sort().reverse();
-  if (!dates.includes(_brokerTradeDate)) _brokerTradeDate = dates[0];
-
-  const sel = document.getElementById('broker-date-select');
-  sel.innerHTML = dates.map(d =>
-    `<option value="${d}" ${d === _brokerTradeDate ? 'selected' : ''}>${d}</option>`).join('');
-  sel.onchange = () => { _brokerTradeDate = sel.value; renderBrokerTrades(); };
-
-  document.getElementById('broker-cumulative-label').textContent =
-    `近${dates.length}日累計買超/賣超前10大券商`;
-
   renderBrokerTrades();
 }
 
-function _brokerTradeRows(list, ascending) {
-  const ranked = [...list].sort((a, b) => ascending ? a.net - b.net : b.net - a.net).slice(0, 10);
-  if (!ranked.length) return '<tr><td colspan="2" class="broker-trade-empty">無資料</td></tr>';
-  return ranked.map(r => `
-    <tr>
-      <td>${r.broker_name || r.broker_id}</td>
-      <td><span class="${pctClass(r.net)}">${r.net > 0 ? '+' : ''}${r.net.toLocaleString()}</span></td>
-    </tr>
-  `).join('');
+function _brokerLots(shares) {
+  // 股數 → 張（1張=1000股），四捨五入
+  return Math.round((shares || 0) / 1000);
+}
+
+function _brokerLotsCell(shares) {
+  const lots = _brokerLots(shares);
+  if (!lots) return '<td>—</td>';
+  return `<td><span class="${pctClass(lots)}">${lots > 0 ? '+' : ''}${lots.toLocaleString()}</span></td>`;
+}
+
+function _brokerMatrixHtml(dates, brokers) {
+  if (!brokers.length) return '<tr><td class="broker-trade-empty">無資料</td></tr>';
+  const byBrokerDate = {};
+  for (const r of _brokerTradeData) {
+    (byBrokerDate[r.broker_id] || (byBrokerDate[r.broker_id] = {}))[r.date] =
+      (r.buy_volume || 0) - (r.sell_volume || 0);
+  }
+  const head = `<thead><tr><th>日期</th>${brokers.map(b => `<th>${b.broker_name || b.broker_id}</th>`).join('')}</tr></thead>`;
+  const rows = dates.map(d => {
+    const cells = brokers.map(b => _brokerLotsCell(byBrokerDate[b.broker_id]?.[d])).join('');
+    return `<tr><td>${d}</td>${cells}</tr>`;
+  }).join('');
+  const totalCells = brokers.map(b => _brokerLotsCell(b.net)).join('');
+  const totalRow = `<tr class="broker-trade-total-row"><td>合計</td>${totalCells}</tr>`;
+  return `${head}<tbody>${rows}${totalRow}</tbody>`;
 }
 
 function renderBrokerTrades() {
-  const daily = _brokerTradeData
-    .filter(r => r.date === _brokerTradeDate)
-    .map(r => ({...r, net: (r.buy_volume || 0) - (r.sell_volume || 0)}));
-  document.querySelector('#broker-buy-table tbody').innerHTML = _brokerTradeRows(daily, false);
-  document.querySelector('#broker-sell-table tbody').innerHTML = _brokerTradeRows(daily, true);
+  const dates = [...new Set(_brokerTradeData.map(r => r.date))].sort().reverse();
 
   const cumMap = {};
   for (const r of _brokerTradeData) {
@@ -1993,8 +1993,13 @@ function renderBrokerTrades() {
     c.net += (r.buy_volume || 0) - (r.sell_volume || 0);
   }
   const cum = Object.values(cumMap);
-  document.querySelector('#broker-cum-buy-table tbody').innerHTML = _brokerTradeRows(cum, false);
-  document.querySelector('#broker-cum-sell-table tbody').innerHTML = _brokerTradeRows(cum, true);
+  const topBuy  = [...cum].sort((a, b) => b.net - a.net).slice(0, 10);
+  const topSell = [...cum].sort((a, b) => a.net - b.net).slice(0, 10);
+
+  document.getElementById('broker-buy-matrix-label').textContent  = `買超前10大券商（近${dates.length}日，單位：張）`;
+  document.getElementById('broker-sell-matrix-label').textContent = `賣超前10大券商（近${dates.length}日，單位：張）`;
+  document.getElementById('broker-buy-matrix').innerHTML  = _brokerMatrixHtml(dates, topBuy);
+  document.getElementById('broker-sell-matrix').innerHTML = _brokerMatrixHtml(dates, topSell);
 }
 
 async function loadStockExpertScores(code) {
