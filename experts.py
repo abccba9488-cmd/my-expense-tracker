@@ -521,7 +521,7 @@ def score_flag888_2(ctx):
     s = ScoreCard()
     years = sorted(ctx['div_by_year'], reverse=True)[:10]
     div_totals = [ctx['div_by_year'][y]['cash'] + ctx['div_by_year'][y]['stock'] for y in years]
-    s.require('連續5年股息>0', _consecutive_dividend_years(ctx['div_by_year'], 5))
+    s.require('連續10年股息>0', _consecutive_dividend_years(ctx['div_by_year'], 10))
 
     latest_year = years[0] if years else None
     annual_eps = None
@@ -585,7 +585,7 @@ def score_flag888_4(ctx):
     s = ScoreCard()
     years = sorted(ctx['div_by_year'], reverse=True)[:10]
     div_totals = [ctx['div_by_year'][y]['cash'] + ctx['div_by_year'][y]['stock'] for y in years]
-    s.require('連續5年股息>0', _consecutive_dividend_years(ctx['div_by_year'], 5))
+    s.require('連續10年股息>0', _consecutive_dividend_years(ctx['div_by_year'], 10))
 
     # ctx['div_fill_events'] is already limited to the last 5 years (see _build_context)
     known = [e['filled'] for e in ctx['div_fill_events'] if e['filled'] is not None]
