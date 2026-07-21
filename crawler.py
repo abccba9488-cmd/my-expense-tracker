@@ -1607,6 +1607,22 @@ def crawl_broker_trades(date_str: str, stock_code: str):
             'buy_price': round(a['buy_amt'] / a['buy'], 2) if a['buy'] else None,
             'sell_price': round(a['sell_amt'] / a['sell'], 2) if a['sell'] else None,
         } for bid, a in agg.items()]
+
+        # Guard against FinMind's own intermittent '?'-in-place-of-a-character
+        # corruption (confirmed live: same broker_id/date sometimes comes back
+        # as "?亞" instead of "奔亞") — if this crawl's name looks corrupted
+        # and we already have a clean name on file for that broker_id from a
+        # different date, use that instead of writing garbage. See
+        # database.py's _fix_garbled_broker_names() for the retroactive repair.
+        for rec in records:
+            if rec['broker_name'] and rec['broker_name'].startswith('?'):
+                clean = db.execute(text('''
+                    SELECT broker_name FROM broker_trades
+                    WHERE broker_id = :bid AND broker_name NOT LIKE '?%' LIMIT 1
+                '''), {'bid': rec['broker_id']}).scalar()
+                if clean:
+                    rec['broker_name'] = clean
+
         if records:
             db.execute(BrokerTrade.__table__.insert().prefix_with('OR REPLACE'), records)
             db.commit()

@@ -535,6 +535,35 @@ def _fix_finmind_decumulate(conn):
         '''))
 
 
+def _fix_garbled_broker_names(conn):
+    """Repair broker_trades.broker_name rows where FinMind's own upstream
+    data occasionally substitutes a literal '?' for a Chinese character —
+    confirmed against a live call to TaiwanStockTradingDailyReport: the same
+    broker_id (e.g. 6010/6012/601d, all "奔亞" branches) intermittently comes
+    back as "?亞"/"?亞網路"/"?亞鑫豐" instead of the correct name on some
+    dates and not others, for the exact same stock/date/id combination — this
+    is corruption already present in FinMind's response, not a decode bug on
+    our side (verified: forcing resp.encoding='utf-8' made no difference).
+    Not migration-gated (runs every startup, cheap on this table's size) —
+    broker_trades keeps growing daily and the same intermittent corruption
+    could reappear for any broker_id in the future, not just the ones fixed
+    once at the time this function was written."""
+    bad_ids = conn.execute(text(
+        "SELECT DISTINCT broker_id FROM broker_trades WHERE broker_name LIKE '?%'"
+    )).scalars().all()
+    for broker_id in bad_ids:
+        clean = conn.execute(text('''
+            SELECT broker_name FROM broker_trades
+            WHERE broker_id = :bid AND broker_name NOT LIKE '?%'
+            GROUP BY broker_name ORDER BY COUNT(*) DESC LIMIT 1
+        '''), {'bid': broker_id}).scalar()
+        if clean:
+            conn.execute(text('''
+                UPDATE broker_trades SET broker_name = :clean
+                WHERE broker_id = :bid AND broker_name LIKE '?%'
+            '''), {'clean': clean, 'bid': broker_id})
+
+
 def init_db():
     Base.metadata.create_all(engine)
 
@@ -726,3 +755,9 @@ def init_db():
             conn.execute(text('DELETE FROM announcements'))
             conn.execute(text("INSERT INTO schema_migrations(name) VALUES('clear_old_announcements')"))
             conn.commit()
+
+    # Repair broker_trades rows corrupted by FinMind's own intermittent
+    # '?'-in-place-of-a-character bug — see _fix_garbled_broker_names docstring.
+    with engine.connect() as conn:
+        _fix_garbled_broker_names(conn)
+        conn.commit()
