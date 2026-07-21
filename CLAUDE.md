@@ -535,10 +535,12 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 **原始資料是逐價位明細**：同一券商同一天在不同成交價各有一列，`crawler.py` 的 `crawl_broker_trades(date_str, stock_code)` 依 `securities_trader_id` 加總 `buy`/`sell` 股數才存進 `broker_trades`（`buy_price`/`sell_price` 是用金額加權平均出來的，不是原始值直接搬）。這個 dataset 不分上市/上櫃，同一支函式即可，不用像 `daily_prices` 那樣分 TWSE/TPEX。
 
-**觸發機制（兩條路徑）**：
-1. **每日增量**：`scheduler.py` 的 `_broker_trades_job()`，週一〜五 17:30（`_finmind_job` 之後），對 `crawler.watchlisted_stock_codes(db)`（`SELECT DISTINCT stock_code FROM watchlist_stocks`）逐檔呼叫當天。
-2. **首次自選回補 30 天**：`POST /api/watchlists/<id>/stocks` 新增成功後，若 `broker_trades` 裡該股票尚無任何資料（代表全站第一次有人自選），用既有 `_run_bg()` 背景執行緒觸發 `_backfill_broker_trades()`（`app.py`），迴圈呼叫 30 個交易日、每次呼叫間 `sleep(0.3)`（沿用 `backfill_finmind.py` 節流慣例）。已有資料的股票（別人已自選過）不重補，靠每日增量接續。
+**觸發機制（兩條路徑，共用 `crawler.backfill_broker_trades(code, days=30)`）**：
+1. **首次自選回補 30 天**：`POST /api/watchlists/<id>/stocks` 新增成功後，若 `broker_trades` 裡該股票尚無任何資料（代表全站第一次有人自選），用既有 `_run_bg()` 背景執行緒觸發回補。
+2. **每日增量 + 舊自選股補漏**：`scheduler.py` 的 `_broker_trades_job()`，週一〜五 17:30（`_finmind_job` 之後），對 `crawler.watchlisted_stock_codes(db)`（`SELECT DISTINCT stock_code FROM watchlist_stocks`）逐檔檢查：已有資料的只抓當天增量，**完全沒資料的直接補 30 天**——這條分支是 2026-07-22 補上的，原因是「這個功能上線前就已經在自選清單裡」的股票只靠路徑1（新增當下才觸發）永遠等不到資料，本機驗證時實測踩到（既有 29 檔自選股全部卡在 0 筆）。
 
 移除自選不特別處理——`watchlisted_stock_codes()` 重新查詢就會自然排除，舊資料留著（資料量小，不做清理）。
 
-**API**：`GET /api/stocks/<code>/broker-trades?days=30` 回傳近 N 天已聚合的原始列（不分日期排序好），**當日/N日累計前十大買超賣超排序交給前端算**（`app.js` 的 `renderBrokerTrades()`），比照 `/api/market/summary` 前端算飆股的既有慣例，之後想改排序邏輯或天數不用動後端。前端只在 `#stock-broker-card`（詳情頁）顯示，且只在使用者自選清單裡有這檔股票時才顯示（`state.watchlists` 找不到就整卡隱藏）。手動測試：`POST /api/crawler/run/broker_trades`。
+**踩雷**：本機用工具（PowerShell）重啟 `python app.py` 時，子行程繼承的是那個 shell session 當下的環境變數，不是登錄檔即時值——`setx FINMIND_TOKEN` 寫進去之後，沒重新載入 `$env:FINMIND_TOKEN` 就直接 `Start-Process` 會導致爬蟲全部靜默失敗（只在 `crawler_logs` 留一筆 `finmind_token_check`/`failed`，畫面上完全看不出來）。
+
+**API**：`GET /api/stocks/<code>/broker-trades?days=30` 回傳近 N 天已聚合的原始列（股數，不分日期排序好，單位換算留給前端）。前端（`app.js` 的 `renderBrokerTrades()`）算出「整個時間窗累計買超/賣超前10大券商」決定矩陣的欄位，再攤開成**日期 × 券商矩陣表格**（每一列一天、每一欄一個券商、最後一列合計），比照 `/api/market/summary` 前端算飆股的既有慣例，數字統一 `_brokerLots()` 除以1000四捨五入成張數顯示（2026-07-22 從「選日期看當日前10」改版，使用者要求「不要一天一天查」）。前端只在 `#stock-broker-card`（詳情頁）顯示，且只在使用者自選清單裡有這檔股票時才顯示（`state.watchlists` 找不到就整卡隱藏）。手動測試：`POST /api/crawler/run/broker_trades`。
