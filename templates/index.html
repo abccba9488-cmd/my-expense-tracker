@@ -405,18 +405,22 @@
         <div class="chart-wrap" id="stock-expert-chart-wrap"><canvas id="stock-expert-chart"></canvas></div>
       </div>
 
-      <!-- 券商分點進出（僅自選股顯示） -->
+      <!-- 券商分點進出（詳情頁按需查詢） -->
       <div class="card hidden" id="stock-broker-card">
         <div class="card-header">
           <h3>🏦 券商分點進出</h3>
+          <button class="btn btn-sm" id="stock-broker-btn" onclick="fetchStockBrokerTrades()">查詢近30天券商分點</button>
         </div>
-        <h4 class="broker-trade-subhead" id="broker-buy-matrix-label">買超前10大券商（單位：張）</h4>
-        <div class="broker-trade-scroll">
-          <table class="broker-trade-matrix" id="broker-buy-matrix"></table>
-        </div>
-        <h4 class="broker-trade-subhead broker-trade-cumulative-head" id="broker-sell-matrix-label">賣超前10大券商（單位：張）</h4>
-        <div class="broker-trade-scroll">
-          <table class="broker-trade-matrix" id="broker-sell-matrix"></table>
+        <div id="stock-broker-empty" class="stock-ai-body hidden">尚無資料，點擊「查詢近30天券商分點」開始</div>
+        <div id="stock-broker-matrix-wrap" class="hidden">
+          <h4 class="broker-trade-subhead" id="broker-buy-matrix-label">買超前10大券商（單位：張）</h4>
+          <div class="broker-trade-scroll">
+            <table class="broker-trade-matrix" id="broker-buy-matrix"></table>
+          </div>
+          <h4 class="broker-trade-subhead broker-trade-cumulative-head" id="broker-sell-matrix-label">賣超前10大券商（單位：張）</h4>
+          <div class="broker-trade-scroll">
+            <table class="broker-trade-matrix" id="broker-sell-matrix"></table>
+          </div>
         </div>
       </div>
 

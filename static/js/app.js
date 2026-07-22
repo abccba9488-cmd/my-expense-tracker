@@ -1910,25 +1910,66 @@ function renderExpertTable() {
 let _stockExpertData = [];
 let _stockExpertKey = null;
 
-/* ── 券商分點進出（僅自選股顯示） ── */
+/* ── 券商分點進出（詳情頁按需查詢，不再限制自選股） ── */
 let _brokerTradeData = [];
 
 async function loadStockBrokerTrades(code) {
-  const card = document.getElementById('stock-broker-card');
-  const inAnyWatchlist = state.watchlists.some(w => (w.codes || []).includes(code));
-  if (!inAnyWatchlist) { card.classList.add('hidden'); return; }
+  document.getElementById('stock-broker-card').classList.remove('hidden');
+  const btn = document.getElementById('stock-broker-btn');
+  btn.disabled = false;
+  btn.textContent = '查詢近30天券商分點';
   try {
     _brokerTradeData = await fetch(`/api/stocks/${code}/broker-trades?days=30`).then(r => r.json());
   } catch (_) {
-    card.classList.add('hidden');
-    return;
+    _brokerTradeData = [];
   }
+  _renderBrokerCardState();
+}
+
+function _renderBrokerCardState() {
+  const empty = document.getElementById('stock-broker-empty');
+  const wrap = document.getElementById('stock-broker-matrix-wrap');
   if (!Array.isArray(_brokerTradeData) || !_brokerTradeData.length) {
-    card.classList.add('hidden');
-    return;
+    empty.textContent = '尚無資料，點擊「查詢近30天券商分點」開始';
+    empty.classList.remove('hidden');
+    wrap.classList.add('hidden');
+  } else {
+    empty.classList.add('hidden');
+    wrap.classList.remove('hidden');
+    renderBrokerTrades();
   }
-  card.classList.remove('hidden');
-  renderBrokerTrades();
+}
+
+async function fetchStockBrokerTrades() {
+  if (!state.currentCode) return;
+  if (!state.user) { showToast('請先登入才能查詢券商分點'); return; }
+  const btn = document.getElementById('stock-broker-btn');
+  const empty = document.getElementById('stock-broker-empty');
+  btn.disabled = true;
+  btn.textContent = '查詢中，請稍候…';
+  document.getElementById('stock-broker-matrix-wrap').classList.add('hidden');
+  empty.textContent = '查詢中，請稍候（可能需要數十秒）…';
+  empty.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/stocks/${state.currentCode}/broker-trades/fetch`, {method: 'POST'});
+    const data = await resp.json();
+    if (!resp.ok) {
+      empty.textContent = `查詢失敗：${data.error || '未知錯誤'}`;
+    } else {
+      _brokerTradeData = await fetch(`/api/stocks/${state.currentCode}/broker-trades?days=30`).then(r => r.json());
+      _renderBrokerCardState();
+      if (Array.isArray(_brokerTradeData) && _brokerTradeData.length) {
+        showToast('查詢完成');
+      } else {
+        empty.textContent = '查無資料（可能該股票近期無成交，或 FinMind 尚未更新）';
+      }
+    }
+  } catch (_) {
+    empty.textContent = '查詢失敗，請稍後再試';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '查詢近30天券商分點';
+  }
 }
 
 function _brokerLots(shares) {

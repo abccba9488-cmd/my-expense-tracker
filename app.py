@@ -521,9 +521,10 @@ def api_prices(code):
 
 @app.route('/api/stocks/<code>/broker-trades')
 def api_broker_trades(code):
-    """券商分點單日買賣超，近 N 天（預設30）。只有已被自選過的股票才有資料
-    ——沒資料回傳空陣列，由前端決定是否顯示這張卡片。日/30日累計前十大買超/
-    賣超排序交給前端算，比照 /api/market/summary 的既有慣例。"""
+    """券商分點單日買賣超，近 N 天（預設30）。資料來源是自選股回補或使用者
+    在個股詳情頁按「查詢」觸發（見 api_broker_trades_fetch）——沒資料回傳空
+    陣列，由前端決定顯示空狀態還是矩陣。日/30日累計前十大買超/賣超排序交給
+    前端算，比照 /api/market/summary 的既有慣例。"""
     db = SessionLocal()
     try:
         days = int(request.args.get('days', 30))
@@ -543,6 +544,29 @@ def api_broker_trades(code):
         } for r in rows])
     finally:
         db.close()
+
+
+@app.route('/api/stocks/<code>/broker-trades/fetch', methods=['POST'])
+def api_broker_trades_fetch(code):
+    """個股詳情頁「查詢」按鈕：任何登入使用者可主動觸發，不再限制自選股。
+    同步執行（比照 AI 個股分析的作法），已有資料只補當天增量，完全沒資料
+    才回補30天，邏輯與 scheduler._broker_trades_job() 一致。"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'unauthorized'}), 401
+    db = SessionLocal()
+    try:
+        has_data = db.query(BrokerTrade).filter_by(stock_code=code).first() is not None
+    finally:
+        db.close()
+    try:
+        if has_data:
+            today = datetime.now(_TZ).strftime('%Y%m%d')
+            crawler.crawl_broker_trades(today, code)
+        else:
+            crawler.backfill_broker_trades(code)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'ok': True})
 
 
 @app.route('/api/stocks/<code>/revenue')
