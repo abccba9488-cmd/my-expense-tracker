@@ -1813,6 +1813,7 @@ const _EXPERT_SORT_GETTERS = {
   diff:       s => _expertP(s.code).price_diff,
   chg:        s => _expertP(s.code).change_pct,
   score:      s => s.score,
+  est:        s => { const p = _expertP(s.code); const est = calcEst(p); return (est != null && p.close) ? est / p.close : null; },
   date:       s => _expertP(s.code).price_date,
   sweet:      s => sweetSpotCell(_expertP(s.code))[0],
   entered:    s => s.entered_at,
@@ -1863,6 +1864,8 @@ function renderExpertTable() {
   tbody.innerHTML = rows.length
     ? rows.map((s, i) => {
         const p = state.allData.find(d => d.code === s.code) || {};
+        const est = calcEst(p);
+        const ratio = (est != null && p.close) ? est / p.close : null;
         return `
         <tr>
           <td>${i + 1}</td>
@@ -1875,7 +1878,7 @@ function renderExpertTable() {
           <td class="num">${p.price_diff != null ? `<span class="${pctClass(p.price_diff)}">${fmt.pct(p.price_diff)}</span>` : '—'}</td>
           <td class="num">${p.change_pct != null ? `<span class="${pctClass(p.change_pct)}">${fmt.pct(p.change_pct)}</span>` : '—'}</td>
           <td class="num">${s.score} / ${s.max_score}</td>
-          <td class="td-center"><span class="ann-subject-link" data-idx="${_expertData.indexOf(s)}">查看明細</span></td>
+          <td class="num">${ratio != null ? ratio.toFixed(2) + 'x' : '—'}</td>
           <td>${p.price_date || '—'}</td>
           <td class="td-left">${sweetSpotCell(p)[1]}</td>
           <td>${s.entered_at || '—'}</td>
@@ -1896,40 +1899,12 @@ function renderExpertTable() {
       loadStockDetail(el.dataset.code);
     });
   });
-  tbody.querySelectorAll('.ann-subject-link').forEach(el => {
-    el.addEventListener('click', () => openExpertModal(+el.dataset.idx));
-  });
   document.querySelectorAll('#expert-table .ann-sortable').forEach(th => {
     const arrow = th.querySelector('.ann-sort-arrow');
     if (arrow) arrow.textContent = th.dataset.sort === _expertSortField ? (_expertSortDir > 0 ? ' ▲' : ' ▼') : '';
   });
 }
 
-function openExpertModal(i) {
-  const s = _expertData[i];
-  if (!s) return;
-  document.getElementById('expert-modal-title').textContent = `${s.code} ${s.name || ''}`;
-  const selectItems = s.breakdown.filter(b => b.type === 'select');
-  const scoreItems = s.breakdown.filter(b => b.type === 'score');
-  const metIcon = (met) => met === null ? '<span class="ann-dot-empty">—</span>' : (met ? '✅' : '❌');
-  const expertLabel = (_expertList.find(e => e.expert_key === _expertKey) || {}).expert_label || '';
-  document.getElementById('expert-modal-body').innerHTML = `
-    <div class="stock-expert-total">${expertLabel}　總分 <span class="stock-expert-total-num">${s.score} / ${s.max_score}</span> 分</div>
-    <div class="ann-modal-subject">選股標準（${s.passed ? '✅ 全部符合' : '❌ 未全部符合'}）</div>
-    <ul class="expert-criteria-list">
-      ${selectItems.map(b => `<li>${metIcon(b.met)} ${b.label}</li>`).join('')}
-    </ul>
-    <hr class="ann-modal-divider">
-    <div class="ann-modal-subject">評分明細（${s.score} / ${s.max_score} 分）</div>
-  `;
-  renderModalExpertChart(scoreItems);
-  document.getElementById('expert-modal').classList.remove('hidden');
-}
-
-function closeExpertModal() {
-  document.getElementById('expert-modal').classList.add('hidden');
-  if (state.modalExpertChart) { state.modalExpertChart.destroy(); state.modalExpertChart = null; }
-}
 
 /* ── 個股詳情頁：達人選股評分圖表 ── */
 let _stockExpertData = [];
@@ -2101,10 +2076,6 @@ function _renderExpertChart(scoreItems, canvasId, wrapId, chartKey) {
 
 function renderStockExpertChart(scoreItems) {
   _renderExpertChart(scoreItems, 'stock-expert-chart', 'stock-expert-chart-wrap', 'stockExpertChart');
-}
-
-function renderModalExpertChart(scoreItems) {
-  _renderExpertChart(scoreItems, 'expert-modal-chart', 'expert-modal-chart-wrap', 'modalExpertChart');
 }
 
 /* ── Crawler status panel ── */

@@ -351,7 +351,7 @@
                 <th class="ann-sortable" data-sort="diff">價差%<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="chg">漲跌幅%<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="score">評分<span class="ann-sort-arrow"></span></th>
-                <th>評分明細</th>
+                <th class="ann-sortable" data-sort="est">預估倍數<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="date">資料日期<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="sweet">甜蜜點<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="entered">入榜日期<span class="ann-sort-arrow"></span></th>
@@ -363,18 +363,6 @@
           </table>
         </div>
       </div>
-    </div>
-  </div>
-
-  <!-- 達人選股評分明細 Modal -->
-  <div id="expert-modal" class="ann-modal-overlay hidden" onclick="if(event.target===this)closeExpertModal()">
-    <div class="ann-modal">
-      <div class="ann-modal-hdr">
-        <span id="expert-modal-title"></span>
-        <button class="ann-modal-close" onclick="closeExpertModal()">✕</button>
-      </div>
-      <div id="expert-modal-body" class="ann-modal-body"></div>
-      <div class="chart-wrap" id="expert-modal-chart-wrap"><canvas id="expert-modal-chart"></canvas></div>
     </div>
   </div>
 
