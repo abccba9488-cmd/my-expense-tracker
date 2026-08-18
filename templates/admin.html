@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>後台管理｜飆股網</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/icons/favicon.ico') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ asset_version('css/style.css') }}">
+</head>
+<body>
+
+<nav id="nav">
+  <div class="nav-inner">
+    <div class="logo-group">
+      <span class="logo">🛠 後台管理</span>
+      <span class="slogan">飆股網管理後台</span>
+    </div>
+    <div class="nav-right">
+      <a class="icon-btn" href="/" title="回到首頁">🏠</a>
+      <button class="icon-btn" id="theme-btn" title="切換主題">☀</button>
+      <div id="auth-area"></div>
+    </div>
+  </div>
+</nav>
+
+<main>
+  <div class="container">
+
+    <!-- ── 系統健康 ── -->
+    <div class="card">
+      <div class="card-header">
+        <h3 style="margin-bottom:0;">📊 系統健康</h3>
+        <span id="token-badge" class="token-badge"></span>
+      </div>
+      <div id="health-grid" class="health-grid"></div>
+    </div>
+
+    <!-- ── 爬蟲控制 / 排程狀態 ── -->
+    <div class="card">
+      <div class="card-header"><h3 style="margin-bottom:0;">🕷 爬蟲控制與排程狀態</h3></div>
+      <div class="status-actions" style="padding:0 0 14px;border:none;flex-wrap:wrap;">
+        <button class="btn btn-sm" onclick="runCrawler('stock_list')">更新股票清單</button>
+        <button class="btn btn-sm" id="quarterly-btn" onclick="runCrawler('quarterly')">更新季財報</button>
+        <button class="btn btn-sm" onclick="runCrawler('daily_price')">更新今日股價</button>
+        <button class="btn btn-sm" onclick="runCrawler('monthly_revenue')">更新月營收</button>
+        <button class="btn btn-sm" onclick="runCrawler('announcements')">更新自結公告</button>
+        <button class="btn btn-sm" onclick="runCrawler('finmind_data')">更新達人選股資料</button>
+        <button class="btn btn-sm" onclick="runCrawler('director_holdings')">更新董監持股</button>
+        <button class="btn btn-sm" onclick="runCrawler('expert_scores')">重新計算達人評分</button>
+        <button class="btn btn-sm" onclick="runCrawler('broker_trades')">更新券商分點</button>
+      </div>
+      <div class="ann-table-wrap">
+        <table class="ann-table" id="task-health-table">
+          <thead>
+            <tr><th>任務</th><th>最後執行</th><th>狀態</th><th>近20次成功率</th><th>最後訊息</th></tr>
+          </thead>
+          <tbody id="task-health-tbody"></tbody>
+        </table>
+      </div>
+      <h3 style="margin:18px 0 10px;">最近 30 筆執行紀錄</h3>
+      <div id="status-logs" class="status-logs" style="max-height:320px;"></div>
+    </div>
+
+    <!-- ── 訪客紀錄 ── -->
+    <div class="card">
+      <div class="card-header"><h3 style="margin-bottom:0;">🧑‍💻 訪客紀錄</h3></div>
+      <div id="visit-stats" class="health-grid"></div>
+      <div class="ann-table-wrap">
+        <table class="ann-table" id="visit-table">
+          <thead>
+            <tr><th>時間</th><th>IP</th><th>使用者</th><th>來源網址</th><th>瀏覽器</th></tr>
+          </thead>
+          <tbody id="visit-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── 會員管理 ── -->
+    <div class="card">
+      <div class="card-header">
+        <h3 style="margin-bottom:0;">👥 會員管理 <span id="admin-user-count" class="stats-badge"></span></h3>
+      </div>
+      <div id="admin-user-list" class="admin-user-list" style="max-height:400px;"></div>
+    </div>
+
+    <!-- ── 留言板管理 ── -->
+    <div class="card">
+      <div class="card-header">
+        <h3 style="margin-bottom:0;">💬 留言板管理 <span id="msg-admin-count" class="stats-badge"></span></h3>
+      </div>
+      <div class="admin-bulk-bar">
+        <label><input type="checkbox" class="admin-chk" id="msg-select-all"> 全選</label>
+        <button class="btn btn-sm" id="msg-bulk-del-btn" style="background:var(--neg);">刪除已選</button>
+      </div>
+      <div class="ann-table-wrap">
+        <table class="ann-table" id="msg-admin-table">
+          <thead>
+            <tr><th></th><th>使用者</th><th>內容</th><th>時間</th><th></th></tr>
+          </thead>
+          <tbody id="msg-admin-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="{{ url_for('static', filename='js/admin.js') }}?v={{ asset_version('js/admin.js') }}"></script>
+</body>
+</html>

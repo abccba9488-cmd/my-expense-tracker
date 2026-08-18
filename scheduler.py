@@ -65,6 +65,72 @@ def _monthly_revenue_job():
         logger.error('Monthly revenue job failed: %s', e)
 
 
+def _monthly_revenue_watchdog():
+    """Every 30 min from 23:00 to 06:00: if today's monthly revenue crawl
+    hasn't reported success yet, trigger a fresh one — unless a run from
+    today is still genuinely in progress (a 'running' log younger than 40
+    min; the normal crawl takes ~10 min). Unlike the other crawl functions,
+    crawl_monthly_revenue can get stuck 'running' forever with no failed log
+    (e.g. the machine sleeps mid-crawl and the thread never wakes up cleanly
+    on a dead connection) — this watchdog is the recovery path for that."""
+    from database import SessionLocal
+    from sqlalchemy import text
+    now = datetime.now(_TZ)
+    if not (now.hour >= 23 or now.hour < 6):
+        return
+    db = SessionLocal()
+    try:
+        done = db.execute(
+            text("SELECT 1 FROM crawler_logs WHERE task='monthly_revenue' AND status='success'"
+                 " AND date(created_at) = date('now', 'localtime') LIMIT 1")
+        ).first()
+        if done:
+            return
+        stuck = db.execute(
+            text("SELECT 1 FROM crawler_logs WHERE task='monthly_revenue' AND status='running'"
+                 " AND (julianday('now', 'localtime') - julianday(created_at)) * 1440 < 40"
+                 " ORDER BY created_at DESC LIMIT 1")
+        ).first()
+    finally:
+        db.close()
+    if stuck:
+        return
+    logger.info('Watchdog: monthly revenue not completed today — triggering catch-up')
+    _monthly_revenue_job()
+
+
+def _quarterly_watchdog():
+    """Same pattern as _monthly_revenue_watchdog, for the quarterly job —
+    it loops over every stock too and can get stuck 'running' forever the
+    same way. Only active during a disclosure month (mirrors the quarter
+    each cron job in start() targets)."""
+    from database import SessionLocal
+    from sqlalchemy import text
+    now = datetime.now(_TZ)
+    quarter = {5: 1, 8: 2, 11: 3, 3: 4}.get(now.month)
+    if quarter is None or not (now.hour >= 23 or now.hour < 6):
+        return
+    db = SessionLocal()
+    try:
+        done = db.execute(
+            text("SELECT 1 FROM crawler_logs WHERE task='quarterly' AND status='success'"
+                 " AND date(created_at) = date('now', 'localtime') LIMIT 1")
+        ).first()
+        if done:
+            return
+        stuck = db.execute(
+            text("SELECT 1 FROM crawler_logs WHERE task='quarterly' AND status='running'"
+                 " AND (julianday('now', 'localtime') - julianday(created_at)) * 1440 < 40"
+                 " ORDER BY created_at DESC LIMIT 1")
+        ).first()
+    finally:
+        db.close()
+    if stuck:
+        return
+    logger.info('Watchdog: quarterly financials not completed today — triggering catch-up')
+    _quarterly_job(quarter)
+
+
 def _announcements_job():
     import crawler
     try:
@@ -206,6 +272,11 @@ def start():
     # Monthly revenue: every day at 23:00 (some companies publish late, keep retrying)
     _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))
 
+    # Watchdog: every 30 min from 23:00–06:00 — recovers from the job getting
+    # stuck 'running' forever (see _monthly_revenue_watchdog docstring).
+    _scheduler.add_job(_monthly_revenue_watchdog, 'interval', minutes=30,
+                       next_run_time=datetime.now(_TZ))
+
     # Announcements: weekdays at 05:00 (off-peak, prior-day post-close announcements)
     _scheduler.add_job(_announcements_job, CronTrigger(day_of_week='mon-fri', hour=5, minute=0))
 
@@ -225,6 +296,11 @@ def start():
     _scheduler.add_job(lambda: _quarterly_job(3), CronTrigger(month=11, hour=23, minute=0))
     # Q4 (Oct–Dec): all of March of the following year (deadline Mar 31)
     _scheduler.add_job(lambda: _quarterly_job(4), CronTrigger(month=3,  hour=23, minute=0))
+
+    # Watchdog: every 30 min from 23:00–06:00 during a disclosure month —
+    # same stuck-'running'-forever recovery as _monthly_revenue_watchdog.
+    _scheduler.add_job(_quarterly_watchdog, 'interval', minutes=30,
+                       next_run_time=datetime.now(_TZ))
 
     # 達人選股 (FinMind): daily incremental crawl + score recompute, 17:00 —
     # after the day's price crawls (14:00/15:00) and watchdog window.

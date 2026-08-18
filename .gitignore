@@ -8,6 +8,21 @@ data/
 # ngrok binary
 ngrok.exe
 
+# cloudflared binary (tunnel, downloaded from Cloudflare's GitHub releases)
+cloudflared.exe
+
+# Local logs and generated backtest output — not source, not reproducible
+# input, shouldn't be in version control
+*.log
+backtest_gutai_full.json
+
+# Personal helper scripts that bridge to an unrelated local project
+# (hardcoded paths, only meaningful on this machine — see CLAUDE.md
+# 「個人輔助腳本」)
+backfill_announcements.py
+generate_announcement_excel.py
+generate_excel_run.bat
+
 # Claude Code local settings (skills are shared, kept out of this ignore)
 .claude/*
 !.claude/skills/

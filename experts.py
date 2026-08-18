@@ -1,7 +1,9 @@
 """達人選股 scoring engine — encodes the 7 public stock-picking rulesets from
 股泰 (gutai, bull + bear), 888/巔峰 (flag888, 4 rulesets), 股魚 (guyu), and
-股海老牛 (laoniu) against this project's own DB (quarterly_financials,
-financial_extra, institutional_trades, holding_concentration, dividend_policy,
+股海老牛 (laoniu), plus an unattributed 好公司7大財務指標 checklist (haogongsi
+— source table provided by the project owner, no named author) against this
+project's own DB (quarterly_financials, financial_extra,
+institutional_trades, holding_concentration, dividend_policy,
 dividend_fill_events, daily_prices) plus technical.py's indicator snapshot.
 
 Known, deliberate simplifications (all discussed with the project owner):
@@ -22,10 +24,18 @@ Known, deliberate simplifications (all discussed with the project owner):
   - "累計月營收年增率" (股泰) and "累積淨利年增率" (老牛) reuse the single
     latest period's YoY instead of a true cumulative-to-date YoY (no
     cumulative-revenue/profit column exists in this project's schema).
+  - haogongsi's source table defines 實質盈餘 as 稅後淨利 minus 非經常性利益,
+    and both 資盈率/獲利含金量 divide by (稅後淨利 + 折舊攤銷) — this
+    project's schema has no 非經常性利益 or 折舊攤銷 columns, so 實質盈餘 is
+    approximated as plain 稅後淨利 (net_income) and those two ratios skip
+    the D&A add-back in their denominator (breakdown entries flagged
+    `approx: true`). The source table's soft "近8年趨勢平穩或成長" language
+    (not a hard numeric threshold) is scored as an award — recent-2-year
+    average vs. prior-2-year average — rather than a require() gate.
 
 Each score_* function takes one stock's context dict (see _build_context)
 and returns (passed, score, max_score, breakdown). compute_expert_scores()
-runs all 8 rulesets over every tracked stock and upserts into expert_scores.
+runs every ruleset over every tracked stock and upserts into expert_scores.
 """
 import logging
 from datetime import datetime, timedelta
@@ -48,6 +58,7 @@ EXPERT_LABELS = {
     'flag888_4':   '標準4 填息穩定',
     'guyu':        '價值K線',
     'laoniu':      '抱緊股',
+    'haogongsi':   '好公司7指標',
     'momentum_guard': '動能防雷',
 }
 
@@ -612,11 +623,16 @@ def score_flag888_4(ctx):
     return s.result()
 
 
-def _annual_eps_sum(q, year):
-    """Sum of a stock's quarterly EPS for one calendar year — an approximation
-    of annual EPS (undercounts if a quarter hasn't been disclosed yet)."""
-    vals = [r.get('eps') for r in q if r.get('year') == year and r.get('eps') is not None]
+def _annual_field_sum(q, year, field):
+    """Sum of one quarterly field for one calendar year — an approximation
+    of the annual total (undercounts if a quarter hasn't been disclosed
+    yet)."""
+    vals = [r.get(field) for r in q if r.get('year') == year and r.get(field) is not None]
     return sum(vals) if vals else None
+
+
+def _annual_eps_sum(q, year):
+    return _annual_field_sum(q, year, 'eps')
 
 
 # ── 股魚 ─────────────────────────────────────────────────────────────────────
@@ -734,6 +750,75 @@ def score_laoniu(ctx):
     return s.result()
 
 
+# ── 好公司7指標 ───────────────────────────────────────────────────────────────
+
+def score_haogongsi(ctx):
+    """好公司的7大財務指標 checklist（來源截圖由 project owner 提供，未附
+    具名作者）：實質盈餘/實質ROE/資盈率/獲利含金量/配息率/利潤率(毛利率＋
+    實質盈餘利益率)/董監持股比率。本站 schema 沒有「非經常性利益」「折舊
+    攤銷」欄位，見 module docstring 開頭的簡化說明——實質盈餘一律用稅後淨利
+    近似，資盈率/獲利含金量的分母略去折舊攤銷加回，均標 approx=True。表格
+    裡「近8年趨勢平穩或成長/穩定向上」這類非量化門檻改成 award()（近2年均
+    vs 前2年均比較），只有表格明確列出的數字門檻才做成 require()。"""
+    q = ctx['q']
+    s = ScoreCard()
+
+    roe = _ratio_series(q, 'net_income', 'equity', annualize=True)
+    gm = _ratio_series(q, 'gross_profit', 'revenue')
+    net_margin = _ratio_series(q, 'net_income', 'revenue')  # 實質盈餘利益率，近似
+    capex_ratio = []  # 資盈率，近似：分母未加回折舊攤銷
+    for r in q:
+        capex, ni = r.get('capex'), r.get('net_income')
+        # capex is stored as a negative cash outflow (see crawler.py); 資盈率
+        # wants capital-spend magnitude, hence abs().
+        capex_ratio.append(abs(capex) / ni * 100 if (capex is not None and ni) else None)
+    cash_content = []  # 獲利含金量，近似：分母未加回折舊攤銷
+    for r in q:
+        ocf, ni = r.get('operating_cash_flow'), r.get('net_income')
+        cash_content.append(ocf / ni * 100 if (ocf is not None and ni) else None)
+
+    roe_5y = _mean(roe[:20])
+    capex_ratio_2y = _mean(capex_ratio[:8])
+    cash_content_2y = _mean(cash_content[:8])
+    gm_2y = _mean(gm[:8])
+    net_margin_2y = _mean(net_margin[:8])
+
+    years = sorted(ctx['div_by_year'], reverse=True)[:5]
+    payouts = []
+    for y in years:
+        annual_eps = _annual_eps_sum(q, y)
+        if annual_eps:
+            payouts.append(ctx['div_by_year'][y]['cash'] / annual_eps * 100)
+    payout_5y = _mean(payouts) if payouts else None
+
+    s.require('近5年平均實質ROE>10%（實質盈餘≈稅後淨利，近似）', roe_5y is not None and roe_5y > 10)
+    s.require('近2年平均資盈率<=70%（近似：分母未加回折舊攤銷）', capex_ratio_2y is not None and capex_ratio_2y <= 70)
+    s.require('近2年平均獲利含金量>=70%（近似：分母未加回折舊攤銷）', cash_content_2y is not None and cash_content_2y >= 70)
+    s.require('近5年平均配息率>=40%', payout_5y is not None and payout_5y >= 40)
+    s.require('近2年平均毛利率>=20%', gm_2y is not None and gm_2y >= 20)
+    s.require('近2年平均實質盈餘利益率>=6%（近似：稅後淨利÷營收）', net_margin_2y is not None and net_margin_2y >= 6)
+    s.require('董監持股比率>=10%', ctx['director_holding_pct'] is not None and ctx['director_holding_pct'] >= 10)
+
+    latest_year = q[0]['year'] if q else None
+    annual_ni = _annual_field_sum(q, latest_year, 'net_income') if latest_year else None
+    s.award('年度實質盈餘>5億元（大型股適用，近似：稅後淨利代替）',
+            annual_ni > 500_000 if annual_ni is not None else None, 10, approx=True)
+
+    roe_recent, roe_prior = _mean(roe[:8]), _mean(roe[8:16])
+    roe_trend_ok = (roe_recent >= roe_prior) if (roe_recent is not None and roe_prior is not None) else None
+    s.award('近似：實質ROE趨勢平穩或成長（近2年均vs前2年均代替8年趨勢）', roe_trend_ok, 15, approx=True)
+
+    nm_recent, nm_prior = _mean(net_margin[:8]), _mean(net_margin[8:16])
+    nm_trend_ok = (nm_recent >= nm_prior) if (nm_recent is not None and nm_prior is not None) else None
+    s.award('近似：實質盈餘利益率趨勢穩定向上（近2年均vs前2年均代替8年趨勢）', nm_trend_ok, 10, approx=True)
+
+    gm_recent, gm_prior = _mean(gm[:8]), _mean(gm[8:16])
+    gm_trend_ok = (gm_recent >= gm_prior) if (gm_recent is not None and gm_prior is not None) else None
+    s.award('近似：毛利率趨勢穩定向上（近2年均vs前2年均代替8年趨勢）', gm_trend_ok, 10, approx=True)
+
+    return s.result()
+
+
 # ── 動能防雷（本站自製，實驗性）────────────────────────────────────────────────
 
 def score_momentum_guard(ctx):
@@ -783,6 +868,7 @@ SCORERS = {
     'flag888_4': score_flag888_4,
     'guyu': score_guyu,
     'laoniu': score_laoniu,
+    'haogongsi': score_haogongsi,
     'momentum_guard': score_momentum_guard,
 }
 
@@ -792,7 +878,7 @@ _GUTAI_TRANSITION_LABEL = {'gutai_bull': '空轉多', 'gutai_bear': '多轉空'}
 
 
 def compute_expert_scores():
-    """Runs all 8 rulesets over every tracked stock and overwrites
+    """Runs every ruleset in SCORERS over every tracked stock and overwrites
     expert_scores (one row per stock per ruleset, latest snapshot only —
     same "overwrite, no history" pattern as stock_ai_analysis), except
     entered_at/transition which deliberately carry over from the row being
