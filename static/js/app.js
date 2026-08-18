@@ -14,6 +14,7 @@ const state = {
   priceDt:         null,
   revenueDt:       null,
   quarterlyDt:     null,
+  institutionalDt: null,
   priceDays:       90,
   fundamentals:      null,
   showFundamentals:  false,
@@ -22,6 +23,7 @@ const state = {
   fundTurnoverChart: null,
   fundDividendChart: null,
   fundDividendDt:    null,
+  chipPeak:          null,
 };
 
 /* ── Theme ── */
@@ -349,13 +351,16 @@ async function loadStockDetail(code) {
   });
 
   // Load data in parallel
-  const [prices, revenues, financials, fundamentals] = await Promise.all([
+  const [prices, revenues, financials, fundamentals, chipPeak] = await Promise.all([
     fetch(`/api/stocks/${code}/prices?days=${state.priceDays}`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/revenue`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/financials`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/fundamentals`).then(r => r.json()).catch(() => null),
+    fetch(`/api/stocks/${code}/chip-peak`).then(r => r.json()).catch(() => null),
   ]);
 
+  state.chipPeak = (chipPeak && chipPeak.poc != null) ? chipPeak : null;
+  renderChipPeak(state.chipPeak);
   renderPriceChart(prices);
   renderPriceTable(prices);
   renderRevenueChart(revenues);
@@ -364,9 +369,14 @@ async function loadStockDetail(code) {
   renderQuarterlyTable(financials);
   renderFundamentalsPanel(fundamentals);
   loadStockExpertScores(code);
+  loadStockInstitutionalTrades(code);
   loadStockBrokerTrades(code);
+  resetStockBacktestCard();
 
-  if (state.user && state.user.is_admin) loadStockAiAnalysis(code);
+  if (state.user && state.user.is_admin) {
+    loadStockAiAnalysis(code);
+    loadStockNote(code);
+  }
 }
 
 /* ── AI 個股分析（admin only） ── */
@@ -424,6 +434,49 @@ async function runStockAiAnalysis() {
   }
 }
 
+/* ── 我的分析筆記（admin only，自由文字，不呼叫任何 AI） ── */
+async function loadStockNote(code) {
+  const ta = document.getElementById('stock-note-textarea');
+  const updated = document.getElementById('stock-note-updated');
+  ta.value = '';
+  updated.textContent = '';
+  try {
+    const n = await fetch(`/api/stocks/${code}/note`).then(r => r.json());
+    ta.value = n.content || '';
+    updated.textContent = n.updated_at ? `最後更新：${n.updated_at.slice(0, 16)}` : '';
+  } catch (_) {
+    // 靜默失敗即可，筆記空白讓使用者重新輸入
+  }
+}
+
+async function saveStockNote() {
+  if (!state.currentCode) return;
+  const ta = document.getElementById('stock-note-textarea');
+  const btn = document.getElementById('stock-note-save-btn');
+  const updated = document.getElementById('stock-note-updated');
+  btn.disabled = true;
+  btn.textContent = '儲存中…';
+  try {
+    const resp = await fetch(`/api/stocks/${state.currentCode}/note`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({content: ta.value}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(`儲存失敗：${data.error || '未知錯誤'}`);
+    } else {
+      updated.textContent = data.updated_at ? `最後更新：${data.updated_at.slice(0, 16)}` : '';
+      showToast('筆記已儲存');
+    }
+  } catch (_) {
+    showToast('儲存失敗，請稍後再試');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '儲存筆記';
+  }
+}
+
 /* ── Days selector ── */
 document.querySelectorAll('.days-btn').forEach(btn => {
   btn.addEventListener('click', async function() {
@@ -440,6 +493,51 @@ document.querySelectorAll('.days-btn').forEach(btn => {
 });
 
 /* ── Price chart ── */
+/* ── Chip peak (Phase 1: pure computation, see chip_peak.py) ── */
+function renderChipPeak(chipPeak) {
+  const box = document.getElementById('chip-peak-stats');
+  if (!chipPeak) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const distPct = chipPeak.price_to_poc * 100;
+  const pocTip = chipPeak.quality_weighted
+    ? `近${chipPeak.lookback_days}個交易日，經時間衰減＋三大法人買賣超品質加權後成交量最集中的價位（窗口內${(chipPeak.quality_coverage * 100).toFixed(0)}%交易日有法人資料），可視為市場主要成本區。使用未還原除權息股價估算，僅供參考。`
+    : `近${chipPeak.lookback_days}個交易日，經時間衰減加權後成交量最集中的價位，可視為市場主要成本區。此窗口內沒有法人買賣超資料可用於品質加權。使用未還原除權息股價估算，僅供參考。`;
+  box.innerHTML = `
+    <div class="fund-stat-tile" title="${pocTip}">
+      <div class="fund-stat-label">籌碼峰 POC（${chipPeak.lookback_days}日）</div>
+      <div class="fund-stat-value">${fmt.price(chipPeak.poc)}</div>
+    </div>
+    <div class="fund-stat-tile" title="涵蓋約70%加權成交量的價格區間，範圍外的價位近期交易相對稀少。">
+      <div class="fund-stat-label">價值區間 VAL–VAH</div>
+      <div class="fund-stat-value">${fmt.price(chipPeak.val)}–${fmt.price(chipPeak.vah)}</div>
+    </div>
+    <div class="fund-stat-tile" title="目前股價偏離主要成本區（POC）的百分比，正值代表現價高於POC。">
+      <div class="fund-stat-label">現價距 POC</div>
+      <div class="fund-stat-value ${pctClass(distPct)}">${fmt.pct(distPct)}</div>
+    </div>
+    <div class="fund-stat-tile" title="POC 那個價位的加權成交量，占整個窗口總量的比例。數字越高代表籌碼越集中在單一價位。">
+      <div class="fund-stat-label">主峰集中度</div>
+      <div class="fund-stat-value">${(chipPeak.peak_strength * 100).toFixed(1)}%</div>
+    </div>
+  `;
+  box.classList.remove('hidden');
+}
+
+/* 把 chip-peak 的 poc_history（較稀疏的取樣點，每筆帶 poc/vah/val，見
+   chip_peak.py compute_chip_peak_series）對應到股價圖的完整日期軸上，取樣點
+   之間用最近一次算出的值往後補滿（階梯狀，不是內插），取樣範圍以前的日期留
+   null（沒有那麼久以前的資料，畫不出來就不畫，不瞎猜）。labels 與 history
+   都假設是日期字串由舊到新排序，field 是 'poc'/'vah'/'val' 三選一。 */
+function _chipPeakFieldSeries(labels, history, field) {
+  let hi = 0, current = null;
+  return labels.map(d => {
+    while (hi < history.length && history[hi].date <= d) {
+      current = history[hi][field];
+      hi++;
+    }
+    return current;
+  });
+}
+
 function renderPriceChart(prices) {
   const canvas = document.getElementById('price-chart');
   if (state.priceChart) { state.priceChart.destroy(); state.priceChart = null; }
@@ -458,21 +556,48 @@ function renderPriceChart(prices) {
     opts.plugins.decimation = { enabled: true, algorithm: 'min-max' };
   }
 
+  const datasets = [{
+    label: '收盤價',
+    data:   closes,
+    borderColor:     getCssVar('--primary'),
+    backgroundColor: getCssVar('--primary') + '22',
+    borderWidth:     n > 500 ? 1 : 2,
+    pointRadius:     0,
+    fill:            true,
+    tension:         n > 500 ? 0 : 0.3,
+  }];
+
+  // Overlay chip-peak reference lines when available — independent of the
+  // days-selector's own lookback window (chip peak always uses its own
+  // fixed lookback, see CLAUDE.md「籌碼峰」). All three (POC/VAH/VAL) are
+  // drawn as stepped lines that move over time (chip_peak.py's
+  // compute_chip_peak_series — "chip peak migration"); VAH/VAL are filled
+  // between them as a translucent band (fill:'+1' on VAH → next dataset,
+  // VAL) so a widening/narrowing value area reads as a shape, not two
+  // crossing lines. Falls back to flat lines at today's values if no
+  // history was returned.
+  const cp = state.chipPeak;
+  if (cp) {
+    const hasHistory = cp.poc_history && cp.poc_history.length;
+    const seriesFor = (field, fallback) => hasHistory
+      ? _chipPeakFieldSeries(labels, cp.poc_history, field)
+      : labels.map(() => fallback);
+    datasets.push(
+      { label: `POC ${fmt.price(cp.poc)}`, data: seriesFor('poc', cp.poc),
+        borderColor: '#f59e0b', borderWidth: 2, borderDash: [], pointRadius: 0, fill: false,
+        tension: 0, stepped: true, spanGaps: false },
+      { label: `VAH ${fmt.price(cp.vah)}`, data: seriesFor('vah', cp.vah),
+        borderColor: getCssVar('--text2') + 'aa', borderWidth: 1, borderDash: [6, 4], pointRadius: 0,
+        tension: 0, stepped: true, spanGaps: false, fill: '+1', backgroundColor: getCssVar('--text2') + '14' },
+      { label: `VAL ${fmt.price(cp.val)}`, data: seriesFor('val', cp.val),
+        borderColor: getCssVar('--text2') + 'aa', borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false,
+        tension: 0, stepped: true, spanGaps: false },
+    );
+  }
+
   state.priceChart = new Chart(canvas, {
     type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: '收盤價',
-        data:   closes,
-        borderColor:     getCssVar('--primary'),
-        backgroundColor: getCssVar('--primary') + '22',
-        borderWidth:     n > 500 ? 1 : 2,
-        pointRadius:     0,
-        fill:            true,
-        tension:         n > 500 ? 0 : 0.3,
-      }],
-    },
+    data: { labels, datasets },
     options: opts,
   });
 }
@@ -1522,6 +1647,8 @@ async function runCrawler(task) {
 
 /* ── Announcement view ── */
 let _annData = [];
+let _annPage = 1;
+const _ANN_PAGE_SIZE = 50;
 
 function _annTruncate(s, n) {
   if (!s) return '—';
@@ -1537,6 +1664,14 @@ function _annRatingDot(rating) {
   return `<span class="ann-dot ann-dot-${cls}" title="${rating}">${emoji}</span>`;
 }
 
+const _ANN_RATING_OPTIONS = ['🔴 強烈買進', '🟠 建議買進', '🟡 一般觀望', '🟢 需要小心'];
+
+function _annRatingSelectHtml(i, rating) {
+  const opts = ['<option value="">— 未評級</option>']
+    .concat(_ANN_RATING_OPTIONS.map(r => `<option value="${r}" ${r === rating ? 'selected' : ''}>${r}</option>`));
+  return `<select class="ann-rating-select" data-idx="${i}">${opts.join('')}</select>`;
+}
+
 function renderAnnRow(a, i) {
   return `<tr>
     <td>${a.announce_date}${a.announce_time ? ' ' + a.announce_time.slice(0, 5) : ''}</td>
@@ -1550,7 +1685,10 @@ function renderAnnRow(a, i) {
     <td class="td-center">${a.turnaround ? '🔥' : '—'}</td>
     <td class="num">${fmt.eps(a.estimated_annual_eps)}</td>
     <td class="num">${a.estimated_pe != null && a.estimated_pe > 0 ? Number(a.estimated_pe).toFixed(1) : '—'}</td>
-    <td class="td-center"><span class="ann-rating-link" data-idx="${i}">${_annRatingDot(a.ai_rating)}</span></td>
+    <td class="td-center ann-rating-cell">
+      <button class="btn btn-sm ann-rating-copy-btn" data-idx="${i}" title="複製評級提示詞，貼到 ChatGPT 免費分析">📋</button>
+      ${_annRatingSelectHtml(i, a.ai_rating)}
+    </td>
     <td class="td-center"><a class="btn btn-sm ann-ai-link" href="https://gemini.google.com" target="_blank" rel="noopener" data-idx="${i}">🤖 AI分析</a></td>
     <td class="td-center"><button class="btn btn-sm ann-wl-add-btn" data-idx="${i}">⭐ 加入自選</button></td>
   </tr>`;
@@ -1562,31 +1700,85 @@ async function loadAnnouncements() {
   tbody.innerHTML = '<tr><td colspan="14" class="ann-empty">載入中…</td></tr>';
   try {
     _annData = await fetch('/api/announcements/today').then(r => r.json());
-    const countEl = document.getElementById('ann-count');
-    if (countEl) countEl.textContent = `共 ${_annData.length} 筆`;
+    _annPage = 1;
     renderAnnTable();
   } catch (_) {
     tbody.innerHTML = '<tr><td colspan="14" class="ann-empty">載入失敗</td></tr>';
   }
 }
 
+function _annPagerHtml(totalPages) {
+  if (totalPages <= 1) return '';
+  const btn = (label, page, disabled, active) =>
+    `<button class="ann-pager-btn ${active ? 'active' : ''}" ${disabled ? 'disabled' : ''} data-page="${page}">${label}</button>`;
+  const windowSize = 2;
+  const pages = new Set([1, totalPages]);
+  for (let p = _annPage - windowSize; p <= _annPage + windowSize; p++) {
+    if (p >= 1 && p <= totalPages) pages.add(p);
+  }
+  const sorted = [...pages].sort((a, b) => a - b);
+  let html = btn('‹ 上頁', _annPage - 1, _annPage <= 1, false);
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) html += `<span class="ann-pager-ellipsis">…</span>`;
+    html += btn(p, p, false, p === _annPage);
+    prev = p;
+  }
+  html += btn('下頁 ›', _annPage + 1, _annPage >= totalPages, false);
+  return html;
+}
+
 function renderAnnTable() {
   const tbody = document.getElementById('ann-tbody');
+  const pager = document.getElementById('ann-pager');
+  const countEl = document.getElementById('ann-count');
   if (!tbody) return;
-  tbody.innerHTML = _annData.length
-    ? _annData.map(renderAnnRow).join('')
+
+  const total = _annData.length;
+  const totalPages = Math.max(1, Math.ceil(total / _ANN_PAGE_SIZE));
+  if (_annPage > totalPages) _annPage = totalPages;
+  if (_annPage < 1) _annPage = 1;
+  const start = (_annPage - 1) * _ANN_PAGE_SIZE;
+  const pageRows = _annData.slice(start, start + _ANN_PAGE_SIZE);
+
+  if (countEl) {
+    countEl.textContent = total
+      ? `共 ${total} 筆（第 ${_annPage}/${totalPages} 頁，每頁 ${_ANN_PAGE_SIZE} 筆）`
+      : '共 0 筆';
+  }
+
+  tbody.innerHTML = total
+    ? pageRows.map((a, localIdx) => renderAnnRow(a, start + localIdx)).join('')
     : '<tr><td colspan="14" class="ann-empty">近期無公告</td></tr>';
+
+  if (pager) {
+    pager.innerHTML = _annPagerHtml(totalPages);
+    pager.querySelectorAll('.ann-pager-btn:not([disabled])').forEach(el => {
+      el.addEventListener('click', () => {
+        _annPage = +el.dataset.page;
+        renderAnnTable();
+        document.getElementById('ann-table').scrollIntoView({block: 'start', behavior: 'smooth'});
+      });
+    });
+  }
+
   tbody.querySelectorAll('[data-code]').forEach(el => {
     el.addEventListener('click', () => {
       setDetailNavContext([...new Set(_annData.map(a => a.stock_code))], el.dataset.code);
       loadStockDetail(el.dataset.code);
     });
   });
-  tbody.querySelectorAll('.ann-subject-link, .ann-rating-link').forEach(el => {
+  tbody.querySelectorAll('.ann-subject-link').forEach(el => {
     el.addEventListener('click', () => openAnnModal(+el.dataset.idx));
   });
   tbody.querySelectorAll('.ann-ai-link').forEach(el => {
     el.addEventListener('click', () => copyAnnForAI(+el.dataset.idx));
+  });
+  tbody.querySelectorAll('.ann-rating-copy-btn').forEach(el => {
+    el.addEventListener('click', () => copyAnnRatingPrompt(+el.dataset.idx));
+  });
+  tbody.querySelectorAll('.ann-rating-select').forEach(el => {
+    el.addEventListener('change', () => setAnnRating(+el.dataset.idx, el.value));
   });
   tbody.querySelectorAll('.ann-wl-add-btn').forEach(el => {
     el.addEventListener('click', () => addAnnToWatchlist(+el.dataset.idx));
@@ -1635,6 +1827,7 @@ function sortAnnTable(field) {
     if (typeof vx === 'string') return vx.localeCompare(vy) * _annSortDir;
     return (vx - vy) * _annSortDir;
   });
+  _annPage = 1;
   renderAnnTable();
 }
 
@@ -1739,6 +1932,72 @@ ${a.content || a.subject || ''}`;
   navigator.clipboard.writeText(prompt)
     .then(() => showToast('已複製提示詞，貼到 Gemini 即可分析'))
     .catch(() => showToast('複製失敗，請手動複製'));
+}
+
+/* ── 自結公告 AI 評級（免費版：複製提示詞給使用者自己貼到 ChatGPT，
+   看完回覆後在下拉選單手動選評級，不再由爬蟲自動呼叫付費 API） ── */
+function copyAnnRatingPrompt(i) {
+  const a = _annData[i];
+  if (!a) return;
+  const known = `單月EPS：${a.monthly_eps ?? '無資料'}
+去年同月EPS：${a.prior_year_eps ?? '無資料'}
+EPS年增率：${a.eps_yoy ?? '無資料'}%
+是否由虧轉盈：${a.turnaround ? '是' : '否'}
+預估全年EPS：${a.estimated_annual_eps ?? '無資料'}
+預估本益比：${a.estimated_pe ?? '無資料'}`;
+  const prompt = `你是一位專業的台灣股票分析師，請根據提供的資料與你取得的最新網路資訊，進行簡潔明確的投資評分與風險提示。
+
+【即時搜尋要求】
+1. 你必須搜尋並引用該公司與其所屬產業的最新新聞與產業動態，不得只依賴我提供的公告內容。
+2. 若找不到相關新聞，請明確說明「未能取得最新新聞，以下評估僅根據現有財務與公告資料」。
+3. 當預估本益比 > 20 時，請特別搜尋產業與個股熱度，自行判斷是否屬於當前市場熱門題材。
+
+【已知數據 — 直接採用，不要自己重新計算】
+以下數據皆已從公告原文解析計算完成，請直接採用，不要自行重算或質疑正確性。
+${known}
+
+【評級標準 — 依優先順序綜合判斷】
+🔴 強烈買進（路徑A或路徑B任一即可）：
+  路徑A：預估本益比 ≤ 20 + EPS年增 > 0%（含由虧轉盈）+ 營收不衰退
+  路徑B：預估本益比 > 20 + 有熱門題材支撐 + （EPS年增 > 30% 或 EPS成長率大幅優於營收成長率）
+🟠 建議買進：EPS或營收正成長 + 預估本益比 ≤ 30，不需要強烈題材支撐
+🟡 一般觀望：成長有限（年增 < 10%）或本益比 > 30 缺題材，或虧損但收窄中
+🟢 需要小心：營收或EPS年減、財務惡化、由盈轉虧或衰退 > 30%
+
+請給我：① 評級（🔴強烈買進／🟠建議買進／🟡一般觀望／🟢需要小心 四選一）② 4段分析文字（評級理由+數據、成長動能分析、產業熱度與風險、結論）。
+
+股票：${a.name || ''}（${a.stock_code}）
+主旨：${a.subject || ''}
+
+公告說明：
+${a.content || a.subject || ''}`;
+  navigator.clipboard.writeText(prompt)
+    .then(() => showToast('已複製評級提示詞，貼到 ChatGPT 看完回覆後回來選評級'))
+    .catch(() => showToast('複製失敗，請手動複製'));
+  window.open('https://chat.openai.com', '_blank', 'noopener');
+}
+
+async function setAnnRating(i, rating) {
+  const a = _annData[i];
+  if (!a) return;
+  try {
+    const resp = await fetch(`/api/announcements/${a.id}/rating`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({rating: rating || null}),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      showToast(`更新失敗：${data.error || '未知錯誤'}`);
+      renderAnnTable();
+      return;
+    }
+    a.ai_rating = rating || '';
+    showToast('評級已更新');
+  } catch (_) {
+    showToast('更新失敗，請稍後再試');
+    renderAnnTable();
+  }
 }
 
 /* ── 達人選股 ── */
@@ -1910,6 +2169,74 @@ function renderExpertTable() {
 let _stockExpertData = [];
 let _stockExpertKey = null;
 
+/* ── 三大法人進出與持股（詳情頁，資料已由排程抓好，純讀取；可按需補齊） ── */
+async function loadStockInstitutionalTrades(code) {
+  document.getElementById('stock-institutional-card').classList.remove('hidden');
+  const btn = document.getElementById('stock-institutional-refresh-btn');
+  btn.disabled = false;
+  btn.textContent = '補齊近5日資料';
+  let rows = [];
+  try {
+    rows = await fetch(`/api/stocks/${code}/institutional-trades?days=90`).then(r => r.json());
+  } catch (_) {
+    rows = [];
+  }
+  renderInstitutionalTable(rows);
+}
+
+async function refreshStockInstitutionalTrades() {
+  if (!state.currentCode) return;
+  if (!state.user) { showToast('請先登入才能補齊三大法人資料'); return; }
+  const btn = document.getElementById('stock-institutional-refresh-btn');
+  btn.disabled = true;
+  btn.textContent = '補齊中，請稍候…';
+  try {
+    const resp = await fetch(`/api/stocks/${state.currentCode}/institutional-trades/refresh`, {method: 'POST'});
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(`補齊失敗：${data.error || '未知錯誤'}`);
+    } else {
+      const rows = await fetch(`/api/stocks/${state.currentCode}/institutional-trades?days=90`).then(r => r.json());
+      renderInstitutionalTable(rows);
+      showToast('補齊完成');
+    }
+  } catch (_) {
+    showToast('補齊失敗，請稍後再試');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '補齊近5日資料';
+  }
+}
+
+function _lots(shares) {
+  // 股數 → 張（1張=1000股），四捨五入
+  return Math.round((shares || 0) / 1000);
+}
+
+function _lotsCell(lots) {
+  return `<span class="${pctClass(lots)}">${lots > 0 ? '+' : ''}${lots.toLocaleString()}</span>`;
+}
+
+function renderInstitutionalTable(rows) {
+  if (state.institutionalDt) { state.institutionalDt.destroy(); state.institutionalDt = null; }
+  let cum = 0;
+  const dtRows = rows.map(r => {
+    const foreign = _lots((r.foreign_buy || 0) - (r.foreign_sell || 0));
+    const trust   = _lots((r.trust_buy   || 0) - (r.trust_sell   || 0));
+    const dealer  = _lots((r.dealer_buy  || 0) - (r.dealer_sell  || 0));
+    const total   = foreign + trust + dealer;
+    cum += total;
+    return [r.date, foreign, trust, dealer, total, cum];
+  }).reverse();
+  const rowsHtml = dtRows.map(([date, foreign, trust, dealer, total, cum]) => [
+    date, _lotsCell(foreign), _lotsCell(trust), _lotsCell(dealer), _lotsCell(total), _lotsCell(cum),
+  ]);
+  state.institutionalDt = $('#institutional-table').DataTable({
+    data: rowsHtml, pageLength: 10, order: [],
+    language: dtLang(), destroy: true, scrollX: true,
+  });
+}
+
 /* ── 券商分點進出（詳情頁按需查詢，不再限制自選股） ── */
 let _brokerTradeData = [];
 
@@ -1917,9 +2244,9 @@ async function loadStockBrokerTrades(code) {
   document.getElementById('stock-broker-card').classList.remove('hidden');
   const btn = document.getElementById('stock-broker-btn');
   btn.disabled = false;
-  btn.textContent = '查詢近30天券商分點';
+  btn.textContent = '查詢近90天券商分點';
   try {
-    _brokerTradeData = await fetch(`/api/stocks/${code}/broker-trades?days=30`).then(r => r.json());
+    _brokerTradeData = await fetch(`/api/stocks/${code}/broker-trades?days=90`).then(r => r.json());
   } catch (_) {
     _brokerTradeData = [];
   }
@@ -1930,7 +2257,7 @@ function _renderBrokerCardState() {
   const empty = document.getElementById('stock-broker-empty');
   const wrap = document.getElementById('stock-broker-matrix-wrap');
   if (!Array.isArray(_brokerTradeData) || !_brokerTradeData.length) {
-    empty.textContent = '尚無資料，點擊「查詢近30天券商分點」開始';
+    empty.textContent = '尚無資料，點擊「查詢近90天券商分點」開始';
     empty.classList.remove('hidden');
     wrap.classList.add('hidden');
   } else {
@@ -1956,7 +2283,7 @@ async function fetchStockBrokerTrades() {
     if (!resp.ok) {
       empty.textContent = `查詢失敗：${data.error || '未知錯誤'}`;
     } else {
-      _brokerTradeData = await fetch(`/api/stocks/${state.currentCode}/broker-trades?days=30`).then(r => r.json());
+      _brokerTradeData = await fetch(`/api/stocks/${state.currentCode}/broker-trades?days=90`).then(r => r.json());
       _renderBrokerCardState();
       if (Array.isArray(_brokerTradeData) && _brokerTradeData.length) {
         showToast('查詢完成');
@@ -1968,7 +2295,129 @@ async function fetchStockBrokerTrades() {
     empty.textContent = '查詢失敗，請稍後再試';
   } finally {
     btn.disabled = false;
-    btn.textContent = '查詢近30天券商分點';
+    btn.textContent = '查詢近90天券商分點';
+  }
+}
+
+/* ── 甜蜜點訊號回測（詳情頁按需查詢） ── */
+const _BACKTEST_TARGETS = [10, 15, 20, 25, 30];
+const _BACKTEST_TIERS = ['ma20', 'ma60', 'ma120', 'ma240'];
+let _backtestData = null;
+let _backtestActiveTier = 'ma20';
+let _backtestActiveTarget = 10;
+
+function resetStockBacktestCard() {
+  // Results are stock-specific and expensive to compute — don't auto-run on
+  // every detail-page visit, but do clear out the *previous* stock's stale
+  // results so switching stocks never shows the wrong one's numbers.
+  _backtestData = null;
+  _backtestActiveTier = 'ma20';
+  _backtestActiveTarget = 10;
+  document.getElementById('stock-backtest-body').classList.add('hidden');
+  const empty = document.getElementById('stock-backtest-empty');
+  empty.textContent = '點擊「開始回測」開始（單一股票計算，通常數秒內完成）';
+  empty.classList.remove('hidden');
+  document.querySelectorAll('#stock-backtest-tier-tabs .bt-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.tier === 'ma20'));
+  document.querySelectorAll('#stock-backtest-tabs .bt-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.target === '10'));
+  const btn = document.getElementById('stock-backtest-btn');
+  btn.disabled = false;
+  btn.textContent = '開始回測（近5年）';
+}
+
+function _renderBacktestSummary() {
+  const summary = _backtestData.results[_backtestActiveTier].summary;
+  document.getElementById('stock-backtest-summary').innerHTML = _BACKTEST_TARGETS.map(pct => {
+    const s = summary[String(pct)];
+    if (!s || !s.n_entries) return `
+      <div class="health-tile"><div class="health-tile-label">+${pct}%</div><div class="health-tile-value">—</div></div>`;
+    return `
+      <div class="health-tile">
+        <div class="health-tile-label">+${pct}% 目標（共${s.n_entries}次進場）</div>
+        <div class="health-tile-value">${s.win_rate_pct}%</div>
+        <div class="stock-ai-updated" style="margin-top:4px;">
+          已出場（達標） ${s.n_hit} 次｜平均${s.avg_days_to_hit ?? '—'}天<br>
+          未出場（持有中） ${s.n_open} 次${s.avg_open_return_pct != null ? `（現況 ${s.avg_open_return_pct > 0 ? '+' : ''}${s.avg_open_return_pct}%）` : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function _renderBacktestTable() {
+  const tbody = document.getElementById('stock-backtest-tbody');
+  const pct = _backtestActiveTarget;
+  const trades = _backtestData.results[_backtestActiveTier].trades_by_target[String(pct)] || [];
+  const tierLabel = _backtestData.tier_labels[_backtestActiveTier];
+  tbody.innerHTML = trades.length ? trades.map(t => `
+    <tr>
+      <td>${t.date}</td>
+      <td class="num">${t.price}</td>
+      <td class="num">${t.ma ?? '—'}</td>
+      <td>${t.hit ? t.exit_date : '持有中'}</td>
+      <td class="num">${t.hit ? t.days + '天' : '—'}</td>
+      <td class="num ${t.hit ? 'pos' : (t.open_return_pct > 0 ? 'pos' : t.open_return_pct < 0 ? 'neg' : '')}">${
+        t.hit ? `+${pct}%` : (t.open_return_pct != null ? `${t.open_return_pct > 0 ? '+' : ''}${t.open_return_pct}%` : '—')
+      }</td>
+    </tr>
+  `).join('') : `<tr><td colspan="6" class="ann-empty">近5年 +${pct}% 目標沒有出現${tierLabel}甜蜜點訊號</td></tr>`;
+}
+
+document.getElementById('stock-backtest-tier-tabs').addEventListener('click', function (e) {
+  const btn = e.target.closest('.bt-tab');
+  if (!btn || !_backtestData) return;
+  _backtestActiveTier = btn.dataset.tier;
+  this.querySelectorAll('.bt-tab').forEach(b => b.classList.toggle('active', b === btn));
+  _renderBacktestSummary();
+  _renderBacktestTable();
+});
+
+document.getElementById('stock-backtest-tabs').addEventListener('click', function (e) {
+  const btn = e.target.closest('.bt-tab');
+  if (!btn || !_backtestData) return;
+  _backtestActiveTarget = Number(btn.dataset.target);
+  this.querySelectorAll('.bt-tab').forEach(b => b.classList.toggle('active', b === btn));
+  _renderBacktestTable();
+});
+
+async function runStockBacktest() {
+  if (!state.currentCode) return;
+  const btn = document.getElementById('stock-backtest-btn');
+  const empty = document.getElementById('stock-backtest-empty');
+  const body = document.getElementById('stock-backtest-body');
+  btn.disabled = true;
+  btn.textContent = '回測中，請稍候…';
+  body.classList.add('hidden');
+  empty.textContent = '回測中，請稍候（4種天期×5種目標，可能需要數秒）…';
+  empty.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/stocks/${state.currentCode}/backtest/sweet-spot?years=5`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      empty.textContent = `回測失敗：${data.error || '未知錯誤'}`;
+    } else {
+      empty.classList.add('hidden');
+      body.classList.remove('hidden');
+      _backtestData = data;
+      _backtestActiveTier = 'ma20';
+      _backtestActiveTarget = 10;
+      document.querySelectorAll('#stock-backtest-tier-tabs .bt-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.tier === 'ma20'));
+      document.querySelectorAll('#stock-backtest-tabs .bt-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.target === '10'));
+      _renderBacktestSummary();
+      _renderBacktestTable();
+      const total = _BACKTEST_TIERS.reduce((sum, tier) => sum + _BACKTEST_TARGETS.reduce(
+        (s2, pct) => s2 + (data.results[tier].summary[String(pct)]?.n_entries || 0), 0), 0);
+      showToast(total ? '回測完成' : '回測完成，近5年四種甜蜜點都沒有出現訊號');
+    }
+  } catch (_) {
+    empty.classList.remove('hidden');
+    body.classList.add('hidden');
+    empty.textContent = '回測失敗，請稍後再試';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '開始回測（近5年）';
   }
 }
 
@@ -2005,17 +2454,30 @@ function renderBrokerTrades() {
 
   const cumMap = {};
   for (const r of _brokerTradeData) {
-    const c = cumMap[r.broker_id] || (cumMap[r.broker_id] = {broker_id: r.broker_id, broker_name: r.broker_name, net: 0});
+    const c = cumMap[r.broker_id] || (cumMap[r.broker_id] = {broker_id: r.broker_id, broker_name: r.broker_name, net: 0, activity: 0});
     c.net += (r.buy_volume || 0) - (r.sell_volume || 0);
+    c.activity += (r.buy_volume || 0) + (r.sell_volume || 0);
   }
   const cum = Object.values(cumMap);
-  const topBuy  = [...cum].sort((a, b) => b.net - a.net).slice(0, 10);
-  const topSell = [...cum].sort((a, b) => a.net - b.net).slice(0, 10);
+  const topBuy  = [...cum].sort((a, b) => b.net - a.net).slice(0, 15);
+  const topSell = [...cum].sort((a, b) => a.net - b.net).slice(0, 15);
 
-  document.getElementById('broker-buy-matrix-label').textContent  = `買超前10大券商（近${dates.length}日，單位：張）`;
-  document.getElementById('broker-sell-matrix-label').textContent = `賣超前10大券商（近${dates.length}日，單位：張）`;
+  document.getElementById('broker-buy-matrix-label').textContent  = `買超前15大券商（近${dates.length}日，單位：張）`;
+  document.getElementById('broker-sell-matrix-label').textContent = `賣超前15大券商（近${dates.length}日，單位：張）`;
   document.getElementById('broker-buy-matrix').innerHTML  = _brokerMatrixHtml(dates, topBuy);
   document.getElementById('broker-sell-matrix').innerHTML = _brokerMatrixHtml(dates, topSell);
+  renderBrokerConcentration(cum);
+}
+
+/* ── Broker concentration (Phase 3 chip-peak signal, display-only for now — see chip_peak.py roadmap) ── */
+function renderBrokerConcentration(cum) {
+  const el = document.getElementById('broker-concentration-summary');
+  const totalActivity = cum.reduce((s, c) => s + c.activity, 0);
+  if (!totalActivity) { el.innerHTML = ''; return; }
+  const top5Activity = [...cum].sort((a, b) => b.activity - a.activity).slice(0, 5)
+    .reduce((s, c) => s + c.activity, 0);
+  const top5Pct = (top5Activity / totalActivity * 100).toFixed(1);
+  el.innerHTML = `<span title="這段期間內，成交量（買超+賣超）最大的前5家券商分點，合計占所有參與分點總成交量的比例。比例越高代表交易集中在少數分點，可能有主力或大戶介入；比例低則接近分散的一般散戶交易。純資訊顯示，目前未併入籌碼峰 POC/VAH/VAL 的計算。">🔍 分點集中度：前5大分點合計占 <strong>${top5Pct}%</strong>（共 ${cum.length} 家分點參與）</span>`;
 }
 
 async function loadStockExpertScores(code) {
@@ -2336,53 +2798,6 @@ document.getElementById('about-modal').addEventListener('click', function(e) {
   if (e.target === this) this.classList.add('hidden');
 });
 
-/* ── Admin user panel ── */
-document.getElementById('admin-btn').addEventListener('click', () => {
-  const panel = document.getElementById('admin-panel');
-  panel.classList.toggle('hidden');
-  if (!panel.classList.contains('hidden')) loadAdminUsers();
-});
-
-document.getElementById('admin-panel-close').addEventListener('click', () =>
-  document.getElementById('admin-panel').classList.add('hidden'));
-
-async function loadAdminUsers() {
-  const listEl = document.getElementById('admin-user-list');
-  try {
-    const data = await fetch('/api/admin/users').then(r => r.json());
-    document.getElementById('admin-user-count').textContent = `共 ${data.total} 人`;
-    listEl.innerHTML = data.users.map(u => `
-      <div class="admin-user-item" data-id="${u.id}">
-        <span class="admin-user-name">${_escapeHtml(u.username)}</span>
-        <span class="admin-user-meta">自選股 ${u.watchlist_count} 組　註冊於 ${u.created_at}</span>
-        <button class="admin-user-del" title="刪除帳號">✕</button>
-      </div>
-    `).join('');
-  } catch {
-    listEl.innerHTML = '<div class="msg-empty">載入失敗</div>';
-  }
-}
-
-document.getElementById('admin-user-list').addEventListener('click', async function(e) {
-  const btn = e.target.closest('.admin-user-del');
-  if (!btn) return;
-  const item = btn.closest('.admin-user-item');
-  const name = item.querySelector('.admin-user-name').textContent;
-  if (!confirm(`確定要刪除帳號「${name}」？將同時移除其自選股清單。`)) return;
-  try {
-    const resp = await fetch(`/api/admin/users/${item.dataset.id}`, {method: 'DELETE'}).then(r => r.json());
-    if (resp.ok) {
-      item.remove();
-      const countEl = document.getElementById('admin-user-count');
-      const n = Number(countEl.textContent.match(/\d+/)?.[0] || 0);
-      countEl.textContent = `共 ${Math.max(0, n - 1)} 人`;
-    } else {
-      showToast(resp.error || '刪除失敗');
-    }
-  } catch {
-    showToast('刪除失敗');
-  }
-});
 document.getElementById('auth-modal').addEventListener('click', function(e) {
   if (e.target === this) this.classList.add('hidden');
 });

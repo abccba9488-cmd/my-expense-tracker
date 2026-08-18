@@ -10,10 +10,12 @@ from zoneinfo import ZoneInfo
 
 import csv
 import io
-from flask import Flask, jsonify, render_template, request, Response, session, send_from_directory
+from flask import Flask, jsonify, render_template, request, Response, session, send_from_directory, redirect
 from sqlalchemy import desc, text, func as sa_func
 from werkzeug.security import generate_password_hash, check_password_hash
 
+import backtest_sweet_spot
+import chip_peak
 import crawler
 import experts
 import portfolio_risk
@@ -21,7 +23,8 @@ import scheduler as sched
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message,
-    Announcement, StockAiAnalysis, ExpertScore, BrokerTrade, init_db
+    Announcement, StockAiAnalysis, StockNote, ExpertScore, BrokerTrade, InstitutionalTrade,
+    VisitLog, init_db
 )
 
 logging.basicConfig(
@@ -43,6 +46,39 @@ ADMIN_USERNAME = 'tom6855'
 
 def _is_admin():
     return session.get('username') == ADMIN_USERNAME
+
+
+def _client_ip():
+    # Behind ngrok the TCP peer is always the local ngrok agent (127.0.0.1) —
+    # the real visitor IP only shows up in X-Forwarded-For.
+    xff = request.headers.get('X-Forwarded-For')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr
+
+
+@app.before_request
+def _log_visit():
+    """Log homepage loads for the admin's visitor dashboard (see
+    /api/admin/visits). Deliberately scoped to GET "/" only — that's the
+    SPA's single entry point, so one row per real visit rather than one per
+    API/asset request. Never let a logging failure break the actual page."""
+    if request.method != 'GET' or request.path != '/':
+        return
+    db = SessionLocal()
+    try:
+        db.add(VisitLog(
+            ip=_client_ip(),
+            path=request.path,
+            referrer=(request.headers.get('Referer') or '')[:500],
+            user_agent=(request.headers.get('User-Agent') or '')[:255],
+            username=session.get('username'),
+        ))
+        db.commit()
+    except Exception:
+        logger.exception('Failed to log visit')
+    finally:
+        db.close()
 
 # ── summary cache ─────────────────────────────────────────────────────────────
 
@@ -161,6 +197,13 @@ def inject_asset_version():
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/admin')
+def admin_page():
+    if not _is_admin():
+        return redirect('/')
+    return render_template('admin.html')
 
 
 @app.route('/robots.txt')
@@ -519,15 +562,113 @@ def api_prices(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/chip-peak')
+def api_chip_peak(code):
+    """籌碼峰：純運算，不落地存表（見 CLAUDE.md「籌碼峰」章節）。取
+    daily_prices 全部歷史（chip_peak.compute_chip_peak 自己按 lookback 取
+    窗），並用同一股票的 institutional_trades 算出每日「法人淨買超 / 當日
+    成交量」比例，交給 compute_chip_peak 做 Phase 2 品質加權（該股沒有法人
+    資料的日子一律視為中性權重，不處理成缺值懲罰）。資料不足 30 筆時回傳
+    空物件。額外附上 poc_history（compute_chip_peak_series，2026-08-18
+    新增）供前端畫出 POC 隨時間移動的軌跡線，不只是目前這一個數字。"""
+    db = SessionLocal()
+    try:
+        lookback   = int(request.args.get('lookback', 120))
+        half_life  = int(request.args.get('half_life', 30))
+        rows = (
+            db.query(DailyPrice)
+            .filter(DailyPrice.stock_code == code)
+            .order_by(DailyPrice.date)
+            .all()
+        )
+        inst_rows = (
+            db.query(InstitutionalTrade)
+            .filter(InstitutionalTrade.stock_code == code)
+            .all()
+        )
+        inst_net_by_date = {
+            r.date: (r.foreign_buy or 0) - (r.foreign_sell or 0)
+                  + (r.trust_buy or 0) - (r.trust_sell or 0)
+                  + (r.dealer_buy or 0) - (r.dealer_sell or 0)
+            for r in inst_rows
+        }
+        row_dicts = []
+        for r in rows:
+            d = {'date': r.date, 'close': r.close, 'volume': r.volume}
+            inst_net = inst_net_by_date.get(r.date)
+            if inst_net is not None and r.volume:
+                d['inst_net_ratio'] = inst_net / r.volume
+            row_dicts.append(d)
+        result = chip_peak.compute_chip_peak(row_dicts, lookback=lookback, half_life=half_life)
+        if result:
+            result['poc_history'] = chip_peak.compute_chip_peak_series(
+                row_dicts, lookback=lookback, half_life=half_life)
+        return jsonify(result)
+    finally:
+        db.close()
+
+
+@app.route('/api/stocks/<code>/institutional-trades')
+def api_institutional_trades(code):
+    """三大法人（外資/投信/自營商）每日買賣超，近 N 天（預設90）。資料已由
+    排程每天 17:00 抓好（見 CLAUDE.md「達人選股（FinMind）」），這裡純讀取，
+    平常不需要按需觸發爬蟲；若排程當下 FinMind 資料不完整導致缺最新一兩天，
+    見下方 institutional-trades/refresh 端點手動補齊。累計持股增減交給前端算
+    （同一份視窗內的買賣超逐日加總，不是絕對持股張數）。"""
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+        rows = (
+            db.query(InstitutionalTrade)
+            .filter(InstitutionalTrade.stock_code == code, InstitutionalTrade.date >= cutoff)
+            .order_by(InstitutionalTrade.date)
+            .all()
+        )
+        return jsonify([{
+            'date':        str(r.date),
+            'foreign_buy':  r.foreign_buy,
+            'foreign_sell': r.foreign_sell,
+            'trust_buy':    r.trust_buy,
+            'trust_sell':   r.trust_sell,
+            'dealer_buy':   r.dealer_buy,
+            'dealer_sell':  r.dealer_sell,
+        } for r in rows])
+    finally:
+        db.close()
+
+
+@app.route('/api/stocks/<code>/institutional-trades/refresh', methods=['POST'])
+def api_institutional_trades_refresh(code):
+    """個股詳情頁「補齊近5日資料」按鈕：任何登入使用者可觸發。重新爬近5個
+    曆日的三大法人資料——這是全市場一次性 bulk 抓取（見 crawler.py
+    crawl_finmind_institutional），code 參數不影響爬取範圍，只是沿用本站
+    「詳情頁按鈕觸發」的網址慣例。用途是修復已知缺口：finmind_institutional
+    排程若在 FinMind 當天資料尚未補齊時執行，會回報成功但只抓到部分股票，
+    watchdog 只檢查「今天有沒有成功 log」、不檢查資料完不完整，不會自動抓到
+    這種情況（2026-08-15 實際發生過一次，見 CLAUDE.md）。crawl_finmind_institutional
+    用 INSERT OR REPLACE，重跑安全冪等；非交易日呼叫會安全拿到 0 筆，無副作用。"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'unauthorized'}), 401
+    try:
+        today = datetime.now(_TZ).date()
+        for i in range(5):
+            d = today - timedelta(days=i)
+            crawler.crawl_finmind_institutional(d.strftime('%Y%m%d'))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'ok': True})
+
+
 @app.route('/api/stocks/<code>/broker-trades')
 def api_broker_trades(code):
-    """券商分點單日買賣超，近 N 天（預設30）。資料來源是自選股回補或使用者
+    """券商分點單日買賣超，近 N 天（預設90）。資料來源是自選股回補或使用者
     在個股詳情頁按「查詢」觸發（見 api_broker_trades_fetch）——沒資料回傳空
-    陣列，由前端決定顯示空狀態還是矩陣。日/30日累計前十大買超/賣超排序交給
+    陣列，由前端決定顯示空狀態還是矩陣。日/90日累計前十五大買超/賣超排序交給
     前端算，比照 /api/market/summary 的既有慣例。"""
     db = SessionLocal()
     try:
-        days = int(request.args.get('days', 30))
+        days = int(request.args.get('days', 90))
         cutoff = datetime.now(_TZ).date() - timedelta(days=days)
         rows = (
             db.query(BrokerTrade)
@@ -550,7 +691,7 @@ def api_broker_trades(code):
 def api_broker_trades_fetch(code):
     """個股詳情頁「查詢」按鈕：任何登入使用者可主動觸發，不再限制自選股。
     同步執行（比照 AI 個股分析的作法），已有資料只補當天增量，完全沒資料
-    才回補30天，邏輯與 scheduler._broker_trades_job() 一致。"""
+    才回補90天，邏輯與 scheduler._broker_trades_job() 一致。"""
     if 'user_id' not in session:
         return jsonify({'error': 'unauthorized'}), 401
     db = SessionLocal()
@@ -652,6 +793,28 @@ def api_stock_expert_scores(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/backtest/sweet-spot')
+def api_stock_backtest_sweet_spot(code):
+    """On-demand, single-stock backtest of all 4 甜蜜點 tiers（🔴20日／
+    🟡60日／🟢120日 對稱±3%；🟣240日 收盤價在均線之下或高於但漲幅<=3%）
+    各自搭配獲利目標出場（+10/15/20/25/30% by default）、不加碼（持有期間忽略
+    新訊號，出場後才能再進場）——見 backtest_sweet_spot.py 模組 docstring
+    完整方法論。純本機運算（不打外部付費 API），跟 AI 分析不同，不限管理員；
+    單一股票近5年、4種天期×5種目標共20輪模擬，約數秒內完成。"""
+    years = request.args.get('years', 5, type=int)
+    db = SessionLocal()
+    try:
+        result = backtest_sweet_spot.run_backtest(db, code, years=years)
+        if result is None:
+            return jsonify({'error': '股價資料不足，無法回測（至少需要約60個交易日的歷史資料）'}), 400
+        return jsonify(result)
+    except Exception as e:
+        logger.exception('Backtest (sweet spot) failed for %s', code)
+        return jsonify({'error': str(e)}), 500
+    finally:
+        db.close()
+
+
 @app.route('/api/stocks/<code>/ai-analysis')
 def api_stock_ai_analysis_get(code):
     """Return the cached latest AI analysis for this stock, if any —
@@ -693,17 +856,59 @@ def api_stock_ai_analysis_run(code):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/stocks/<code>/note')
+def api_stock_note_get(code):
+    """管理員個人分析筆記（自由文字，貼上哪裡來的分析都可以，不觸發任何 AI
+    呼叫，見 CLAUDE.md「個股筆記」章節）。僅管理員可讀——這是私人研究筆記，
+    不是給一般訪客看的公開內容，跟上面 ai-analysis（公開可讀的付費分析快取）
+    刻意分開兩張表、兩套權限。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        n = db.query(StockNote).filter_by(stock_code=code).first()
+        return jsonify({
+            'content':    n.content if n else '',
+            'updated_at': str(n.updated_at) if n and n.updated_at else None,
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/stocks/<code>/note', methods=['PUT'])
+def api_stock_note_save(code):
+    """管理員個人分析筆記：儲存（INSERT OR UPDATE，一檔股票只留最新一份，
+    不留歷史版本）。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    content = (request.json or {}).get('content', '')
+    db = SessionLocal()
+    try:
+        n = db.query(StockNote).filter_by(stock_code=code).first()
+        if n:
+            n.content = content
+        else:
+            n = StockNote(stock_code=code, content=content)
+            db.add(n)
+        db.commit()
+        return jsonify({'ok': True, 'updated_at': str(n.updated_at) if n.updated_at else None})
+    finally:
+        db.close()
+
+
 # ── API: announcements ───────────────────────────────────────────────────────
 
 @app.route('/api/announcements/today')
 def api_announcements_today():
+    """路由名稱沿用歷史命名（原本設計只給「今日」用），實際回傳全部歷史公告
+    （2026-08-17 移除原本寫死的近7天篩選）——資料庫裡從 backfill_announcements.py
+    一次性回填的 2023 年資料到每日排程持續累積的資料都在，只是先前這裡的
+    `since` 篩選把 7 天前的全部擋掉，不是資料庫沒有資料。"""
     db = SessionLocal()
     try:
-        since = datetime.now(_TZ).date() - timedelta(days=7)
         rows = (
             db.query(Announcement, Stock.name)
             .outerjoin(Stock, Stock.code == Announcement.stock_code)
-            .filter(Announcement.announce_date >= since)
             .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
             .all()
         )
@@ -725,6 +930,30 @@ def api_announcements_today():
             'ai_rating':            a.ai_rating or '',
             'ai_analysis':          a.ai_analysis or '',
         } for a, name in rows])
+    finally:
+        db.close()
+
+
+@app.route('/api/announcements/<int:ann_id>/rating', methods=['PUT'])
+def api_announcement_set_rating(ann_id):
+    """人工評級（取代原本自動呼叫 OpenRouter 的付費 AI 評級，見 CLAUDE.md「自結公告」
+    章節）：前端複製一段提示詞讓使用者自行貼到 ChatGPT 等免費工具，看完回覆後在下拉選單
+    手動選一個評級，呼叫這支端點寫回 ai_rating。僅限管理員（跟站上其他公開頁面的編輯型
+    動作一致）。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    rating = (request.json or {}).get('rating') or None
+    valid = {'🔴 強烈買進', '🟠 建議買進', '🟡 一般觀望', '🟢 需要小心', None}
+    if rating not in valid:
+        return jsonify({'error': 'invalid rating'}), 400
+    db = SessionLocal()
+    try:
+        a = db.query(Announcement).get(ann_id)
+        if not a:
+            return jsonify({'error': 'not found'}), 404
+        a.ai_rating = rating
+        db.commit()
+        return jsonify({'ok': True, 'ai_rating': rating or ''})
     finally:
         db.close()
 
@@ -1166,6 +1395,160 @@ def api_admin_delete_user(user_id):
         db.close()
 
 
+# task -> Chinese label for the health dashboard; kept in sync with the
+# `_log('<task>', ...)` calls scattered across crawler.py.
+_HEALTH_TASKS = [
+    ('stock_list',              '股票清單'),
+    ('daily_price',              '每日股價'),
+    ('monthly_revenue',          '月營收'),
+    ('quarterly',                '季財報'),
+    ('announcements',            '自結公告'),
+    ('finmind_institutional',    '三大法人買賣超'),
+    ('finmind_holding',          '股權分散表'),
+    ('finmind_valuation',        'PER/PBR/殖利率'),
+    ('finmind_dividend',         '股利政策'),
+    ('finmind_dividend_result',  '除權息填息'),
+    ('finmind_financials',       '財報補充(資產負債/現金流)'),
+    ('director_holdings',        '董監持股'),
+    ('broker_trades',            '券商分點進出'),
+    ('stock_ai_analysis',        'AI個股分析'),
+]
+
+
+@app.route('/api/admin/health')
+def api_admin_health():
+    """System health snapshot for the admin dashboard: DB row counts,
+    FINMIND_TOKEN presence, and per-task last-run status + success rate
+    over the most recent 20 attempts (mirrors the silent-failure trap
+    described in CLAUDE.md — this makes it visible without manually
+    diffing crawler_logs)."""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        db_stats = {
+            'stocks':    db.query(Stock).count(),
+            'prices':    db.query(DailyPrice).count(),
+            'revenues':  db.query(MonthlyRevenue).count(),
+            'quarterly': db.query(QuarterlyFinancial).count(),
+            'users':     db.query(User).count(),
+            'messages':  db.query(Message).count(),
+            'last_price_date': str(
+                db.execute(text('SELECT MAX(date) FROM daily_prices')).scalar() or ''
+            ),
+        }
+        tasks = []
+        for task, label in _HEALTH_TASKS:
+            recent = (
+                db.query(CrawlerLog)
+                .filter(CrawlerLog.task == task)
+                .order_by(desc(CrawlerLog.created_at))
+                .limit(20)
+                .all()
+            )
+            last = recent[0] if recent else None
+            success_n = sum(1 for l in recent if l.status == 'success')
+            tasks.append({
+                'task':          task,
+                'label':         label,
+                'last_status':   last.status if last else None,
+                'last_message':  last.message if last else None,
+                'last_run':      str(last.created_at) if last else None,
+                'success_rate':  f'{success_n}/{len(recent)}' if recent else '—',
+            })
+        return jsonify({
+            'db': db_stats,
+            'finmind_token_set': bool(os.environ.get('FINMIND_TOKEN')),
+            'tasks': tasks,
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/admin/visits')
+def api_admin_visits():
+    """Recent homepage visits (see the before_request hook _log_visit) +
+    today's unique-IP / visit counts, for the admin dashboard's "who's
+    coming to my site" panel."""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        today_str = datetime.now(_TZ).date().isoformat()
+        total_visits = db.query(VisitLog).count()
+        today_visits = (
+            db.query(VisitLog)
+            .filter(text("date(created_at) = :today")).params(today=today_str)
+            .count()
+        )
+        today_unique_ips = (
+            db.query(sa_func.count(sa_func.distinct(VisitLog.ip)))
+            .filter(text("date(created_at) = :today")).params(today=today_str)
+            .scalar()
+        )
+        recent = (
+            db.query(VisitLog)
+            .order_by(desc(VisitLog.created_at))
+            .limit(200)
+            .all()
+        )
+        return jsonify({
+            'total_visits':     total_visits,
+            'today_visits':     today_visits,
+            'today_unique_ips': today_unique_ips or 0,
+            'visits': [{
+                'created_at':  str(v.created_at),
+                'ip':          v.ip or '',
+                'referrer':    v.referrer or '',
+                'user_agent':  v.user_agent or '',
+                'username':    v.username or '',
+            } for v in recent],
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/admin/messages')
+def api_admin_messages():
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        msgs = db.query(Message).order_by(Message.id.desc()).limit(500).all()
+        per_user = {}
+        for m in msgs:
+            per_user[m.username] = per_user.get(m.username, 0) + 1
+        return jsonify({
+            'total': db.query(Message).count(),
+            'per_user': sorted(per_user.items(), key=lambda kv: -kv[1]),
+            'messages': [{
+                'id':         m.id,
+                'user_id':    m.user_id,
+                'username':   m.username,
+                'content':    m.content,
+                'created_at': m.created_at.strftime('%Y-%m-%d %H:%M'),
+            } for m in msgs],
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/admin/messages/bulk-delete', methods=['POST'])
+def api_admin_messages_bulk_delete():
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    ids = (request.json or {}).get('ids') or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'no ids given'}), 400
+    db = SessionLocal()
+    try:
+        n = db.query(Message).filter(Message.id.in_(ids)).delete(synchronize_session=False)
+        db.commit()
+        return jsonify({'ok': True, 'deleted': n})
+    finally:
+        db.close()
+
+
 # ── startup (runs under both `python app.py` and gunicorn) ───────────────────
 
 init_db()
@@ -1216,4 +1599,7 @@ if not os.environ.get('FINMIND_TOKEN'):
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    # threaded=True: without it, Werkzeug's dev server handles one request at
+    # a time, so a heavy background crawl (quarterly/finmind_data) blocks
+    # every page load until it finishes — looks like the site crashed.
+    app.run(debug=False, host='0.0.0.0', port=5000, threaded=True)

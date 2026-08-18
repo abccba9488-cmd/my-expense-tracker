@@ -350,6 +350,22 @@ class Message(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(_TZ))
 
 
+class VisitLog(Base):
+    """One row per homepage load (see app.py's before_request hook) — lets
+    the admin dashboard show who's been landing on the site (IP/time/
+    referrer/UA/logged-in username if any) without needing an external
+    analytics tool. Only "/" is logged, not every API/asset request."""
+    __tablename__ = 'visit_logs'
+    __table_args__ = (Index('ix_vl_created', 'created_at'),)
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    ip         = Column(String(64))
+    path       = Column(String(255))
+    referrer   = Column(String(500))
+    user_agent = Column(String(255))
+    username   = Column(String(50))   # nullable — only set if logged in at visit time
+    created_at = Column(DateTime, default=lambda: datetime.now(_TZ))
+
+
 class CrawlerLog(Base):
     __tablename__ = 'crawler_logs'
     id         = Column(Integer, primary_key=True, autoincrement=True)
@@ -395,6 +411,17 @@ class StockAiAnalysis(Base):
     target_expensive = Column(Float)        # 昂貴價
     ai_analysis      = Column(Text)
     updated_at       = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
+
+
+class StockNote(Base):
+    """Free-form personal notes per stock（管理員自己貼上分析結果的地方，不管
+    來源是 ChatGPT、Claude 還是自己寫的，純文字儲存，不觸發任何 AI 呼叫，
+    跟上面 StockAiAnalysis 那個「自動付費分析快取」是兩個獨立概念）。One row
+    per stock_code, overwritten on each save — no history kept。"""
+    __tablename__ = 'stock_notes'
+    stock_code = Column(String(10), primary_key=True)
+    content    = Column(Text)
+    updated_at = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
 def _migrate_q4_to_individual(conn):

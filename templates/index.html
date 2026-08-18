@@ -97,7 +97,7 @@
 <nav id="nav">
   <div class="nav-inner">
     <div class="logo-group">
-      <a class="logo" href="https://stock-market.zeabur.app/" style="text-decoration:none;color:inherit;">📈 飆股網</a>
+      <a class="logo" href="/" style="text-decoration:none;color:inherit;">📈 飆股網</a>
       <span class="slogan">營收為王 飆股有理</span>
     </div>
     <div class="nav-right">
@@ -107,7 +107,7 @@
       <button class="icon-btn" id="theme-btn" title="切換主題">☀</button>
       <button class="icon-btn" id="today-btn" title="今日更新">🆕</button>
       <button class="icon-btn" id="msg-btn" title="留言板">💬<span class="unread-dot hidden" id="msg-dot"></span></button>
-      <button class="icon-btn admin-only hidden" id="admin-btn" title="會員管理">👥</button>
+      <a class="icon-btn admin-only hidden" id="admin-link-btn" href="/admin" title="後台管理">🛠</a>
       <button class="icon-btn" id="status-btn" title="爬蟲狀態">⚙</button>
     </div>
   </div>
@@ -314,6 +314,7 @@
             <tbody id="ann-tbody"></tbody>
           </table>
         </div>
+        <div class="ann-pager" id="ann-pager"></div>
       </div>
     </div>
   </div>
@@ -395,6 +396,16 @@
         <div id="stock-ai-body" class="stock-ai-body">尚無分析，點擊「重新分析」開始</div>
       </div>
 
+      <!-- 我的分析筆記（僅管理員可見，自由文字，不綁定任何特定AI呼叫） -->
+      <div class="card admin-only hidden" id="stock-note-card">
+        <div class="card-header">
+          <h3>📝 我的分析筆記</h3>
+          <span class="stock-ai-updated" id="stock-note-updated"></span>
+        </div>
+        <textarea id="stock-note-textarea" class="form-input stock-note-textarea" placeholder="貼上你的分析結果（ChatGPT、Claude 或自己寫的都可以），純文字儲存，不會呼叫任何 AI"></textarea>
+        <button class="btn btn-sm" id="stock-note-save-btn" onclick="saveStockNote()">儲存筆記</button>
+      </div>
+
       <!-- 達人選股評分 -->
       <div class="card hidden" id="stock-expert-card">
         <div class="card-header">
@@ -405,21 +416,74 @@
         <div class="chart-wrap" id="stock-expert-chart-wrap"><canvas id="stock-expert-chart"></canvas></div>
       </div>
 
+      <!-- 三大法人進出與持股 -->
+      <div class="card hidden" id="stock-institutional-card">
+        <div class="card-header">
+          <h3>🏛️ 三大法人進出與持股</h3>
+          <button class="btn btn-sm" id="stock-institutional-refresh-btn" onclick="refreshStockInstitutionalTrades()">補齊近5日資料</button>
+        </div>
+        <div class="stock-ai-updated">累計持股增減為近期買賣超逐日加總的估算值，非官方公布的絕對持股張數；若發現最新一兩天的資料沒更新，可點右上角按鈕重新抓取（修復排程當下 FinMind 資料尚未補齊的已知缺口）。</div>
+        <table id="institutional-table" class="display compact" style="width:100%">
+          <thead>
+            <tr>
+              <th>日期</th><th>外資買賣超(張)</th><th>投信買賣超(張)</th>
+              <th>自營商買賣超(張)</th><th>三大法人合計(張)</th><th>累計持股增減(張)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
       <!-- 券商分點進出（詳情頁按需查詢） -->
       <div class="card hidden" id="stock-broker-card">
         <div class="card-header">
           <h3>🏦 券商分點進出</h3>
-          <button class="btn btn-sm" id="stock-broker-btn" onclick="fetchStockBrokerTrades()">查詢近30天券商分點</button>
+          <button class="btn btn-sm" id="stock-broker-btn" onclick="fetchStockBrokerTrades()">查詢近90天券商分點</button>
         </div>
-        <div id="stock-broker-empty" class="stock-ai-body hidden">尚無資料，點擊「查詢近30天券商分點」開始</div>
+        <div id="stock-broker-empty" class="stock-ai-body hidden">尚無資料，點擊「查詢近90天券商分點」開始</div>
         <div id="stock-broker-matrix-wrap" class="hidden">
-          <h4 class="broker-trade-subhead" id="broker-buy-matrix-label">買超前10大券商（單位：張）</h4>
+          <div id="broker-concentration-summary" class="stock-ai-updated"></div>
+          <h4 class="broker-trade-subhead" id="broker-buy-matrix-label">買超前15大券商（單位：張）</h4>
           <div class="broker-trade-scroll">
             <table class="broker-trade-matrix" id="broker-buy-matrix"></table>
           </div>
-          <h4 class="broker-trade-subhead broker-trade-cumulative-head" id="broker-sell-matrix-label">賣超前10大券商（單位：張）</h4>
+          <h4 class="broker-trade-subhead broker-trade-cumulative-head" id="broker-sell-matrix-label">賣超前15大券商（單位：張）</h4>
           <div class="broker-trade-scroll">
             <table class="broker-trade-matrix" id="broker-sell-matrix"></table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 填息穩定訊號回測（詳情頁按需查詢） -->
+      <div class="card">
+        <div class="card-header">
+          <h3>🧪 甜蜜點訊號回測</h3>
+          <button class="btn btn-sm" id="stock-backtest-btn" onclick="runStockBacktest()">開始回測（近5年）</button>
+        </div>
+        <div class="stock-ai-updated">進場條件：甜蜜點出現對應顏色訊號，每週檢查一次——🔴20日／🟡60日／🟢120日 為收盤價正負3%以內（支撐/壓力測試）；🟣240日 為收盤價低於均線（不論多少）或高於但漲幅不超過3%（長期價值區）。四種天期各自獨立回測，下方可切換查看。<strong>不加碼</strong>——持有期間即使再出現訊號也不會再進場，直到出場（空手）才會偵測下一次進場。出場條件：股價達成 +15%／+20%／+25%／+30% 4 種獲利目標即出場（4種各自獨立模擬，出場時間不同），超過5年觀察期仍未達標則列為「持有中」。使用未還原除權息的原始收盤價，跟站內其他股價功能一致。</div>
+        <div id="stock-backtest-empty" class="stock-ai-body">點擊「開始回測」開始（單一股票計算，通常數秒內完成）</div>
+        <div id="stock-backtest-body" class="hidden">
+          <div class="filter-group" id="stock-backtest-tier-tabs">
+            <button class="bt-tab active" data-tier="ma20">🔴 20日</button>
+            <button class="bt-tab" data-tier="ma60">🟡 60日</button>
+            <button class="bt-tab" data-tier="ma120">🟢 120日</button>
+            <button class="bt-tab" data-tier="ma240">🟣 240日</button>
+          </div>
+          <div id="stock-backtest-summary" class="health-grid health-grid-wide"></div>
+          <div class="filter-group" id="stock-backtest-tabs">
+            <button class="bt-tab active" data-target="10">+10%</button>
+            <button class="bt-tab" data-target="15">+15%</button>
+            <button class="bt-tab" data-target="20">+20%</button>
+            <button class="bt-tab" data-target="25">+25%</button>
+            <button class="bt-tab" data-target="30">+30%</button>
+          </div>
+          <div class="ann-table-wrap">
+            <table class="ann-table" id="stock-backtest-table">
+              <thead>
+                <tr><th>進場日期</th><th>進場價</th><th>均線</th><th>出場日期</th><th>持有天數</th><th>報酬%</th></tr>
+              </thead>
+              <tbody id="stock-backtest-tbody"></tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -427,10 +491,11 @@
       <!-- 股價圖 -->
       <div class="card">
         <div class="card-header">
-          <h3>股價走勢</h3>
+          <h3>股價走勢 <span class="help-icon" title="【籌碼峰怎麼看】&#10;POC：近120天經時間衰減＋法人品質加權後成交量最集中的價位，市場主要成本區&#10;VAL–VAH：涵蓋約70%加權成交量的價格區間，範圍外交易相對稀少&#10;現價距POC：正值＝現價在成本區之上，負值＝在之下&#10;主峰集中度：越高代表籌碼越集中在單一價位，訊號越明確；越低代表籌碼分散，參考價值較弱&#10;&#10;【實戰判讀】&#10;跌到VAL附近：理論上有支撐，但要看基本面——營收獲利沒惡化才是真支撐，若基本面走壞則只是套牢區&#10;站上VAH：若主峰集中度高、POC同步上移，較像健康推升；若集中度低、POC停滯，較像量縮假突破&#10;現價距POC過大（不論正負）：正值太大注意追高風險，負值太大注意趨勢是否已轉弱&#10;&#10;【重要限制】&#10;未還原除權息股價估算，僅接了三大法人資料，尚無融資融券/當沖/分點方向性&#10;籌碼峰只回答「籌碼堆在哪裡」，不能取代基本面判斷、不能替代買進理由&#10;資料不足30個交易日的新股不會顯示">ⓘ</span></h3>
           <div class="days-selector">
             <button class="days-btn active" data-days="30">30天</button>
             <button class="days-btn" data-days="90">90天</button>
+            <button class="days-btn" data-days="120">120天</button>
             <button class="days-btn" data-days="180">180天</button>
             <button class="days-btn" data-days="365">1年</button>
             <button class="days-btn" data-days="1095">3年</button>
@@ -438,6 +503,7 @@
             <button class="days-btn" data-days="9999">全部</button>
           </div>
         </div>
+        <div class="fund-stats hidden" id="chip-peak-stats"></div>
         <div class="chart-wrap"><canvas id="price-chart"></canvas></div>
       </div>
 
@@ -543,13 +609,7 @@
   </div>
   <div class="status-actions">
     <button class="btn btn-sm" onclick="runCrawler('stock_list')">更新股票清單</button>
-    <button class="btn btn-sm admin-only hidden" id="quarterly-btn" onclick="runCrawler('quarterly')">更新季財報</button>
-    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('daily_price')">更新今日股價</button>
-    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('monthly_revenue')">更新月營收</button>
-    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('announcements')">更新自結公告</button>
-    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('finmind_data')">更新達人選股資料</button>
-    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('director_holdings')">更新董監持股</button>
-    <button class="btn btn-sm admin-only hidden" onclick="runCrawler('expert_scores')">重新計算達人評分</button>
+    <a class="btn btn-sm admin-only hidden" href="/admin">更多爬蟲控制 →</a>
   </div>
   <div id="status-logs" class="status-logs"></div>
 </div>
@@ -561,15 +621,6 @@
     <button class="icon-btn" onclick="closeTodayPanel()">✕</button>
   </div>
   <div id="today-logs" class="status-logs"></div>
-</div>
-
-<!-- ── 會員管理面板 ── -->
-<div id="admin-panel" class="status-panel admin-panel hidden">
-  <div class="status-panel-header">
-    <span>會員管理 <span id="admin-user-count" class="stats-badge"></span></span>
-    <button class="icon-btn" id="admin-panel-close">✕</button>
-  </div>
-  <div id="admin-user-list" class="admin-user-list"></div>
 </div>
 
 
