@@ -20,11 +20,15 @@ import crawler
 import experts
 import portfolio_risk
 import scheduler as sched
+import taifex_analysis
 from database import (
     SessionLocal, Stock, DailyPrice, MonthlyRevenue,
     QuarterlyFinancial, CrawlerLog, User, Watchlist, WatchlistStock, Message,
     Announcement, StockAiAnalysis, StockNote, ExpertScore, BrokerTrade, InstitutionalTrade,
-    VisitLog, init_db
+    VisitLog, init_db,
+    TaifexFuturesDaily, TaifexOptionDaily, TaifexFuturesInstitutional,
+    TaifexOptionInstitutional, TaifexFuturesLargeTraders, TaifexOptionLargeTraders,
+    TaifexFuturesInstitutionalMini,
 )
 
 logging.basicConfig(
@@ -903,7 +907,14 @@ def api_announcements_today():
     """路由名稱沿用歷史命名（原本設計只給「今日」用），實際回傳全部歷史公告
     （2026-08-17 移除原本寫死的近7天篩選）——資料庫裡從 backfill_announcements.py
     一次性回填的 2023 年資料到每日排程持續累積的資料都在，只是先前這裡的
-    `since` 篩選把 7 天前的全部擋掉，不是資料庫沒有資料。"""
+    `since` 篩選把 7 天前的全部擋掉，不是資料庫沒有資料。
+
+    排序維持 announce_date DESC, announce_time DESC（最新公告在最上面，符合
+    新聞流直覺）。**2026-08-21 新增 `repeat_count`**：同一檔股票可能因為大幅
+    漲跌，在一兩個月內被公告不只一次，但日期優先排序會讓這些列被大量其他
+    股票的公告隔開、肉眼看不出來——不改排序（會犧牲「看今天新公告」的直覺），
+    改成額外算一個「近90天內這是第幾次公告」的計數欄位，前端顯示成徽章，
+    這樣還是能一眼看出重複公告，見 _compute_announcement_repeat_counts()。"""
     db = SessionLocal()
     try:
         rows = (
@@ -912,6 +923,7 @@ def api_announcements_today():
             .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
             .all()
         )
+        repeat_counts = _compute_announcement_repeat_counts(rows)
         return jsonify([{
             'id':                   a.id,
             'stock_code':           a.stock_code,
@@ -929,9 +941,36 @@ def api_announcements_today():
             'estimated_pe':         a.estimated_pe,
             'ai_rating':            a.ai_rating or '',
             'ai_analysis':          a.ai_analysis or '',
+            'repeat_count':         repeat_counts[a.id],
         } for a, name in rows])
     finally:
         db.close()
+
+
+_ANNOUNCEMENT_REPEAT_WINDOW_DAYS = 90
+
+
+def _compute_announcement_repeat_counts(rows):
+    """rows: list of (Announcement, name) tuples, any order. 回傳
+    {announcement.id: N}，N＝以該筆公告日期為終點、往前推
+    _ANNOUNCEMENT_REPEAT_WINDOW_DAYS 天的區間內，同一檔股票（含這一筆自己）
+    總共公告了幾次。N=1 代表這是該股票近90天內唯一一筆（首次），N>=2 代表
+    重複公告。用 Python 逐股票分組+雙指標滑動視窗算，不下 SQL——公告總筆數
+    量級（千筆等級）小，且这個計算跟排序無關，不值得為此另開一條 SQL。"""
+    window = timedelta(days=_ANNOUNCEMENT_REPEAT_WINDOW_DAYS)
+    by_code = {}
+    for a, _name in rows:
+        by_code.setdefault(a.stock_code, []).append(a)
+
+    result = {}
+    for anns in by_code.values():
+        anns.sort(key=lambda a: a.announce_date)
+        left = 0
+        for right, a in enumerate(anns):
+            while anns[right].announce_date - anns[left].announce_date > window:
+                left += 1
+            result[a.id] = right - left + 1
+    return result
 
 
 @app.route('/api/announcements/<int:ann_id>/rating', methods=['PUT'])
@@ -1015,6 +1054,514 @@ def api_experts_detail(key):
         db.close()
 
 
+# ── API: 期權籌碼分析 ─────────────────────────────────────────────────────────
+# 市場層級（不綁 stock_code），資料來源見 crawler_taifex.py，衍生計算見
+# taifex_analysis.py。仿照 /api/experts 系列的「純讀取、無 server cache」寫法
+# ——資料本身一天只更新一次，不需要額外快取層。
+
+@app.route('/api/taifex/summary')
+def api_taifex_summary():
+    """今日摘要：期貨收盤/漲跌、PC Ratio、三大法人期貨淨部位、十大交易人淨
+    部位與大戶多空比（近似公式，見 taifex_analysis.compute_bull_bear_ratio）。
+    以資料庫裡「最新一天」為準，不一定是今天（例如爬蟲還沒跑或非交易日）。
+    僅管理員可用——實驗性功能，公式/資料完整度都還在驗證階段，不對一般使用者開放。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        latest_date = db.query(sa_func.max(TaifexFuturesDaily.date)).scalar()
+        if not latest_date:
+            return jsonify({})
+
+        futures_rows = (
+            db.query(TaifexFuturesDaily)
+            .filter_by(date=latest_date)
+            .order_by(TaifexFuturesDaily.contract_date)
+            .all()
+        )
+        front = futures_rows[0] if futures_rows else None
+
+        option_rows = db.query(TaifexOptionDaily).filter_by(date=latest_date).all()
+        pc = taifex_analysis.compute_pc_ratio(option_rows)
+
+        inst_rows = db.query(TaifexFuturesInstitutional).filter_by(date=latest_date).all()
+        inst_by_name = {r.institutional_investors: r for r in inst_rows}
+
+        def _deal_net(r):
+            """今日成交淨口數（買-賣）——當天的交易流量，數字通常較小。"""
+            if not r:
+                return None
+            return (r.long_deal_volume or 0) - (r.short_deal_volume or 0)
+
+        def _position_net(r):
+            """未平倉餘額淨口數（多-空）——目前持有的部位總量，這才是原站
+            「外資期貨」「外資約當大台」等摘要數字對應的欄位（實測verified：
+            2026-08-20 外資 TX 未平倉淨額 -82,423，原站當天「外資期貨」
+            -82,693、「外資約當大台」-82,665，量級與方向都吻合；用成交淨口數
+            算出來的 -901 差了近百倍，是先前版本的錯誤，已修正）。"""
+            if not r:
+                return None
+            return (r.long_open_interest_balance_volume or 0) - (r.short_open_interest_balance_volume or 0)
+
+        # 約當大台：合併大台(TX，上面 inst_rows)+小台(MTX)+微台(TMF)的「未平倉
+        # 淨額」，見 taifex_analysis.compute_contract_equivalent。
+        mini_rows = db.query(TaifexFuturesInstitutionalMini).filter_by(date=latest_date).all()
+        mini_position_by_name = {}
+        for r in mini_rows:
+            mini_position_by_name.setdefault(r.institutional_investors, {})[r.futures_id] = \
+                (r.long_open_interest_balance_volume or 0) - (r.short_open_interest_balance_volume or 0)
+
+        def _contract_equivalent(name):
+            tx_row = inst_by_name.get(name)
+            net_by_id = dict(mini_position_by_name.get(name, {}))
+            net_by_id['TX'] = _position_net(tx_row)
+            return taifex_analysis.compute_contract_equivalent(net_by_id)
+
+        lt_all = (
+            db.query(TaifexFuturesLargeTraders)
+            .filter_by(date=latest_date, contract_type='all')
+            .first()
+        )
+        # "近月" row: contract_type is neither 'week' nor 'all', it's a literal
+        # YYYYMM (e.g. '202609') that rolls forward as contracts expire — pick
+        # whichever one exists for this date rather than hardcoding a month.
+        lt_near = (
+            db.query(TaifexFuturesLargeTraders)
+            .filter(TaifexFuturesLargeTraders.date == latest_date,
+                     TaifexFuturesLargeTraders.contract_type.notin_(['week', 'all']))
+            .first()
+        )
+
+        def _net_top10(r):
+            if not r:
+                return None
+            return (r.buy_top10_trader_open_interest or 0) - (r.sell_top10_trader_open_interest or 0)
+
+        return jsonify({
+            'date':               str(latest_date),
+            'futures_contract':   front.contract_date if front else None,
+            'futures_close':      front.close if front else None,
+            'futures_spread':     front.spread if front else None,
+            'futures_spread_per': front.spread_per if front else None,
+            'pc_ratio':           pc,
+            'foreign_net':        _position_net(inst_by_name.get('外資')),
+            'dealer_net':         _position_net(inst_by_name.get('自營商')),
+            'trust_net':          _position_net(inst_by_name.get('投信')),
+            'foreign_deal_net':   _deal_net(inst_by_name.get('外資')),
+            'dealer_deal_net':    _deal_net(inst_by_name.get('自營商')),
+            'trust_deal_net':     _deal_net(inst_by_name.get('投信')),
+            'foreign_contract_equivalent': _contract_equivalent('外資'),
+            'dealer_contract_equivalent':  _contract_equivalent('自營商'),
+            'trust_contract_equivalent':   _contract_equivalent('投信'),
+            'large_traders_net_top10':            _net_top10(lt_all),
+            'large_traders_net_top10_near_month': _net_top10(lt_near),
+            'market_open_interest':   lt_all.market_open_interest if lt_all else None,
+            'bull_bear_ratio_pct':    taifex_analysis.compute_bull_bear_ratio(lt_all),
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/taifex/futures-institutional')
+def api_taifex_futures_institutional():
+    """三大法人期貨買賣，近N天（預設90），依機構別分開。net_deal_volume 只算
+    大台(TX)；contract_equivalent 額外合併小台(MTX,÷4)/微台(TMF,÷20)算出約當
+    大台淨部位（taifex_analysis.compute_contract_equivalent）。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+        rows = (
+            db.query(TaifexFuturesInstitutional)
+            .filter(TaifexFuturesInstitutional.date >= cutoff)
+            .order_by(TaifexFuturesInstitutional.date)
+            .all()
+        )
+        mini_rows = (
+            db.query(TaifexFuturesInstitutionalMini)
+            .filter(TaifexFuturesInstitutionalMini.date >= cutoff)
+            .all()
+        )
+        mini_net = {}   # (date, institutional_investors) -> {futures_id: net}
+        for r in mini_rows:
+            key = (r.date, r.institutional_investors)
+            # Contract-equivalent is a POSITION concept (see api_taifex_summary's
+            # _position_net docstring for the verified TX open-interest-balance
+            # match against the source site) — merge on open interest balance,
+            # not today's deal-volume flow.
+            mini_net.setdefault(key, {})[r.futures_id] = \
+                (r.long_open_interest_balance_volume or 0) - (r.short_open_interest_balance_volume or 0)
+
+        result = []
+        for r in rows:
+            net_deal = (r.long_deal_volume or 0) - (r.short_deal_volume or 0)
+            net_position = (r.long_open_interest_balance_volume or 0) - (r.short_open_interest_balance_volume or 0)
+            net_by_id = dict(mini_net.get((r.date, r.institutional_investors), {}))
+            net_by_id['TX'] = net_position
+            result.append({
+                'date': str(r.date),
+                'institutional_investors': r.institutional_investors,
+                'long_deal_volume': r.long_deal_volume, 'short_deal_volume': r.short_deal_volume,
+                'net_deal_volume': net_deal,
+                'long_open_interest_balance_volume': r.long_open_interest_balance_volume,
+                'short_open_interest_balance_volume': r.short_open_interest_balance_volume,
+                'net_open_interest_balance_volume': net_position,
+                'contract_equivalent': taifex_analysis.compute_contract_equivalent(net_by_id),
+            })
+        return jsonify(result)
+    finally:
+        db.close()
+
+
+@app.route('/api/taifex/option-institutional')
+def api_taifex_option_institutional():
+    """三大法人選擇權（台指選擇權TXO）買賣，近N天（預設90），依買權/賣權＋
+    機構別分開。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+        rows = (
+            db.query(TaifexOptionInstitutional)
+            .filter(TaifexOptionInstitutional.date >= cutoff)
+            .order_by(TaifexOptionInstitutional.date)
+            .all()
+        )
+        return jsonify([{
+            'date': str(r.date),
+            'call_put': r.call_put,
+            'institutional_investors': r.institutional_investors,
+            'long_deal_volume': r.long_deal_volume, 'short_deal_volume': r.short_deal_volume,
+            'net_deal_volume': (r.long_deal_volume or 0) - (r.short_deal_volume or 0),
+            'long_deal_amount': r.long_deal_amount, 'short_deal_amount': r.short_deal_amount,
+            'long_open_interest_balance_volume': r.long_open_interest_balance_volume,
+            'short_open_interest_balance_volume': r.short_open_interest_balance_volume,
+            'net_open_interest_balance_volume':
+                (r.long_open_interest_balance_volume or 0) - (r.short_open_interest_balance_volume or 0),
+        } for r in rows])
+    finally:
+        db.close()
+
+
+@app.route('/api/taifex/pc-ratio')
+def api_taifex_pc_ratio():
+    """Put/Call Ratio 時間序列，近N天（預設90）。SQL 端直接依日期+call_put
+    分組加總 volume/open_interest（比逐日重複呼叫
+    taifex_analysis.compute_pc_ratio 省一次 Python 端迴圈）。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+        rows = (
+            db.query(TaifexOptionDaily.date, TaifexOptionDaily.call_put,
+                      sa_func.sum(TaifexOptionDaily.volume).label('volume'),
+                      sa_func.sum(TaifexOptionDaily.open_interest).label('oi'))
+            .filter(TaifexOptionDaily.date >= cutoff)
+            .group_by(TaifexOptionDaily.date, TaifexOptionDaily.call_put)
+            .all()
+        )
+        by_date = {}
+        for d, call_put, volume, oi in rows:
+            agg = by_date.setdefault(d, {'call_volume': 0, 'put_volume': 0, 'call_oi': 0, 'put_oi': 0})
+            if call_put == 'call':
+                agg['call_volume'] = volume or 0
+                agg['call_oi'] = oi or 0
+            elif call_put == 'put':
+                agg['put_volume'] = volume or 0
+                agg['put_oi'] = oi or 0
+
+        # Front-month futures close per date, so the frontend can overlay
+        # price on the PC Ratio chart (matches source site's "收盤 & PC Ratio").
+        futures_rows = (
+            db.query(TaifexFuturesDaily.date, TaifexFuturesDaily.close)
+            .filter(TaifexFuturesDaily.date >= cutoff)
+            .order_by(TaifexFuturesDaily.date, TaifexFuturesDaily.contract_date)
+            .all()
+        )
+        close_by_date = {}
+        for d, close in futures_rows:
+            close_by_date.setdefault(d, close)
+
+        result = []
+        for d in sorted(by_date):
+            v = by_date[d]
+            result.append({
+                'date': str(d),
+                'futures_close': close_by_date.get(d),
+                'call_volume': v['call_volume'], 'put_volume': v['put_volume'],
+                'volume_ratio_pct': round(v['put_volume'] / v['call_volume'] * 100, 2) if v['call_volume'] else None,
+                'call_oi': v['call_oi'], 'put_oi': v['put_oi'],
+                'oi_ratio_pct': round(v['put_oi'] / v['call_oi'] * 100, 2) if v['call_oi'] else None,
+            })
+        return jsonify(result)
+    finally:
+        db.close()
+
+
+@app.route('/api/taifex/large-traders')
+def api_taifex_large_traders():
+    """十大交易人期貨（台指期貨TX）未沖銷部位時間序列，近N天（預設90）。
+    ?contract_type= 預設 'all'（所有契約月份合計），可傳 'week' 或 YYYYMM。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        contract_type = request.args.get('contract_type', 'all')
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+        rows = (
+            db.query(TaifexFuturesLargeTraders)
+            .filter(TaifexFuturesLargeTraders.date >= cutoff,
+                     TaifexFuturesLargeTraders.contract_type == contract_type)
+            .order_by(TaifexFuturesLargeTraders.date)
+            .all()
+        )
+        return jsonify([{
+            'date': str(r.date),
+            'buy_top5': r.buy_top5_trader_open_interest, 'sell_top5': r.sell_top5_trader_open_interest,
+            'buy_top10': r.buy_top10_trader_open_interest, 'sell_top10': r.sell_top10_trader_open_interest,
+            'net_top10': (r.buy_top10_trader_open_interest or 0) - (r.sell_top10_trader_open_interest or 0),
+            'market_open_interest': r.market_open_interest,
+            'bull_bear_ratio_pct': taifex_analysis.compute_bull_bear_ratio(r),
+        } for r in rows])
+    finally:
+        db.close()
+
+
+@app.route('/api/taifex/option-large-traders')
+def api_taifex_option_large_traders():
+    """十大交易人選擇權（台指選擇權TXO）未沖銷部位時間序列，近N天（預設90），
+    依買權/賣權分開。?contract_type= 預設 'all'。沒有契約金額（FinMind
+    TaiwanOptionOpenInterestLargeTraders 這個 dataset 本來就只有口數/百分比，
+    沒有金額欄位）。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        contract_type = request.args.get('contract_type', 'all')
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+        rows = (
+            db.query(TaifexOptionLargeTraders)
+            .filter(TaifexOptionLargeTraders.date >= cutoff,
+                     TaifexOptionLargeTraders.contract_type == contract_type)
+            .order_by(TaifexOptionLargeTraders.date)
+            .all()
+        )
+        return jsonify([{
+            'date': str(r.date),
+            'call_put': r.call_put,
+            'buy_top5': r.buy_top5_trader_open_interest, 'sell_top5': r.sell_top5_trader_open_interest,
+            'buy_top10': r.buy_top10_trader_open_interest, 'sell_top10': r.sell_top10_trader_open_interest,
+            'net_top10': (r.buy_top10_trader_open_interest or 0) - (r.sell_top10_trader_open_interest or 0),
+            'market_open_interest': r.market_open_interest,
+        } for r in rows])
+    finally:
+        db.close()
+
+
+
+@app.route('/api/taifex/support-resistance')
+def api_taifex_support_resistance():
+    """選擇權賣方支撐/壓力時間序列，近N天（預設90），**一次回傳全部4種到期別**
+    （week3週三/week5週五/month月契約/next_month次月契約），不再用 ?type= 參數
+    分開查詢——`taifex_option_daily` 這張表資料量大（180天約41萬列），若讓
+    前端 4 個到期別各自呼叫一次，等於同一份資料被完整掃描 4 遍，SQLAlchemy
+    ORM 物件化的開銷在這個量級下會慢到讓 Promise.all 遲遲不 resolve、整頁
+    卡住沒有任何資料渲染（2026-08-20 實測踩到）。改成只查一次、且用
+    Core 風格的欄位 tuple（不建構完整 ORM 物件）大幅降低單筆開銷，同一份
+    `by_date` 資料在 Python 端一次算完 4 個 bucket。每一天各自依
+    taifex_analysis.classify_expiry_contracts 重新判斷該類別當時對應到哪個
+    contract_date（週別契約會隨時間滾動）。附帶當天期貨（近月）收盤價方便
+    前端疊圖。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+
+        option_rows = (
+            db.query(TaifexOptionDaily.date, TaifexOptionDaily.contract_date,
+                      TaifexOptionDaily.strike_price, TaifexOptionDaily.call_put,
+                      TaifexOptionDaily.open_interest)
+            .filter(TaifexOptionDaily.date >= cutoff)
+            .order_by(TaifexOptionDaily.date)
+            .all()
+        )
+        by_date = {}
+        for d, contract_date, strike_price, call_put, open_interest in option_rows:
+            by_date.setdefault(d, []).append({
+                'contract_date': contract_date, 'strike_price': strike_price,
+                'call_put': call_put, 'open_interest': open_interest,
+            })
+
+        futures_rows = (
+            db.query(TaifexFuturesDaily.date, TaifexFuturesDaily.close)
+            .filter(TaifexFuturesDaily.date >= cutoff)
+            .order_by(TaifexFuturesDaily.date, TaifexFuturesDaily.contract_date)
+            .all()
+        )
+        front_close_by_date = {}
+        for d, close in futures_rows:
+            front_close_by_date.setdefault(d, close)
+
+        result = {'week3': [], 'week5': [], 'month': [], 'next_month': []}
+        for d in sorted(by_date):
+            day_rows = by_date[d]
+            buckets = taifex_analysis.classify_expiry_contracts({r['contract_date'] for r in day_rows})
+            for expiry_type, cd in buckets.items():
+                if not cd:
+                    continue
+                sub = [r for r in day_rows if r['contract_date'] == cd]
+                sr = taifex_analysis.compute_support_resistance(sub)
+                if not sr:
+                    continue
+                sr['date'] = str(d)
+                sr['contract_date'] = cd
+                sr['futures_close'] = front_close_by_date.get(d)
+                result[expiry_type].append(sr)
+        return jsonify(result)
+    finally:
+        db.close()
+
+
+@app.route('/api/taifex/daily-detail')
+def api_taifex_daily_detail():
+    """每日明細：把期貨收盤/三大法人期貨淨部位＋約當大台/PC Ratio/十大交易人
+    淨部位/大戶多空比 合併成逐日一列的表格，近N天（預設90，新到舊排序），
+    比照原站「每日明細」展開表格的精神。**欄位不是原站的逐字複製**——
+    「Call約當」「Put約當」是原站選擇權相關的專屬公式，未公開演算法無法
+    複製，本站不收錄；三大法人「約當大台」則已用 TX+MTX/4+TMF/20 換算補上
+    （見 taifex_analysis.compute_contract_equivalent）。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+
+        futures_rows = (
+            db.query(TaifexFuturesDaily.date, TaifexFuturesDaily.close,
+                      TaifexFuturesDaily.spread, TaifexFuturesDaily.spread_per)
+            .filter(TaifexFuturesDaily.date >= cutoff)
+            .order_by(TaifexFuturesDaily.date, TaifexFuturesDaily.contract_date)
+            .all()
+        )
+        front_by_date = {}
+        for d, close, spread, spread_per in futures_rows:
+            front_by_date.setdefault(d, {'close': close, 'spread': spread, 'spread_per': spread_per})
+
+        # 未平倉餘額淨額（多-空）——跟 api_taifex_summary 的 _position_net 是
+        # 同一個概念，才是原站「XX期貨/約當大台」對應的量級；今日成交淨口數
+        # （deal_volume）是完全不同、小了兩個數量級的「當日交易流量」。
+        inst_rows = (
+            db.query(TaifexFuturesInstitutional.date, TaifexFuturesInstitutional.institutional_investors,
+                      TaifexFuturesInstitutional.long_open_interest_balance_volume,
+                      TaifexFuturesInstitutional.short_open_interest_balance_volume)
+            .filter(TaifexFuturesInstitutional.date >= cutoff)
+            .all()
+        )
+        inst_by_date = {}
+        for d, name, long_v, short_v in inst_rows:
+            inst_by_date.setdefault(d, {})[name] = (long_v or 0) - (short_v or 0)
+
+        mini_rows = (
+            db.query(TaifexFuturesInstitutionalMini.date, TaifexFuturesInstitutionalMini.futures_id,
+                      TaifexFuturesInstitutionalMini.institutional_investors,
+                      TaifexFuturesInstitutionalMini.long_open_interest_balance_volume,
+                      TaifexFuturesInstitutionalMini.short_open_interest_balance_volume)
+            .filter(TaifexFuturesInstitutionalMini.date >= cutoff)
+            .all()
+        )
+        mini_net_by_date = {}   # (date, name) -> {futures_id: net}
+        for d, futures_id, name, long_v, short_v in mini_rows:
+            mini_net_by_date.setdefault((d, name), {})[futures_id] = (long_v or 0) - (short_v or 0)
+
+        pc_rows = (
+            db.query(TaifexOptionDaily.date, TaifexOptionDaily.call_put,
+                      sa_func.sum(TaifexOptionDaily.volume).label('volume'),
+                      sa_func.sum(TaifexOptionDaily.open_interest).label('oi'))
+            .filter(TaifexOptionDaily.date >= cutoff)
+            .group_by(TaifexOptionDaily.date, TaifexOptionDaily.call_put)
+            .all()
+        )
+        pc_by_date = {}
+        for d, call_put, volume, oi in pc_rows:
+            agg = pc_by_date.setdefault(d, {'call_volume': 0, 'put_volume': 0, 'call_oi': 0, 'put_oi': 0})
+            if call_put == 'call':
+                agg['call_volume'] = volume or 0
+                agg['call_oi'] = oi or 0
+            elif call_put == 'put':
+                agg['put_volume'] = volume or 0
+                agg['put_oi'] = oi or 0
+
+        lt_rows = (
+            db.query(TaifexFuturesLargeTraders.date, TaifexFuturesLargeTraders.contract_type,
+                      TaifexFuturesLargeTraders.buy_top10_trader_open_interest,
+                      TaifexFuturesLargeTraders.sell_top10_trader_open_interest,
+                      TaifexFuturesLargeTraders.market_open_interest)
+            .filter(TaifexFuturesLargeTraders.date >= cutoff)
+            .all()
+        )
+        lt_by_date = {}
+        for d, contract_type, buy10, sell10, market_oi in lt_rows:
+            bucket = lt_by_date.setdefault(d, {})
+            net = (buy10 or 0) - (sell10 or 0)
+            if contract_type == 'all':
+                bucket['all'] = (net, market_oi)
+            elif contract_type != 'week':
+                bucket['near'] = net
+
+        all_dates = set(front_by_date) | set(inst_by_date) | set(pc_by_date) | set(lt_by_date)
+        result = []
+        for d in all_dates:
+            f = front_by_date.get(d, {})
+            inst = inst_by_date.get(d, {})
+            pcv = pc_by_date.get(d)
+            lt = lt_by_date.get(d, {})
+            all_net, market_oi = lt.get('all', (None, None))
+            bull_bear = round(all_net / market_oi * 100, 1) if all_net is not None and market_oi else None
+
+            def _ce(name):
+                net_by_id = dict(mini_net_by_date.get((d, name), {}))
+                if name not in inst:
+                    return None
+                net_by_id['TX'] = inst[name]
+                return taifex_analysis.compute_contract_equivalent(net_by_id)
+
+            result.append({
+                'date':        str(d),
+                'close':       f.get('close'),
+                'spread':      f.get('spread'),
+                'spread_per':  f.get('spread_per'),
+                'foreign_net': inst.get('外資'),
+                'dealer_net':  inst.get('自營商'),
+                'trust_net':   inst.get('投信'),
+                'foreign_contract_equivalent': _ce('外資'),
+                'dealer_contract_equivalent':  _ce('自營商'),
+                'trust_contract_equivalent':   _ce('投信'),
+                'volume_ratio_pct': round(pcv['put_volume'] / pcv['call_volume'] * 100, 2)
+                    if pcv and pcv['call_volume'] else None,
+                'oi_ratio_pct': round(pcv['put_oi'] / pcv['call_oi'] * 100, 2)
+                    if pcv and pcv['call_oi'] else None,
+                'large_traders_net_all':        all_net,
+                'large_traders_net_near_month': lt.get('near'),
+                'bull_bear_ratio_pct': bull_bear,
+                'trend': (None if bull_bear is None else ('偏多' if bull_bear >= 0 else '偏空')),
+            })
+        result.sort(key=lambda r: r['date'], reverse=True)
+        return jsonify(result)
+    finally:
+        db.close()
+
+
 # ── API: crawler ──────────────────────────────────────────────────────────────
 
 @app.route('/api/crawler/status')
@@ -1088,6 +1635,9 @@ def api_run_crawler(task):
 
     elif task == 'broker_trades':
         _run_bg(sched._broker_trades_job)
+
+    elif task == 'taifex_data':
+        _run_bg(sched._taifex_all_job)
 
     elif task == 'director_holdings':
         _run_bg(crawler.crawl_director_holdings)

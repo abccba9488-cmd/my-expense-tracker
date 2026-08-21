@@ -424,6 +424,197 @@ class StockNote(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
+class TaifexFuturesDaily(Base):
+    """台指期貨（TX）每日行情，來源 FinMind TaiwanFuturesDaily。只存日盤
+    （trading_session='position'）——盤後盤 settlement_price/open_interest
+    恆為0，資訊價值低。contract_date 為 YYYYMM（近月/次月/季月等），不含價差
+    契約（原始資料裡 contract_date 含 '/' 的列，如 '202608/202609'，是跨月
+    價差單，爬蟲端直接跳過不存）。"""
+    __tablename__ = 'taifex_futures_daily'
+    __table_args__ = (
+        UniqueConstraint('contract_date', 'date'),
+        Index('ix_tfd_date', 'date'),
+    )
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    contract_date    = Column(String(10), nullable=False)   # YYYYMM
+    date             = Column(Date, nullable=False)
+    open             = Column(Float)
+    high             = Column(Float)
+    low              = Column(Float)
+    close            = Column(Float)
+    spread           = Column(Float)
+    spread_per       = Column(Float)
+    volume           = Column(BigInteger)
+    settlement_price = Column(Float)
+    open_interest    = Column(BigInteger)
+
+
+class TaifexOptionDaily(Base):
+    """台指選擇權（TXO）每日行情，逐履約價，來源 FinMind TaiwanOptionDaily。
+    只存日盤（trading_session='position'）。contract_date 命名規則：純
+    YYYYMM=月契約，YYYYMMWn=週三到期週契約，YYYYMMFn=週五到期週契約——
+    taifex_analysis.py 的支撐/壓力分析依這個規則分類「週三/週五/月/下月」。
+    call_put 正規化為 'call'/'put'（原始資料混用英文與中文，見
+    crawler_taifex.py）。資料量大（每天約3000列），只保留必要欄位。"""
+    __tablename__ = 'taifex_option_daily'
+    __table_args__ = (
+        UniqueConstraint('contract_date', 'date', 'strike_price', 'call_put'),
+        Index('ix_tod_date', 'date'),
+        Index('ix_tod_contract_date', 'contract_date', 'date'),
+    )
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    contract_date    = Column(String(10), nullable=False)
+    date             = Column(Date, nullable=False)
+    strike_price     = Column(Float, nullable=False)
+    call_put         = Column(String(4), nullable=False)   # call / put
+    open             = Column(Float)
+    high             = Column(Float)
+    low              = Column(Float)
+    close            = Column(Float)
+    volume           = Column(BigInteger)
+    settlement_price = Column(Float)
+    open_interest    = Column(BigInteger)
+
+
+class TaifexFuturesInstitutional(Base):
+    """三大法人期貨買賣（台指期貨TX），來源 FinMind
+    TaiwanFuturesInstitutionalInvestors。institutional_investors 為
+    '自營商'/'投信'/'外資' 其中之一。*_volume 單位：口；*_amount 單位：元。"""
+    __tablename__ = 'taifex_futures_institutional'
+    __table_args__ = (
+        UniqueConstraint('date', 'institutional_investors'),
+        Index('ix_tfi_date', 'date'),
+    )
+    id                                   = Column(Integer, primary_key=True, autoincrement=True)
+    date                                 = Column(Date, nullable=False)
+    institutional_investors              = Column(String(10), nullable=False)
+    long_deal_volume                     = Column(BigInteger)
+    long_deal_amount                     = Column(BigInteger)
+    short_deal_volume                    = Column(BigInteger)
+    short_deal_amount                    = Column(BigInteger)
+    long_open_interest_balance_volume    = Column(BigInteger)
+    long_open_interest_balance_amount    = Column(BigInteger)
+    short_open_interest_balance_volume   = Column(BigInteger)
+    short_open_interest_balance_amount   = Column(BigInteger)
+
+
+class TaifexOptionInstitutional(Base):
+    """三大法人選擇權買賣（台指選擇權TXO，買權/賣權分開），來源 FinMind
+    TaiwanOptionInstitutionalInvestors。call_put 正規化為 'call'/'put'。"""
+    __tablename__ = 'taifex_option_institutional'
+    __table_args__ = (
+        UniqueConstraint('date', 'call_put', 'institutional_investors'),
+        Index('ix_toi_date', 'date'),
+    )
+    id                                   = Column(Integer, primary_key=True, autoincrement=True)
+    date                                 = Column(Date, nullable=False)
+    call_put                             = Column(String(4), nullable=False)
+    institutional_investors              = Column(String(10), nullable=False)
+    long_deal_volume                     = Column(BigInteger)
+    long_deal_amount                     = Column(BigInteger)
+    short_deal_volume                    = Column(BigInteger)
+    short_deal_amount                    = Column(BigInteger)
+    long_open_interest_balance_volume    = Column(BigInteger)
+    long_open_interest_balance_amount    = Column(BigInteger)
+    short_open_interest_balance_volume   = Column(BigInteger)
+    short_open_interest_balance_amount   = Column(BigInteger)
+
+
+class TaifexFuturesLargeTraders(Base):
+    """十大交易人期貨未沖銷部位（台指期貨TX），來源 FinMind
+    TaiwanFuturesOpenInterestLargeTraders。contract_type：'week'（近週）/
+    YYYYMM（近月）/'all'（所有契約月份合計）。同一列同時包含「前五大/十大
+    交易人」（*_trader_*）與「其中特定法人」（*_specific_*）兩組欄位——FinMind
+    這個 dataset 不像期交所官方 API 拆成兩種列，一列就有完整資訊。"""
+    __tablename__ = 'taifex_futures_large_traders'
+    __table_args__ = (
+        UniqueConstraint('date', 'contract_type'),
+        Index('ix_tflt_date', 'date'),
+    )
+    id                                    = Column(Integer, primary_key=True, autoincrement=True)
+    date                                  = Column(Date, nullable=False)
+    contract_type                         = Column(String(10), nullable=False)
+    buy_top5_trader_open_interest         = Column(BigInteger)
+    buy_top5_trader_open_interest_per     = Column(Float)
+    buy_top10_trader_open_interest        = Column(BigInteger)
+    buy_top10_trader_open_interest_per    = Column(Float)
+    sell_top5_trader_open_interest        = Column(BigInteger)
+    sell_top5_trader_open_interest_per    = Column(Float)
+    sell_top10_trader_open_interest       = Column(BigInteger)
+    sell_top10_trader_open_interest_per   = Column(Float)
+    market_open_interest                  = Column(BigInteger)
+    buy_top5_specific_open_interest       = Column(BigInteger)
+    buy_top5_specific_open_interest_per   = Column(Float)
+    buy_top10_specific_open_interest      = Column(BigInteger)
+    buy_top10_specific_open_interest_per  = Column(Float)
+    sell_top5_specific_open_interest      = Column(BigInteger)
+    sell_top5_specific_open_interest_per  = Column(Float)
+    sell_top10_specific_open_interest     = Column(BigInteger)
+    sell_top10_specific_open_interest_per = Column(Float)
+
+
+class TaifexOptionLargeTraders(Base):
+    """十大交易人選擇權未沖銷部位（台指選擇權TXO，買權/賣權分開），來源
+    FinMind TaiwanOptionOpenInterestLargeTraders。欄位定義同
+    TaifexFuturesLargeTraders，多一個 call_put 維度。"""
+    __tablename__ = 'taifex_option_large_traders'
+    __table_args__ = (
+        UniqueConstraint('date', 'call_put', 'contract_type'),
+        Index('ix_tolt_date', 'date'),
+    )
+    id                                    = Column(Integer, primary_key=True, autoincrement=True)
+    date                                  = Column(Date, nullable=False)
+    call_put                              = Column(String(4), nullable=False)
+    contract_type                         = Column(String(10), nullable=False)
+    buy_top5_trader_open_interest         = Column(BigInteger)
+    buy_top5_trader_open_interest_per     = Column(Float)
+    buy_top10_trader_open_interest        = Column(BigInteger)
+    buy_top10_trader_open_interest_per    = Column(Float)
+    sell_top5_trader_open_interest        = Column(BigInteger)
+    sell_top5_trader_open_interest_per    = Column(Float)
+    sell_top10_trader_open_interest       = Column(BigInteger)
+    sell_top10_trader_open_interest_per   = Column(Float)
+    market_open_interest                  = Column(BigInteger)
+    buy_top5_specific_open_interest       = Column(BigInteger)
+    buy_top5_specific_open_interest_per   = Column(Float)
+    buy_top10_specific_open_interest      = Column(BigInteger)
+    buy_top10_specific_open_interest_per  = Column(Float)
+    sell_top5_specific_open_interest      = Column(BigInteger)
+    sell_top5_specific_open_interest_per  = Column(Float)
+    sell_top10_specific_open_interest     = Column(BigInteger)
+    sell_top10_specific_open_interest_per = Column(Float)
+
+
+class TaifexFuturesInstitutionalMini(Base):
+    """三大法人小台(MTX)/微台(TMF)期貨買賣，來源 FinMind
+    TaiwanFuturesInstitutionalInvestors（data_id=MTX/TMF）。單獨開一張表而不
+    塞進 TaifexFuturesInstitutional，因為那張表的 UniqueConstraint 只到
+    (date, institutional_investors)，隱含只存大台(TX)；這裡多一個 futures_id
+    區分小台/微台。用途：跟大台淨部位合併算「約當大台」——換算比例來自台指
+    期貨規格（TX 200元/點、MTX 50元/點、TMF 10元/點），約當大台 = TX淨部位 +
+    MTX淨部位/4 + TMF淨部位/20。**十大交易人沒有對應的小台/微台版本**——
+    TAIFEX 官方的大額交易人未沖銷部位統計本來就只公布大台，FinMind
+    TaiwanFuturesOpenInterestLargeTraders 對 MTX/TMF 回傳 0 筆（已實測確認），
+    這是資料源本身的限制，不是本站沒接。"""
+    __tablename__ = 'taifex_futures_institutional_mini'
+    __table_args__ = (
+        UniqueConstraint('date', 'futures_id', 'institutional_investors'),
+        Index('ix_tfim_date', 'date'),
+    )
+    id                                   = Column(Integer, primary_key=True, autoincrement=True)
+    date                                 = Column(Date, nullable=False)
+    futures_id                           = Column(String(6), nullable=False)   # MTX / TMF
+    institutional_investors              = Column(String(10), nullable=False)
+    long_deal_volume                     = Column(BigInteger)
+    long_deal_amount                     = Column(BigInteger)
+    short_deal_volume                    = Column(BigInteger)
+    short_deal_amount                    = Column(BigInteger)
+    long_open_interest_balance_volume    = Column(BigInteger)
+    long_open_interest_balance_amount    = Column(BigInteger)
+    short_open_interest_balance_volume   = Column(BigInteger)
+    short_open_interest_balance_amount   = Column(BigInteger)
+
+
 def _migrate_q4_to_individual(conn):
     """Convert Q4 annual cumulative data to individual Q4 by subtracting Q1+Q2+Q3."""
     for field in ('eps', 'revenue', 'operating_income', 'net_income'):

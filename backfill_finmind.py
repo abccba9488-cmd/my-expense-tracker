@@ -214,6 +214,90 @@ def backfill_financials(from_year: int):
     logger.info('Financials backfill complete: crawled=%d skipped=%d', crawled, skipped)
 
 
+def _backfill_taifex_daily(label, table_name, crawl_fn, from_year, threshold=1, min_year=None):
+    """期權籌碼 6 個 dataset 共用的日迴圈——結構跟 backfill_institutional 一樣
+    （逐平日、已有資料跳過、time.sleep(0.3)），差別只在表名/爬蟲函式/門檻，
+    抽成共用函式避免 6 份幾乎一樣的迴圈。min_year：資料源本身沒有更早的資料
+    時（例如三大法人/十大交易人系列 FinMind 只從2018-06-05才有），直接把
+    起始年份夾到那個下限，避免浪費 API 呼叫在注定 0 筆的舊日期上。"""
+    from database import SessionLocal
+    if min_year and from_year < min_year:
+        logger.info('Taifex %s: from_year %d 早於資料源起點，改用 %d', label, from_year, min_year)
+        from_year = min_year
+    db = SessionLocal()
+    today = datetime.now(_TZ).date()
+    d = date(from_year, 1, 1)
+    skipped = crawled = 0
+
+    logger.info('=== Taifex %s %d -> %d ===', label, from_year, today.year)
+    while d <= today:
+        if d.weekday() >= 5:
+            d += timedelta(days=1)
+            continue
+        count = db.execute(text(f'SELECT COUNT(*) FROM {table_name} WHERE date=:d'), {'d': d}).scalar()
+        if count and count >= threshold:
+            skipped += 1
+            d += timedelta(days=1)
+            continue
+        date_str = d.strftime('%Y%m%d')
+        try:
+            n = crawl_fn(date_str)
+            crawled += 1
+            logger.info('Taifex %s %s: %d records (done=%d skip=%d)', label, date_str, n, crawled, skipped)
+        except Exception as e:
+            logger.warning('Taifex %s %s failed: %s', label, date_str, e)
+        time.sleep(0.3)
+        d += timedelta(days=1)
+
+    db.close()
+    logger.info('Taifex %s backfill complete: crawled=%d skipped=%d', label, crawled, skipped)
+
+
+def backfill_taifex_futures_daily(from_year: int):
+    import crawler_taifex as ct
+    _backfill_taifex_daily('期貨每日行情', 'taifex_futures_daily',
+                           ct.crawl_finmind_taifex_futures_daily, from_year, threshold=1)
+
+
+def backfill_taifex_option_daily(from_year: int):
+    import crawler_taifex as ct
+    _backfill_taifex_daily('選擇權每日行情', 'taifex_option_daily',
+                           ct.crawl_finmind_taifex_option_daily, from_year, threshold=100)
+
+
+def backfill_taifex_futures_institutional(from_year: int):
+    import crawler_taifex as ct
+    _backfill_taifex_daily('三大法人期貨', 'taifex_futures_institutional',
+                           ct.crawl_finmind_taifex_futures_institutional, from_year,
+                           threshold=1, min_year=2018)
+
+
+def backfill_taifex_option_institutional(from_year: int):
+    import crawler_taifex as ct
+    _backfill_taifex_daily('三大法人選擇權', 'taifex_option_institutional',
+                           ct.crawl_finmind_taifex_option_institutional, from_year,
+                           threshold=1, min_year=2018)
+
+
+def backfill_taifex_futures_large_traders(from_year: int):
+    import crawler_taifex as ct
+    _backfill_taifex_daily('十大交易人期貨', 'taifex_futures_large_traders',
+                           ct.crawl_finmind_taifex_futures_large_traders, from_year, threshold=1)
+
+
+def backfill_taifex_option_large_traders(from_year: int):
+    import crawler_taifex as ct
+    _backfill_taifex_daily('十大交易人選擇權', 'taifex_option_large_traders',
+                           ct.crawl_finmind_taifex_option_large_traders, from_year, threshold=1)
+
+
+def backfill_taifex_futures_institutional_mini(from_year: int):
+    import crawler_taifex as ct
+    _backfill_taifex_daily('三大法人小台微台期貨', 'taifex_futures_institutional_mini',
+                           ct.crawl_finmind_taifex_futures_institutional_mini, from_year,
+                           threshold=1, min_year=2018)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Backfill FinMind data for 達人選股')
     parser.add_argument('--from-year', type=int, default=2013,
@@ -223,11 +307,15 @@ if __name__ == '__main__':
     parser.add_argument('--financials',    action='store_true', help='資產負債表/現金流量表/毛利')
     parser.add_argument('--dividend',      action='store_true', help='股利政策 + 填息事件')
     parser.add_argument('--valuation',     action='store_true', help='PER/PBR/殖利率')
+    parser.add_argument('--taifex',        action='store_true',
+                        help='期權籌碼（期貨/選擇權每日行情、三大法人、十大交易人，共6個dataset）')
     parser.add_argument('--all', action='store_true', help='全部一起跑')
     args = parser.parse_args()
 
-    if not any([args.institutional, args.holding, args.financials, args.dividend, args.valuation, args.all]):
-        parser.error('Specify at least one of: --institutional --holding --financials --dividend --valuation --all')
+    if not any([args.institutional, args.holding, args.financials, args.dividend,
+                args.valuation, args.taifex, args.all]):
+        parser.error('Specify at least one of: --institutional --holding --financials '
+                     '--dividend --valuation --taifex --all')
 
     logger.info('FinMind backfill start: from_year=%d', args.from_year)
 
@@ -241,5 +329,13 @@ if __name__ == '__main__':
         backfill_dividend(args.from_year)
     if args.valuation or args.all:
         backfill_valuation(args.from_year)
+    if args.taifex or args.all:
+        backfill_taifex_futures_daily(args.from_year)
+        backfill_taifex_option_daily(args.from_year)
+        backfill_taifex_futures_institutional(args.from_year)
+        backfill_taifex_option_institutional(args.from_year)
+        backfill_taifex_futures_large_traders(args.from_year)
+        backfill_taifex_option_large_traders(args.from_year)
+        backfill_taifex_futures_institutional_mini(args.from_year)
 
     logger.info('All done.')

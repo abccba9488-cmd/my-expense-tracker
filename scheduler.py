@@ -205,6 +205,43 @@ def _finmind_job():
         logger.error('compute_expert_scores failed: %s', e)
 
 
+def _taifex_job():
+    """期權籌碼：期貨/選擇權每日行情＋十大交易人未沖銷部位。這幾個 FinMind
+    dataset 約16:30更新，17:00跟 _finmind_job 同批次執行是安全的。三大法人
+    期貨/選擇權買賣更新較晚，另外排在 _taifex_institutional_job。"""
+    import crawler_taifex as ct
+    today = datetime.now(_TZ).strftime('%Y%m%d')
+    for fn in (ct.crawl_finmind_taifex_futures_daily, ct.crawl_finmind_taifex_option_daily,
+               ct.crawl_finmind_taifex_futures_large_traders, ct.crawl_finmind_taifex_option_large_traders):
+        try:
+            fn(today)
+        except Exception as e:
+            logger.error('Taifex job step %s failed: %s', fn.__name__, e)
+
+
+def _taifex_institutional_job():
+    """三大法人期貨/選擇權買賣（含小台/微台，用於算約當大台），獨立排程晚一
+    點跑——FinMind TaiwanOptionInstitutionalInvestors 約16:00更新、
+    TaiwanFuturesInstitutionalInvestors（大台/小台/微台皆同）約18:00更新，跟
+    _taifex_job 的16:30批次分開，避免在資料還沒更新前就抓到空/舊資料。"""
+    import crawler_taifex as ct
+    today = datetime.now(_TZ).strftime('%Y%m%d')
+    for fn in (ct.crawl_finmind_taifex_futures_institutional, ct.crawl_finmind_taifex_option_institutional,
+               ct.crawl_finmind_taifex_futures_institutional_mini):
+        try:
+            fn(today)
+        except Exception as e:
+            logger.error('Taifex institutional job step %s failed: %s', fn.__name__, e)
+
+
+def _taifex_all_job():
+    """手動觸發用（POST /api/crawler/run/taifex_data）：一次跑完全部6個期權
+    籌碼 dataset，不分開等18:30那個批次——手動觸發是使用者當下想看結果，不
+    是排程情境，不需要顧慮資料源更新時間的先後。"""
+    _taifex_job()
+    _taifex_institutional_job()
+
+
 def _broker_trades_job():
     """券商分點進出：對目前有出現在任一使用者自選清單的股票做日增量；若某檔
     股票完全沒有歷史資料（例如在這個功能上線前就已經被自選、或先前因
@@ -314,6 +351,14 @@ def start():
 
     # 券商分點進出：只抓自選股，17:30（達人選股 FinMind job 之後）
     _scheduler.add_job(_broker_trades_job, CronTrigger(day_of_week='mon-fri', hour=17, minute=30))
+
+    # 期權籌碼：期貨/選擇權每日行情＋十大交易人，17:00（跟達人選股 FinMind
+    # 同批次，資料約16:30更新，17:00執行安全）
+    _scheduler.add_job(_taifex_job, CronTrigger(day_of_week='mon-fri', hour=17, minute=0))
+
+    # 期權籌碼：三大法人期貨/選擇權買賣，18:30（該兩個dataset分別約16:00/
+    # 18:00才更新，晚一點跑避免抓空）
+    _scheduler.add_job(_taifex_institutional_job, CronTrigger(day_of_week='mon-fri', hour=18, minute=30))
 
     # 達人選股 financial_extra: same disclosure-month cadence as the official
     # quarterly job, 30 min later.

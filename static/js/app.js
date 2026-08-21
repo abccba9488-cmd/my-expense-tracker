@@ -963,10 +963,12 @@ document.querySelectorAll('.page-tab').forEach(btn => {
     document.getElementById('watchlist-view').classList.toggle('active', state.activeTab === 'watchlist');
     document.getElementById('ann-view').classList.toggle('active', state.activeTab === 'ann');
     document.getElementById('expert-view').classList.toggle('active', state.activeTab === 'expert');
+    document.getElementById('taifex-view').classList.toggle('active', state.activeTab === 'taifex');
     if (state.activeTab === 'star') renderStarTable();
     if (state.activeTab === 'watchlist') renderWatchlistView();
     if (state.activeTab === 'ann') loadAnnouncements();
     if (state.activeTab === 'expert') loadExperts();
+    if (state.activeTab === 'taifex') loadTaifexView();
   });
 });
 
@@ -1194,6 +1196,7 @@ function showDetailView() {
   document.getElementById('watchlist-view').classList.remove('active');
   document.getElementById('ann-view').classList.remove('active');
   document.getElementById('expert-view').classList.remove('active');
+  document.getElementById('taifex-view').classList.remove('active');
   document.getElementById('detail-view').classList.add('active');
   document.getElementById('page-tabs-bar').classList.add('hidden');
   window.scrollTo(0, 0);
@@ -1203,7 +1206,7 @@ function showListView() {
   const returningCode = state.currentCode;
   document.getElementById('detail-view').classList.remove('active');
   document.getElementById('page-tabs-bar').classList.remove('hidden');
-  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view', expert: 'expert-view' };
+  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view', expert: 'expert-view', taifex: 'taifex-view' };
   document.getElementById(viewMap[state.activeTab] || 'list-view').classList.add('active');
   state.currentCode = null;
   if (returningCode) requestAnimationFrame(() => _scrollToStockRow(returningCode));
@@ -1603,6 +1606,16 @@ document.addEventListener('click', function(e) {
     wlSearchDropdown.classList.add('hidden');
 });
 
+/* ── Help icon popover (tap-to-toggle for touch devices; desktop uses :hover) ── */
+document.addEventListener('click', function(e) {
+  if (e.target.closest('.help-popover')) return;
+  const icon = e.target.closest('.help-icon');
+  document.querySelectorAll('.help-icon.show').forEach(el => {
+    if (el !== icon) el.classList.remove('show');
+  });
+  if (icon) icon.classList.toggle('show');
+});
+
 /* ── Crawler control ── */
 async function runCrawler(task) {
   showToast(`已觸發：${task}，請稍候…`);
@@ -1675,6 +1688,7 @@ function _annRatingSelectHtml(i, rating) {
 function renderAnnRow(a, i) {
   return `<tr>
     <td>${a.announce_date}${a.announce_time ? ' ' + a.announce_time.slice(0, 5) : ''}</td>
+    <td class="td-center" title="近90天內（含本次）這是第幾次公告">${a.repeat_count > 1 ? `🔁 第${a.repeat_count}次` : '首次'}</td>
     <td><span class="stock-link" data-code="${a.stock_code}">${a.stock_code}</span></td>
     <td><span class="stock-link" data-code="${a.stock_code}">${a.name || ''}</span></td>
     <td><span class="ann-subject-link" data-idx="${i}">${_annTruncate(a.subject, 10)}</span></td>
@@ -1697,13 +1711,13 @@ function renderAnnRow(a, i) {
 async function loadAnnouncements() {
   const tbody = document.getElementById('ann-tbody');
   if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="14" class="ann-empty">載入中…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="15" class="ann-empty">載入中…</td></tr>';
   try {
     _annData = await fetch('/api/announcements/today').then(r => r.json());
     _annPage = 1;
     renderAnnTable();
   } catch (_) {
-    tbody.innerHTML = '<tr><td colspan="14" class="ann-empty">載入失敗</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="15" class="ann-empty">載入失敗</td></tr>';
   }
 }
 
@@ -1749,7 +1763,7 @@ function renderAnnTable() {
 
   tbody.innerHTML = total
     ? pageRows.map((a, localIdx) => renderAnnRow(a, start + localIdx)).join('')
-    : '<tr><td colspan="14" class="ann-empty">近期無公告</td></tr>';
+    : '<tr><td colspan="15" class="ann-empty">近期無公告</td></tr>';
 
   if (pager) {
     pager.innerHTML = _annPagerHtml(totalPages);
@@ -1802,6 +1816,7 @@ function _annRatingRank(r) {
 
 const _ANN_SORT_GETTERS = {
   date:        a => `${a.announce_date || ''} ${a.announce_time || ''}`,
+  repeat:      a => a.repeat_count || 0,
   code:        a => a.stock_code,
   name:        a => a.name || '',
   price:       a => a.price_at_announce,
@@ -2991,6 +3006,416 @@ function installApp() {
     showToast('此瀏覽器不支援安裝，請改用 Chrome', 3000);
   }
 }
+
+/* ── 期權籌碼分析 ── */
+let _taifexFuturesInst = [];
+let _taifexOptionInst = [];
+let _taifexLargeTraders = [];
+let _taifexOptionLargeTraders = [];
+let _taifexSrByType = {};
+let _taifexSrType = 'week3';
+let _taifexEntity = '外資';
+let _taifexCloseByDate = {};
+let _taifexLoadSeq = 0;
+let _taifexDailyDetail = [];
+let _taifexDetailLoaded = false;
+
+async function loadTaifexView() {
+  // Guard against overlapping calls (e.g. user clicking away and back to
+  // this tab before the previous load finished) clobbering each other's
+  // shared module-level state — only the most recent call is allowed to render.
+  const seq = ++_taifexLoadSeq;
+  const days = 180;
+  const [summary, futuresInst, optionInst, pcRatio, largeTraders, optionLargeTraders,
+         srByType, dailyDetail] = await Promise.all([
+    fetch('/api/taifex/summary').then(r => r.json()).catch(() => ({})),
+    fetch(`/api/taifex/futures-institutional?days=${days}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/taifex/option-institutional?days=${days}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/taifex/pc-ratio?days=${days}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/taifex/large-traders?days=${days}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/taifex/option-large-traders?days=${days}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/taifex/support-resistance?days=${days}`).then(r => r.json())
+      .catch(() => ({ week3: [], week5: [], month: [], next_month: [] })),
+    fetch(`/api/taifex/daily-detail?days=${days}`).then(r => r.json()).catch(() => []),
+  ]);
+  if (seq !== _taifexLoadSeq) return;
+
+  _taifexFuturesInst = futuresInst;
+  _taifexOptionInst = optionInst;
+  _taifexLargeTraders = largeTraders;
+  _taifexOptionLargeTraders = optionLargeTraders;
+  _taifexSrByType = srByType;
+  _taifexDailyDetail = dailyDetail;
+  _taifexDetailLoaded = false;
+  _taifexCloseByDate = Object.fromEntries(dailyDetail.map(r => [r.date, r.close]));
+  document.getElementById('taifex-detail-wrap').classList.add('hidden');
+  document.getElementById('taifex-detail-tbody').innerHTML = '';
+
+  renderTaifexSummary(summary);
+  renderTaifexPcRatioChart(pcRatio);
+  renderTaifexBullBearChart(_taifexLargeTraders);
+  renderTaifexEntityFuturesChart(_taifexEntity);
+  renderTaifexEntityOptionCharts(_taifexEntity);
+  renderTaifexSrChart(_taifexSrByType[_taifexSrType]);
+}
+
+function renderTaifexSummary(s) {
+  document.getElementById('taifex-date').textContent = s.date || '';
+  const gaugeValueEl = document.getElementById('taifex-gauge-value');
+  const gaugeTrendEl = document.getElementById('taifex-gauge-trend');
+  const gaugeUpdatedEl = document.getElementById('taifex-gauge-updated');
+  const tableEl = document.getElementById('taifex-summary-table');
+
+  if (!s.date) {
+    gaugeValueEl.textContent = '—';
+    gaugeTrendEl.textContent = '';
+    gaugeUpdatedEl.textContent = '';
+    if (state.taifexGaugeChart) { state.taifexGaugeChart.destroy(); state.taifexGaugeChart = null; }
+    tableEl.innerHTML = '<div class="stock-ai-body">尚無資料，請先在「⚙ 爬蟲狀態」或後台管理頁面觸發「期權籌碼」爬蟲</div>';
+    return;
+  }
+
+  const pc = s.pc_ratio || {};
+  const fmt = v => v == null ? '—' : v.toLocaleString();
+  const fmtSignedPct = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v}%`;
+  const trend = s.bull_bear_ratio_pct == null ? '' : (s.bull_bear_ratio_pct >= 0 ? '偏多' : '偏空');
+
+  // Gauge (approx metric — see help popover for the formula/caveat)
+  gaugeValueEl.textContent = fmtSignedPct(s.bull_bear_ratio_pct);
+  gaugeValueEl.style.color = s.bull_bear_ratio_pct == null ? ''
+    : (s.bull_bear_ratio_pct >= 0 ? getCssVar('--pos') : getCssVar('--neg'));
+  gaugeTrendEl.textContent = trend;
+  gaugeUpdatedEl.textContent = `${s.date} 更新`;
+  renderTaifexGauge(s.bull_bear_ratio_pct);
+
+  // Label/value table — 3 pairs per row, matching the source site's summary layout
+  const rows = [
+    ['期貨收盤', fmt(s.futures_close), '外資期貨淨部位', fmt(s.foreign_net), '十大淨部位(全部)', fmt(s.large_traders_net_top10)],
+    ['漲跌', s.futures_spread != null ? `${s.futures_spread >= 0 ? '+' : ''}${s.futures_spread} (${s.futures_spread_per}%)` : '—',
+      '自營商期貨淨部位', fmt(s.dealer_net), '十大淨部位(近月)', fmt(s.large_traders_net_top10_near_month)],
+    ['PC Ratio(成交量)', pc.volume_ratio_pct != null ? pc.volume_ratio_pct + '%' : '—',
+      '投信期貨淨部位', fmt(s.trust_net), '多空比(約)', fmtSignedPct(s.bull_bear_ratio_pct)],
+    ['PC Ratio(未平倉)', pc.oi_ratio_pct != null ? pc.oi_ratio_pct + '%' : '—',
+      '全市場未沖銷部位', fmt(s.market_open_interest), '趨勢', trend || '—'],
+  ];
+  tableEl.innerHTML = rows.map(cells => {
+    let html = '';
+    for (let i = 0; i < cells.length; i += 2) {
+      html += `<div class="label">${cells[i]}</div><div class="value">${cells[i + 1]}</div>`;
+    }
+    return html;
+  }).join('');
+}
+
+function renderTaifexGauge(pct) {
+  const canvas = document.getElementById('taifex-gauge-chart');
+  if (state.taifexGaugeChart) { state.taifexGaugeChart.destroy(); state.taifexGaugeChart = null; }
+  // Bounds are ±15%, not the ±70% the source site uses — that scale fit their
+  // (unknown, likely differently-normalized) metric, not this formula's.
+  // Checked this project's own history: 152 trading days (2026-01-02~08-20)
+  // range from -11.9% to +9.0%, p95/p99 = +5.8%/+8.4%. ±70% would compress
+  // the entire observed range into a sliver of the gauge; ±15% covers all of
+  // it with headroom while still showing how extreme a reading actually is.
+  const min = -15, max = 15;
+  const clamped = pct == null ? 0 : Math.max(min, Math.min(max, pct));
+  const filledPct = pct == null ? 0 : ((clamped - min) / (max - min)) * 100;
+  const fillColor = pct == null ? getCssVar('--text2') : (pct >= 0 ? getCssVar('--pos') : getCssVar('--neg'));
+  const trackColor = getCssVar('--border');
+
+  state.taifexGaugeChart = new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: [filledPct, 100 - filledPct],
+        backgroundColor: [fillColor, trackColor],
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      circumference: 180,
+      rotation: -90,
+      cutout: '75%',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      animation: { duration: 400 },
+    },
+  });
+}
+
+function toggleTaifexDetail() {
+  const wrap = document.getElementById('taifex-detail-wrap');
+  const show = wrap.classList.contains('hidden');
+  wrap.classList.toggle('hidden', !show);
+  if (show && !_taifexDetailLoaded) {
+    renderTaifexDetailTable();
+    _taifexDetailLoaded = true;
+  }
+}
+
+function renderTaifexDetailTable() {
+  const tbody = document.getElementById('taifex-detail-tbody');
+  const fmt = v => v == null ? '—' : v.toLocaleString();
+  const fmtPct = v => v == null ? '—' : v + '%';
+  const fmtSignedPct = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v}%`;
+  if (!_taifexDailyDetail.length) {
+    tbody.innerHTML = '<tr><td colspan="15" class="ann-empty">尚無資料</td></tr>';
+    return;
+  }
+  tbody.innerHTML = _taifexDailyDetail.map(r => `
+    <tr>
+      <td>${r.date}</td>
+      <td class="num">${fmt(r.close)}</td>
+      <td class="num">${r.spread_per != null ? fmtSignedPct(r.spread_per) : '—'}</td>
+      <td class="num">${fmt(r.foreign_net)}</td>
+      <td class="num">${fmt(r.foreign_contract_equivalent)}</td>
+      <td class="num">${fmt(r.dealer_net)}</td>
+      <td class="num">${fmt(r.dealer_contract_equivalent)}</td>
+      <td class="num">${fmt(r.trust_net)}</td>
+      <td class="num">${fmt(r.trust_contract_equivalent)}</td>
+      <td class="num">${fmtPct(r.volume_ratio_pct)}</td>
+      <td class="num">${fmtPct(r.oi_ratio_pct)}</td>
+      <td class="num">${fmt(r.large_traders_net_all)}</td>
+      <td class="num">${fmt(r.large_traders_net_near_month)}</td>
+      <td class="num">${fmtSignedPct(r.bull_bear_ratio_pct)}</td>
+      <td class="td-center">${r.trend || '—'}</td>
+    </tr>
+  `).join('');
+}
+
+function renderTaifexPcRatioChart(rows) {
+  const canvas = document.getElementById('taifex-pc-ratio-chart');
+  if (state.taifexPcRatioChart) { state.taifexPcRatioChart.destroy(); state.taifexPcRatioChart = null; }
+  if (!rows.length) return;
+  state.taifexPcRatioChart = new Chart(canvas, {
+    data: {
+      labels: rows.map(r => r.date),
+      datasets: [
+        { type: 'bar', label: '成交量比%', data: rows.map(r => r.volume_ratio_pct),
+          backgroundColor: getCssVar('--primary') + '99', borderColor: getCssVar('--primary'), borderWidth: 1, yAxisID: 'y' },
+        { type: 'line', label: '未平倉比%', data: rows.map(r => r.oi_ratio_pct),
+          borderColor: getCssVar('--pos'), borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y' },
+        { type: 'line', label: '期貨收盤', data: rows.map(r => r.futures_close),
+          borderColor: getCssVar('--text2'), borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y2' },
+      ],
+    },
+    options: {
+      ...chartOptions(),
+      scales: {
+        y:  { position: 'left',  grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), callback: v => v + '%' } },
+        y2: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: getCssVar('--text2'), stepSize: 5000 } },
+      },
+    },
+  });
+}
+
+function renderTaifexBullBearChart(rows) {
+  // 收盤 & 大戶多空比：時間序列版的 gauge 數字（同一個
+  // taifex_analysis.compute_bull_bear_ratio 公式，十大交易人期貨淨部位／
+  // 全市場未沖銷部位），不是另外用選擇權算的獨立指標。
+  const canvas = document.getElementById('taifex-option-bull-bear-chart');
+  if (state.taifexOptionBullBearChart) { state.taifexOptionBullBearChart.destroy(); state.taifexOptionBullBearChart = null; }
+  if (!rows.length) return;
+  state.taifexOptionBullBearChart = new Chart(canvas, {
+    data: {
+      labels: rows.map(r => r.date),
+      datasets: [
+        { type: 'bar', label: '多空比%(約)', data: rows.map(r => r.bull_bear_ratio_pct),
+          backgroundColor: rows.map(r => (r.bull_bear_ratio_pct == null || r.bull_bear_ratio_pct >= 0) ? getCssVar('--pos') + '99' : getCssVar('--neg') + '99'),
+          borderColor: rows.map(r => (r.bull_bear_ratio_pct == null || r.bull_bear_ratio_pct >= 0) ? getCssVar('--pos') : getCssVar('--neg')),
+          borderWidth: 1, yAxisID: 'y' },
+        { type: 'line', label: '期貨收盤', data: rows.map(r => _taifexCloseByDate[r.date] ?? null),
+          borderColor: getCssVar('--text2'), borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y2' },
+      ],
+    },
+    options: {
+      ...chartOptions(),
+      scales: {
+        y:  { position: 'left',  grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), callback: v => v + '%' } },
+        y2: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: getCssVar('--text2'), stepSize: 5000 } },
+      },
+    },
+  });
+}
+
+/* 身份別部位明細（外資／自營商／十大交易人分頁，比照原站架構） */
+
+function renderTaifexEntityFuturesChart(entity) {
+  const canvas = document.getElementById('taifex-entity-futures-chart');
+  const titleEl = document.getElementById('taifex-entity-futures-title');
+  if (state.taifexEntityFuturesChart) { state.taifexEntityFuturesChart.destroy(); state.taifexEntityFuturesChart = null; }
+
+  let rows, positions;
+  if (entity === '十大交易人') {
+    titleEl.textContent = '期貨部位（淨部位，含期貨收盤價疊圖；十大交易人沒有約當大台——TAIFEX官方的大額交易人統計不公布小台/微台版本）';
+    rows = _taifexLargeTraders;
+    positions = rows.map(r => r.net_top10);
+  } else {
+    titleEl.textContent = '期貨部位（約當大台淨部位＝大台+小台/4+微台/20，含期貨收盤價疊圖）';
+    rows = _taifexFuturesInst.filter(r => r.institutional_investors === entity);
+    positions = rows.map(r => r.contract_equivalent);
+  }
+  if (!rows.length) return;
+  const dates = rows.map(r => r.date);
+  const closes = dates.map(d => _taifexCloseByDate[d] ?? null);
+  state.taifexEntityFuturesChart = new Chart(canvas, {
+    data: {
+      labels: dates,
+      datasets: [
+        { type: 'bar', label: '淨部位(口)', data: positions,
+          backgroundColor: getCssVar('--primary') + '99', borderColor: getCssVar('--primary'), borderWidth: 1, yAxisID: 'y' },
+        { type: 'line', label: '期貨收盤', data: closes,
+          borderColor: getCssVar('--text2'), borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y2' },
+      ],
+    },
+    options: {
+      ...chartOptions(),
+      scales: {
+        y:  { position: 'left',  grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+        y2: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: getCssVar('--text2'), stepSize: 5000 } },
+      },
+    },
+  });
+}
+
+function _renderTaifexCallPutChart(canvasId, stateKey, callRows, putRows, valueFn, yLabel) {
+  const canvas = document.getElementById(canvasId);
+  canvas.classList.remove('hidden');
+  if (state[stateKey]) { state[stateKey].destroy(); state[stateKey] = null; }
+  if (!callRows.length && !putRows.length) return;
+  const dates = [...new Set([...callRows.map(r => r.date), ...putRows.map(r => r.date)])].sort();
+  const callByDate = Object.fromEntries(callRows.map(r => [r.date, valueFn(r)]));
+  const putByDate = Object.fromEntries(putRows.map(r => [r.date, valueFn(r)]));
+  state[stateKey] = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: dates,
+      datasets: [
+        { label: '買權', data: dates.map(d => callByDate[d] ?? null), borderColor: getCssVar('--primary'), borderWidth: 2, pointRadius: 0, tension: 0.2 },
+        { label: '賣權', data: dates.map(d => putByDate[d] ?? null), borderColor: getCssVar('--neg'), borderWidth: 2, pointRadius: 0, tension: 0.2 },
+      ],
+    },
+    options: chartOptions(yLabel),
+  });
+}
+
+function renderTaifexEntityOptionCharts(entity) {
+  const buyAmtCanvas = document.getElementById('taifex-entity-opt-buy-amt-chart');
+  const sellAmtCanvas = document.getElementById('taifex-entity-opt-sell-amt-chart');
+  const buyAmtEmpty = document.getElementById('taifex-entity-opt-buy-amt-empty');
+  const sellAmtEmpty = document.getElementById('taifex-entity-opt-sell-amt-empty');
+
+  if (entity === '十大交易人') {
+    const callRows = _taifexOptionLargeTraders.filter(r => r.call_put === 'call');
+    const putRows = _taifexOptionLargeTraders.filter(r => r.call_put === 'put');
+    _renderTaifexCallPutChart('taifex-entity-opt-buy-vol-chart', 'taifexEntityOptBuyVolChart', callRows, putRows, r => r.buy_top10, '買方口數(口)');
+    _renderTaifexCallPutChart('taifex-entity-opt-sell-vol-chart', 'taifexEntityOptSellVolChart', callRows, putRows, r => r.sell_top10, '賣方口數(口)');
+    if (state.taifexEntityOptBuyAmtChart) { state.taifexEntityOptBuyAmtChart.destroy(); state.taifexEntityOptBuyAmtChart = null; }
+    if (state.taifexEntityOptSellAmtChart) { state.taifexEntityOptSellAmtChart.destroy(); state.taifexEntityOptSellAmtChart = null; }
+    buyAmtCanvas.classList.add('hidden');
+    sellAmtCanvas.classList.add('hidden');
+    buyAmtEmpty.classList.remove('hidden');
+    sellAmtEmpty.classList.remove('hidden');
+  } else {
+    const rows = _taifexOptionInst.filter(r => r.institutional_investors === entity);
+    const callRows = rows.filter(r => r.call_put === 'call');
+    const putRows = rows.filter(r => r.call_put === 'put');
+    _renderTaifexCallPutChart('taifex-entity-opt-buy-vol-chart', 'taifexEntityOptBuyVolChart', callRows, putRows, r => r.long_deal_volume, '買方口數(口)');
+    _renderTaifexCallPutChart('taifex-entity-opt-sell-vol-chart', 'taifexEntityOptSellVolChart', callRows, putRows, r => r.short_deal_volume, '賣方口數(口)');
+    _renderTaifexCallPutChart('taifex-entity-opt-buy-amt-chart', 'taifexEntityOptBuyAmtChart', callRows, putRows, r => r.long_deal_amount, '買方契約金額(元)');
+    _renderTaifexCallPutChart('taifex-entity-opt-sell-amt-chart', 'taifexEntityOptSellAmtChart', callRows, putRows, r => r.short_deal_amount, '賣方契約金額(元)');
+    buyAmtEmpty.classList.add('hidden');
+    sellAmtEmpty.classList.add('hidden');
+  }
+}
+
+function renderTaifexSrChart(rows) {
+  const canvas = document.getElementById('taifex-sr-chart');
+  if (state.taifexSrChart) { state.taifexSrChart.destroy(); state.taifexSrChart = null; }
+  if (!rows || !rows.length) return;
+  state.taifexSrChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: rows.map(r => r.date),
+      datasets: [
+        { label: '期貨收盤', data: rows.map(r => r.futures_close), borderColor: getCssVar('--text2'), borderWidth: 2, pointRadius: 0, tension: 0.2 },
+        { label: '壓力(買權OI最大履約價)', data: rows.map(r => r.resistance), borderColor: getCssVar('--neg'), borderWidth: 2, pointRadius: 0, stepped: true },
+        { label: '支撐(賣權OI最大履約價)', data: rows.map(r => r.support), borderColor: getCssVar('--pos'), borderWidth: 2, pointRadius: 0, stepped: true },
+      ],
+    },
+    options: chartOptions('價位'),
+  });
+}
+
+document.getElementById('taifex-entity-tabs').addEventListener('click', function (e) {
+  const btn = e.target.closest('.bt-tab');
+  if (!btn) return;
+  _taifexEntity = btn.dataset.entity;
+  this.querySelectorAll('.bt-tab').forEach(b => b.classList.toggle('active', b === btn));
+  renderTaifexEntityFuturesChart(_taifexEntity);
+  renderTaifexEntityOptionCharts(_taifexEntity);
+});
+
+document.getElementById('taifex-sr-tabs').addEventListener('click', function (e) {
+  const btn = e.target.closest('.bt-tab');
+  if (!btn) return;
+  _taifexSrType = btn.dataset.type;
+  this.querySelectorAll('.bt-tab').forEach(b => b.classList.toggle('active', b === btn));
+  renderTaifexSrChart(_taifexSrByType[_taifexSrType]);
+});
+
+/* ── 圖表放大檢視（點擊任一張期權籌碼圖表，比照原站行為） ── */
+const _TAIFEX_CHART_STATE_KEYS = {
+  'taifex-option-bull-bear-chart': 'taifexOptionBullBearChart',
+  'taifex-pc-ratio-chart': 'taifexPcRatioChart',
+  'taifex-entity-futures-chart': 'taifexEntityFuturesChart',
+  'taifex-entity-opt-buy-vol-chart': 'taifexEntityOptBuyVolChart',
+  'taifex-entity-opt-sell-vol-chart': 'taifexEntityOptSellVolChart',
+  'taifex-entity-opt-buy-amt-chart': 'taifexEntityOptBuyAmtChart',
+  'taifex-entity-opt-sell-amt-chart': 'taifexEntityOptSellAmtChart',
+  'taifex-sr-chart': 'taifexSrChart',
+};
+
+function _taifexChartTitle(canvas) {
+  const wrap = canvas.closest('.chart-wrap');
+  const prev = wrap && wrap.previousElementSibling;
+  if (prev && prev.tagName === 'H4') {
+    const title = prev.textContent.trim();
+    return canvas.id.startsWith('taifex-entity-') ? `${_taifexEntity} － ${title}` : title;
+  }
+  const h3 = canvas.closest('.card')?.querySelector('.card-header h3');
+  return h3 ? h3.textContent.replace(/ⓘ[\s\S]*$/, '').trim() : '';
+}
+
+function openTaifexChartModal(canvas) {
+  const stateKey = _TAIFEX_CHART_STATE_KEYS[canvas.id];
+  const sourceChart = stateKey && state[stateKey];
+  if (!sourceChart) return;
+  document.getElementById('taifex-chart-modal-title').textContent = _taifexChartTitle(canvas);
+  document.getElementById('taifex-chart-modal').classList.remove('hidden');
+  if (state.taifexChartModalChart) { state.taifexChartModalChart.destroy(); state.taifexChartModalChart = null; }
+  // Wait a frame before creating the chart — right after removing "hidden"
+  // the modal hasn't been laid out yet, so Chart.js would measure the
+  // container's stale/collapsed size and render tiny instead of enlarged.
+  requestAnimationFrame(() => {
+    state.taifexChartModalChart = new Chart(document.getElementById('taifex-chart-modal-canvas'), {
+      type: sourceChart.config.type,
+      data: sourceChart.config.data,
+      options: sourceChart.config.options,
+    });
+  });
+}
+
+function closeTaifexChartModal() {
+  document.getElementById('taifex-chart-modal').classList.add('hidden');
+  if (state.taifexChartModalChart) { state.taifexChartModalChart.destroy(); state.taifexChartModalChart = null; }
+}
+
+document.getElementById('taifex-view').addEventListener('click', function (e) {
+  const canvas = e.target.closest('.taifex-chart-clickable canvas');
+  if (!canvas) return;
+  openTaifexChartModal(canvas);
+});
 
 /* ── Init ── */
 initTheme();

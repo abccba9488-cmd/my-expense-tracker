@@ -109,6 +109,13 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `announcements` | `id` | UniqueConstraint(`stock_code`, `seq_no`)；自結公告爬蟲結果，見下方「自結公告」章節 |
 | `stock_ai_analysis` | `stock_code` | 單檔股票最新一次 AI 估值分析快取，見下方「AI 個股分析」章節 |
 | `stock_notes` | `stock_code` | 管理員個人分析筆記（自由文字，不綁定任何 AI 呼叫），見下方「個股筆記」章節 |
+| `taifex_futures_daily` | `(contract_date, date)` | 台指期貨(TX)每日行情，只存日盤，FinMind，見下方「期權籌碼分析」章節 |
+| `taifex_option_daily` | `(contract_date, date, strike_price, call_put)` | 台指選擇權(TXO)每日行情，逐履約價，資料量大（180天約41萬列） |
+| `taifex_futures_institutional` | `(date, institutional_investors)` | 三大法人期貨(TX)買賣，含成交淨口數與未平倉餘額兩組欄位——後者才是「淨部位」對應的量級，見章節內的踩雷記錄 |
+| `taifex_option_institutional` | `(date, call_put, institutional_investors)` | 三大法人選擇權(TXO)買賣，含契約金額 |
+| `taifex_futures_institutional_mini` | `(date, futures_id, institutional_investors)` | 三大法人小台(MTX)/微台(TMF)期貨買賣，跟大台合併算「約當大台」用 |
+| `taifex_futures_large_traders` | `(date, contract_type)` | 十大交易人期貨(TX)未沖銷部位 |
+| `taifex_option_large_traders` | `(date, call_put, contract_type)` | 十大交易人選擇權(TXO)未沖銷部位，無契約金額欄位 |
 | `schema_migrations` | `name` | 記錄已執行的 migration，防止重複執行 |
 
 `monthly_revenue` / `quarterly_financials` 皆有 `updated_at`（`onupdate=datetime.now`），爬蟲在資料**實際變動**時才手動更新此欄位（用於 `/api/updates/today` 判斷「今日更新」清單）。
@@ -190,6 +197,8 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 達人選股（FinMind，watchdog，2026-07-16 新增） | 週一〜五 17:00 起每 30 分鐘檢查一次，若當天還沒有成功的 `finmind_institutional` log 就補跑整個 `_finmind_job()`（`_finmind_watchdog`，啟動時也會立即跑一次），跟 `_daily_price_watchdog` 同一個模式，補的是「程序在 17:00 當下沒在跑」這種情況 |
 | 達人選股（financial_extra） | 與官方季報同月份、每天 23:30（比官方季報 job 晚 30 分） |
 | 券商分點進出（2026-07-22 新增） | 週一〜五 17:30（達人選股 FinMind job 之後），只對目前有人自選的股票抓當天，見「券商分點進出」章節 |
+| 期權籌碼（期貨/選擇權每日行情＋十大交易人，2026-08-20 新增） | 週一〜五 17:00（`_taifex_job`，跟達人選股 FinMind 同批次，資料約16:30更新），見「期權籌碼分析」章節 |
+| 期權籌碼（三大法人期貨/選擇權買賣，含小台/微台） | 週一〜五 18:30（`_taifex_institutional_job`，獨立排程晚一點跑，因為這幾個 FinMind dataset 約16:00/18:00才更新） |
 
 **注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
@@ -203,7 +212,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 **本機 `app.run()` 沒開 `threaded=True` 曾經導致「網站看起來當機」（2026-08-05 修復）**：Werkzeug 開發伺服器預設單執行緒，同一時間只能處理一個 HTTP 請求。若背景同時有 `quarterly`（逐檔迴圈）+ `finmind_data`（5個 FinMind 任務 + `compute_expert_scores()` 這種吃 CPU 的純 Python 全市場計分）在跑，會把僅有的請求處理能力整個佔滿，使用者端首頁／`/api/market/summary` 會直接卡到逾時，看起來像伺服器當機，但其實 process 沒死、資料也沒事，只是排隊排不到。已在 `app.py` 的 `app.run(...)` 加上 `threaded=True` 解決；雲端 gunicorn（`--workers 1 --threads 4`）本來就沒有這個問題，只有本機直接執行才會踩到。
 
-手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `broker_trades` / `director_holdings` / `expert_scores`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
+手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `broker_trades` / `director_holdings` / `expert_scores` / `taifex_data`（等同依序呼叫 `_taifex_job()` + `_taifex_institutional_job()`）。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
 
 ## REST API
 
@@ -227,6 +236,16 @@ POST /api/stocks/<code>/institutional-trades/refresh  手動補齊近5個曆日�
 GET  /api/stocks/<code>/chip-peak  籌碼峰 POC/VAH/VAL + poc_history（POC遷移軌跡）（?lookback=120&half_life=30），純運算不落地存表，見「籌碼峰」章節
 GET  /api/stocks/<code>/broker-trades  券商分點單日買賣超近N天（?days=90），見「券商分點進出」章節
 POST /api/stocks/<code>/broker-trades/fetch  個股詳情頁「查詢」按鈕觸發（需登入），同步執行，見「券商分點進出」章節
+
+以下 7 個皆僅管理員可用（`_is_admin()` 擋 403，非只是前端隱藏），見「期權籌碼分析」章節：
+GET  /api/taifex/summary                    今日摘要（期貨收盤/漲跌、PC Ratio、三大法人期貨淨部位+約當大台、十大交易人淨部位、大戶多空比）
+GET  /api/taifex/futures-institutional      三大法人期貨買賣近N天（?days=90），依機構別分開，含約當大台
+GET  /api/taifex/option-institutional       三大法人選擇權買賣近N天，依買權/賣權+機構別分開，含契約金額
+GET  /api/taifex/pc-ratio                   Put/Call Ratio 時間序列，附期貨收盤價供疊圖
+GET  /api/taifex/large-traders              十大交易人期貨未沖銷部位近N天（?contract_type=all預設）
+GET  /api/taifex/option-large-traders       十大交易人選擇權未沖銷部位近N天，依買權/賣權分開
+GET  /api/taifex/support-resistance         選擇權賣方支撐/壓力，一次回傳全部4種到期別（週三/週五/月/下月）
+GET  /api/taifex/daily-detail               上述資料合併成逐日一列的明細表格
 GET  /api/experts                  8 套達人選股規則清單（標籤、通過檔數/總檔數）
 GET  /api/experts/<key>            該規則下依分數排序的完整清單（含每檔 breakdown）
 GET  /api/stats                    DB 統計（stocks/prices/revenues/quarterly 筆數）
@@ -474,9 +493,10 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 **前端加了簡易分頁（2026-08-17），不是效能問題、是「一次看2500列太多」的體驗問題**：`_annData` 仍然是抓回來的全部歷史資料（排序`sortAnnTable()`照樣對整包陣列操作），只是 `renderAnnTable()` 改成只把目前頁次的切片（`_ANN_PAGE_SIZE = 50` 筆）塞進 `#ann-tbody`，`#ann-pager` 顯示「‹上頁／頁碼／下頁›」（`_annPagerHtml()`，超出目前頁±2的頁碼用省略號縮起來，頭尾頁固定顯示）。**關鍵細節**：切片後每一列的 `data-idx` 仍然是該筆資料在完整 `_annData` 陣列裡的**全域索引**（`pageRows.map((a, localIdx) => renderAnnRow(a, start + localIdx))`），不是分頁內的區域索引——這樣複製提示詞/AI評級下拉選單/加入自選等既有按鈕邏輯（都是用 `_annData[i]` 取資料）完全不用改，換頁後每個按鈕還是準確對應到正確的那一筆。切換排序欄位或重新載入資料都會把 `_annPage` 重置回 1。
 
-**前端（`#ann-view`）：** 純表格（不用 DataTables），14 欄：公告日期／代號／名稱／公告主旨／公告時股價／單月EPS／去年同月EPS／月EPS年增率／轉虧為盈／預估全年EPS／預估本益比／**AI評級**／AI分析／**自選股**。轉虧為盈欄位為真時顯示 🔥；預估本益比 `<= 0` 時前端顯示「—」（負本益比無意義，但後端仍照算存入 DB，不隱藏原始資料）。
+**前端（`#ann-view`）：** 純表格（不用 DataTables），15 欄：公告日期／**近90天公告**／代號／名稱／公告主旨／公告時股價／單月EPS／去年同月EPS／月EPS年增率／轉虧為盈／預估全年EPS／預估本益比／**AI評級**／AI分析／**自選股**。轉虧為盈欄位為真時顯示 🔥；預估本益比 `<= 0` 時前端顯示「—」（負本益比無意義，但後端仍照算存入 DB，不隱藏原始資料）。
 
 - **公告日期欄**：顯示 `announce_date` + `announce_time`（取 `HH:MM`，捨去秒數），也就是 MOPS 網站上的「發言日期」+「發言時間」，不是爬蟲抓取/寫入的時間。API 排序為 `ORDER BY announce_date DESC, announce_time DESC`。
+- **近90天公告欄（2026-08-21 新增，同日從60天調整為90天）**：同一檔股票可能因為大幅漲跌，在一兩個月內被公告不只一次，但這種重複往往被日期排序隔開的大量其他股票公告蓋過，肉眼很難發現。**沒有改變排序**（會犧牲「看今天新公告」的直覺，故意保留 date-first）——改成後端 `_compute_announcement_repeat_counts()`（`app.py`）逐股票分組、依日期排序後用雙指標滑動視窗，算出「以這筆公告日期為終點、往前推 `_ANNOUNCEMENT_REPEAT_WINDOW_DAYS`（90天，`app.py` 模組層級常數，改天數只需要改這一個值）的區間內，同一檔股票（含這一筆自己）總共公告了幾次」，存進回傳 JSON 的 `repeat_count` 欄位。前端 `repeat_count === 1` 顯示「首次」，`>= 2` 顯示「🔁 第N次」（`renderAnnRow()`），欄位本身也可點擊排序（`_ANN_SORT_GETTERS.repeat`）方便把重複公告最多的股票排到最前面看。
 - **公告主旨**：表格內只顯示前 10 字（`_annTruncate()`），點擊開 `#ann-modal`（同頁彈出視窗，不開新分頁/新頁面）顯示完整主旨與內容（`a.content`，無內容時顯示「（無詳細內容）」）。全部公告資料先一次性存進 `_annData`（模組層級陣列），modal/AI按鈕都用 `data-idx` 對應陣列索引去查，不用再打 API。
 - **AI評級欄（2026-08-16 改為人工免費版，取代原本自動呼叫 OpenRouter 的付費流程）**：每列一個 📋 按鈕 + 一個下拉選單。點 📋 呼叫 `copyAnnRatingPrompt()`——組出跟原本 `_AI_SYSTEM_PROMPT`（已從 `crawler.py` 刪除）同一套評級標準的提示詞（已知數據直接取 `_annData` 裡已經算好的單月EPS/去年同月EPS/年增率/是否轉盈/預估全年EPS/預估本益比 + 公告全文），複製到剪貼簿並開新分頁到 ChatGPT（`chat.openai.com`），使用者自行貼上、看完回覆後回來在下拉選單（`.ann-rating-select`，選項：🔴強烈買進／🟠建議買進／🟡一般觀望／🟢需要小心／—未評級）手動選一個，`change` 事件呼叫 `setAnnRating()` → `PUT /api/announcements/<id>/rating`（`app.py`，僅限管理員 `_is_admin()`）直接 UPDATE 該筆 `ai_rating`。`ai_analysis` 欄位不再由這個流程寫入，維持 NULL（`#ann-modal` 裡原本顯示 `ai_analysis` 全文的區塊仍保留程式碼，只是現在通常不會有內容可顯示）。`_annRatingDot()` 這個依字串內容轉 emoji 的函式還留著，`#ann-modal` 開啟時仍用它顯示已選定的評級。
 - **AI分析欄**（跟上面的 AI評級欄是兩個獨立功能，刻意並存）：`<a class="btn btn-sm ann-ai-link" href="https://gemini.google.com" target="_blank">`，點擊時 `copyAnnForAI()` 複製一段完整的估值分析提示詞到剪貼簿，同時連結本身會在新分頁開啟 Gemini（Gemini 網頁版不支援 URL 帶入提示詞，使用者需自行貼上），與既有 `copyStarForAI()`/`copyWlForAI()` 的「複製給AI」模式一致。提示詞包含：固定的分析師人設與分析步驟（同業本益比錨點、外資EPS預估、便宜/合理/昂貴價定價）+ 動態插入的股票代碼/名稱 + **目前股價**（從 `state.allData` 依 `stock_code` 查找，即本站資料庫的最新收盤價與資料日期，不是公告當時的價格，也不靠 AI 自己搜尋）+ 公告全文（無全文則用主旨）。要改提示詞文字本身，直接編輯 `copyAnnForAI()` 裡的模板字串。
@@ -641,8 +661,36 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 **前端**（個股詳情頁「股價走勢」卡片）：
 - 4 個數值方塊（`renderChipPeak()`）：POC／VAL–VAH／現價距POC（正負變色）／主峰集中度，各自用原生 `title` 屬性做 hover 說明（不用額外的 tooltip 元件庫，滑鼠移過去瀏覽器原生顯示，維持畫面簡潔）
 - 股價圖（`renderPriceChart()`）疊加 POC/VAH/VAL 三條參考線，用 `state.chipPeak` 暫存，天數選擇器（30/90/120/180天...）切換不影響這三條線的計算窗口（籌碼峰固定用自己的 `lookback`，跟圖表顯示天數是兩件事）。**三條線都是會動的階梯線**：`_chipPeakFieldSeries(labels, poc_history, field)`（`field` 傳 `'poc'`/`'vah'`/`'val'`）把較稀疏的取樣點（每5個交易日一筆）對應到股價圖完整的日期軸上，兩個取樣點之間用「最近一次算出的值」往後補滿（`stepped: true`，不是內插——重算瞬間才跳一階），取樣範圍以前的日期留 null（`spanGaps: false`，不畫假線）。VAH 用 `fill: '+1'` 往下一個 dataset（VAL）填半透明色，變成一個會隨時間變寬/變窄的「價值區間帶」，而不是兩條容易看混的交叉線；VAH/VAL 顏色統一用 `--text2` 疊透明度、跟 POC 的實心橘線區分主副。若 API 沒帶 `poc_history`（理論上不會發生，防禦性寫法）三條線都退回舊版單一水平線畫法。
-- 「股價走勢」標題旁的 ⓘ 圖示（`.help-icon`）放完整使用說明（定義＋實戰判讀＋限制），比照數值方塊的做法用原生 `title` 屬性、`&#10;` 換行，多段落內容不會讓卡片本身看起來很複雜
+- 「股價走勢」標題旁的 ⓘ 圖示（`.help-icon`）放完整使用說明（定義＋實戰判讀＋限制）。**2026-08-20 起改用自訂 `.help-popover`**，不再是原生 `title` 屬性——原生 tooltip 字體大小無法用 CSS 控制（瀏覽器/作業系統自己畫的），使用者反應看不清楚後改成 CSS 自訂彈出框（14px、hover 顯示，`static/css/style.css` 的 `.help-popover`），並在 `app.js` 加了一個全域 click 監聽器讓觸控裝置也能點擊 ⓘ 開關（桌面版仍可 hover）。之後新增任何 ⓘ 說明都應該比照這個新寫法，不要再用 `title` 屬性
 
 **重要 gotcha：Flask `debug=off` 時 Jinja 不會自動重新讀取模板檔**——改 `templates/index.html` 後若只是重新整理瀏覽器不會看到變化，必須重啟 `python app.py`；改 `static/js/app.js`/`static/css/style.css` 則不需要重啟，`inject_asset_version()` 的 mtime 版號機制（見上方「PWA」章節）會自動讓瀏覽器抓到新版本。這是本次開發過程中反覆踩到的點，特別記錄。
 
 **天數選擇器新增 120天**（`templates/index.html` 的 `.days-selector`）：原本只有 30/90/180天/1年/3年/5年/全部，因為籌碼峰預設 `lookback` 是 120 日，使用者需要對應天數的股價圖選項才能肉眼比對，故插在 90天/180天之間。
+
+## 期權籌碼分析（`crawler_taifex.py`/`taifex_analysis.py`，2026-08-20 新增，**admin-only**）
+
+台指期貨/選擇權籌碼分析，仿照 `aistock.brain168.com/taifex` 這個第三方分析網站的內容重建（外資/自營商/十大交易人部位、PC Ratio、支撐壓力、大戶多空比），**僅管理員可見**——實驗性功能，公式/資料完整度都還在驗證階段，不對一般使用者開放：前端 nav 分頁與整個 `#taifex-view` 都掛 `admin-only hidden`，後端 `/api/taifex/*` 全部 7 個 GET 端點也各自擋 `_is_admin()` 回 403（不是只藏畫面，直接打 API 也進不去）。
+
+**資料來源決定用 FinMind、不爬期交所官網**：期交所有免金鑰的 OpenAPI，但只回傳「最新一天」、沒有日期參數，回補歷史還要處理另一套 HTML 表單+jQuery 日期選擇器的 POST 邏輯。FinMind 的對應 dataset（`TaiwanFuturesDaily`/`TaiwanOptionDaily`/`TaiwanFuturesInstitutionalInvestors`/`TaiwanOptionInstitutionalInvestors`/`TaiwanFuturesOpenInterestLargeTraders`/`TaiwanOptionOpenInterestLargeTraders`）能沿用專案既有的 `crawl_finmind_*` 寫法慣例，歷史也回得更早（三大法人/十大交易人 2018-06-05 起，期貨/選擇權行情最早到 1998/2001）。
+
+**約當大台**（外資/自營商/投信 三大法人專屬，十大交易人沒有）：台指期貨(TX)之外，另抓小台(MTX)/微台(TMF)，存進獨立的 `taifex_futures_institutional_mini` 表（`crawl_finmind_taifex_futures_institutional_mini()`）。換算比例來自契約規格（TX 200元/點、MTX 50元/點、TMF 10元/點 → 1 TX = 4 MTX = 20 TMF），`taifex_analysis.compute_contract_equivalent()` 合併三者的未平倉淨額算出。**十大交易人沒有這個換算**——不是本站沒接，是 TAIFEX 官方的大額交易人未沖銷部位統計本來就只公布大台，FinMind `TaiwanFuturesOpenInterestLargeTraders` 對 `data_id=MTX/TMF` 已實測回傳 0 筆確認過。
+
+**重要踩雷：「淨部位」要用未平倉餘額，不是今日成交淨口數**（2026-08-20 發現+修復）：一開始 `foreign_net` 等欄位都用 `long_deal_volume - short_deal_volume`（當天的交易流量），數字很小（個位數百）；比對原網站「外資期貨」欄位（-82,693 這種量級）才發現對不上，改用 `long_open_interest_balance_volume - short_open_interest_balance_volume`（未平倉部位淨額，即目前持有的部位總量）之後，數字幾乎跟原站精確吻合（實測 2026-08-20：本站外資期貨淨部位 -82,423 / 約當大台 -82,694，對照原站外資期貨 -82,693 / 外資約當大台 -82,665）。這兩組欄位（deal_volume=流量 vs open_interest_balance=存量）語意完全不同，`TaifexFuturesInstitutional`/`TaifexFuturesInstitutionalMini` 兩張表都同時存了，取用時務必確認拿對的那組——`api_taifex_summary()`/`api_taifex_futures_institutional()`/`api_taifex_daily_detail()` 三處都已修正為未平倉餘額版本。
+
+**大戶多空比**（`taifex_analysis.compute_bull_bear_ratio()`）：近似公式，原站確切算法未公開——十大交易人期貨淨部位（買方-賣方未沖銷）／全市場未沖銷部位 × 100%。**Gauge 的座標軸刻意不是原站的 ±70%**：查過本站實際歷史（152個交易日，2026-01-02~08-20）範圍只有 -11.9%~+9.0%，用 ±70% 會把整個波動範圍壓縮成表尺的一小塊；改用 ±15%（留一點headroom，且是整數），同一個數字時間序列版的「收盤 & 大戶多空比」圖表也用同一組資料（不是另外用選擇權算的獨立指標——這點原本判斷錯過一次，`大戶「期權」多空比` 這個命名一度誤導成要另外拿選擇權十大交易人資料湊一個新公式，使用者發現形狀不對後改回沿用期貨版同一個 `bull_bear_ratio_pct`）。
+
+**效能踩雷：支撐壓力 API 一度讓整頁卡死**（2026-08-20）：`taifex_option_daily` 資料量大（180天約41萬列），`/api/taifex/support-resistance` 原本用 `?type=` 參數讓前端 4 種到期別（週三/週五/月/下月）各自呼叫一次，等於同一份資料被完整掃描 4 遍，SQLAlchemy ORM 物件化的開銷在這個量級下慢到讓 `Promise.all` 遲遲不 resolve、整頁沒有任何資料渲染。修法：改成一次查詢、用 Core 風格的欄位 tuple（不建構完整 ORM 物件）回傳全部 4 種到期別，前端也從 4 次 fetch 合併成 1 次。
+
+**前端**（`static/js/app.js` 的 `期權籌碼分析` 區塊）：
+- Gauge：Chart.js `doughnut` 做半圓表（`circumference:180, rotation:-90, cutout:'75%'`），中間文字用 HTML 疊層（Chart.js 原生不支援置中文字），顏色跟著正負變化（`--pos`/`--neg`）
+- **外資／自營商／十大交易人 三分頁架構**（`#taifex-entity-tabs`）比照原站，每個分頁下重繪同一組 canvas（期貨部位/選擇權買方口數/賣方口數/買方契約金額/賣方契約金額），不是每個身份各自一整組固定 DOM——十大交易人分頁沒有契約金額資料時顯示說明文字而非硬湊假圖
+- **`_taifexLoadSeq` 序號防護競態**：`loadTaifexView()` 每次呼叫遞增序號，await 完成後比對序號是否還是最新——使用者快速切換掉這個分頁又切回來時，兩次重疊的載入不會互相覆蓋共用的模組變數（`_taifexFuturesInst`/`_taifexOptionInst` 等），只有最新一次呼叫允許渲染
+- **圖表點擊放大**（`#taifex-chart-modal`，比照原站行為）：點任一張圖（`.taifex-chart-clickable` 底下的 canvas，gauge 除外）用事件委派抓 `#taifex-view` 上的 click，讀原圖表的 `chart.config.{type,data,options}` 在放大版 canvas 重建一個新 Chart 實例。**Modal 剛從 `hidden` 移除的當下，容器還沒排版完成**，Chart.js 若立即量測容器尺寸會抓到塌陷的舊值，圖表會縮得很小——用 `requestAnimationFrame` 延後一個 frame 再建立圖表解決。放大版寬度用 `.modal-box.taifex-chart-modal-box`（需要兩個 class 一起選才能贏過 `.modal-box` 本身較晚定義的 `width:360px`，單獨 `.taifex-chart-modal-box` 選擇器特異度打平、CSS cascade 順序會輸）
+- 期貨收盤價的右側 Y 軸統一 `stepSize: 5000`，比照原站刻度（PC Ratio / 收盤&大戶多空比 / 身份別期貨部位 三張有價格疊圖的圖表都套用）
+
+**已知限制**（比照專案一貫的誠實揭露慣例）：
+- 「Call約當」「Put約當」（原站每日明細表格的欄位）需要原站未公開的專屬公式，本站沒有對應資料，不收錄
+- 大戶多空比、支撐/壓力皆為本站自建的近似邏輯，不是官方指標
+- 十大交易人系列 dataset 需要 FinMind Sponsor 等級（999元/月方案），本站既有訂閱已涵蓋
+
+歷史回補：`python backfill_finmind.py --taifex --from-year 2018`（三大法人/十大交易人系列會自動把 `from_year` 夾到 2018，因為 FinMind 更早沒有資料；期貨/選擇權每日行情可以填更早的年份）。

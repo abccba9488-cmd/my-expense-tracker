@@ -144,9 +144,24 @@ main { padding-top: 52px; min-height: 100vh; }
 }
 .card h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
 .help-icon {
-  display: inline-block; cursor: help; color: var(--text2);
+  position: relative; display: inline-block; cursor: help; color: var(--text2);
   font-size: 13px; font-weight: 400; margin-left: 2px;
 }
+.help-popover {
+  display: none; position: absolute; top: 100%; left: 0; margin-top: 8px;
+  width: 340px; max-width: 88vw; padding: 14px 16px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: var(--card-shadow); z-index: 50;
+  font-size: 14px; line-height: 1.7; color: var(--text); font-weight: 400;
+  text-align: left; cursor: auto;
+}
+.help-popover strong { display: block; margin: 10px 0 4px; color: var(--primary); font-size: 14px; }
+.help-popover strong:first-child { margin-top: 0; }
+.help-popover p { margin-bottom: 6px; }
+.help-popover p:last-child { margin-bottom: 0; }
+.help-icon:hover .help-popover,
+.help-icon:focus .help-popover,
+.help-icon.show .help-popover { display: block; }
 .stock-ai-body { font-size: 13px; color: var(--text2); display: flex; flex-direction: column; gap: 10px; }
 .stock-ai-targets { font-size: 13px; color: var(--text); font-weight: 600; }
 .stock-ai-updated { font-size: 12px; color: var(--text2); }
@@ -266,6 +281,46 @@ main { padding-top: 52px; min-height: 100vh; }
 }
 .fund-stat-label { font-size: 12px; color: var(--text2); margin-bottom: 4px; }
 .fund-stat-value { font-size: 17px; font-weight: 700; }
+
+/* ── Taifex summary: gauge + label/value table ── */
+.taifex-summary-layout { display: flex; gap: 16px; flex-wrap: wrap; }
+.taifex-gauge-card {
+  flex: 0 0 220px;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; text-align: center;
+}
+.taifex-gauge-title { font-size: 13px; color: var(--text2); margin-bottom: 4px; }
+.taifex-gauge-wrap { position: relative; height: 130px; margin-top: 4px; }
+.taifex-gauge-center {
+  position: absolute; left: 50%; top: 68%; transform: translate(-50%, -50%);
+  text-align: center; pointer-events: none; width: 100%;
+}
+.taifex-gauge-value { font-size: 26px; font-weight: 700; }
+.taifex-gauge-label { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.taifex-gauge-min, .taifex-gauge-max {
+  position: absolute; bottom: 2px; font-size: 11px; color: var(--text2);
+}
+.taifex-gauge-min { left: 4px; }
+.taifex-gauge-max { right: 4px; }
+.taifex-gauge-updated { font-size: 11px; color: var(--text2); margin-top: 8px; }
+
+.taifex-summary-table {
+  flex: 1 1 420px;
+  display: grid; grid-template-columns: repeat(3, auto 1fr); gap: 6px 16px;
+  align-content: start; align-items: center; font-size: 13px;
+}
+.taifex-summary-table .label { color: var(--text2); white-space: nowrap; }
+.taifex-summary-table .value {
+  text-align: right; font-weight: 600; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .taifex-summary-table { grid-template-columns: auto 1fr; }
+  .taifex-gauge-card { flex: 1 1 100%; }
+}
+.taifex-chart-clickable { cursor: zoom-in; }
+.modal-box.taifex-chart-modal-box { width: 90vw; max-width: 1100px; }
+.taifex-chart-modal-wrap { height: 60vh; min-height: 320px; }
 .fund-subtitle { font-size: 13px; font-weight: 600; color: var(--text2); margin: 18px 0 8px; }
 .fund-subtitle:first-of-type { margin-top: 0; }
 

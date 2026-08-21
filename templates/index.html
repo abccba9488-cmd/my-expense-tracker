@@ -132,6 +132,7 @@
       <button class="page-tab" data-tab="watchlist">⭐ 自選股</button>
       <button class="page-tab" data-tab="ann">📰 自結公告</button>
       <button class="page-tab" data-tab="expert">🎯 達人選股</button>
+      <button class="page-tab admin-only hidden" data-tab="taifex">📈 期權籌碼</button>
     </div>
   </div>
 
@@ -296,6 +297,7 @@
             <thead>
               <tr>
                 <th class="ann-sortable" data-sort="date">公告日期<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="repeat">近90天公告<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="code">代號<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="name">名稱<span class="ann-sort-arrow"></span></th>
                 <th>公告主旨</th>
@@ -362,6 +364,122 @@
             </thead>
             <tbody id="expert-tbody"></tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 期權籌碼分析（僅管理員可見，實驗性功能） -->
+  <div id="taifex-view" class="view admin-only hidden">
+    <div class="container">
+      <div class="card">
+        <div class="card-header">
+          <h3>📈 期權籌碼分析 <span class="help-icon" tabindex="0">ⓘ
+            <div class="help-popover">
+              <strong>【資料來源與涵蓋範圍】</strong>
+              <p>台指期貨（TX）／台指選擇權（TXO），來源 FinMind（期交所官方申報資料）。三大法人＝自營商／投信／外資；十大交易人為全市場前五大/十大未沖銷部位。</p>
+              <strong>【怎麼看】</strong>
+              <p>PC Ratio：賣權/買權的成交量比、未平倉量比，數值愈高代表賣權相對愈熱絡（市場氣氛偏保守/避險）。</p>
+              <p>大戶多空比：自訂近似公式（十大交易人淨部位／全市場未沖銷部位），非官方定義，僅供參考方向。</p>
+              <p>賣方支撐/壓力：取當時該到期別（週三/週五/月/下月）未平倉量最大的買權履約價當壓力、賣權履約價當支撐——賣方（尤其是造市/法人）在該價位承接大量部位，統計上較常成為股價的天花板/地板。</p>
+              <strong>【重要限制】</strong>
+              <p>大戶多空比、支撐/壓力皆為本站自建的近似邏輯，不是原始資料直接提供的官方指標，僅供參考，不構成投資建議。</p>
+            </div>
+          </span></h3>
+          <span class="stats-badge" id="taifex-date"></span>
+        </div>
+        <div class="taifex-summary-layout">
+          <div class="taifex-gauge-card">
+            <div class="taifex-gauge-title">大戶多空比</div>
+            <div class="taifex-gauge-wrap">
+              <canvas id="taifex-gauge-chart"></canvas>
+              <div class="taifex-gauge-center">
+                <div class="taifex-gauge-value" id="taifex-gauge-value">—</div>
+                <div class="taifex-gauge-label" id="taifex-gauge-trend">—</div>
+              </div>
+              <div class="taifex-gauge-min">-15%</div>
+              <div class="taifex-gauge-max">15%</div>
+            </div>
+            <div class="taifex-gauge-updated" id="taifex-gauge-updated"></div>
+          </div>
+          <div class="taifex-summary-table" id="taifex-summary-table"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>收盤 & 大戶多空比 <span class="help-icon" tabindex="0">ⓘ
+          <div class="help-popover">
+            <p>跟最上面的「大戶多空比」儀表是同一個數字（十大交易人期貨淨部位／全市場未沖銷部位，近似公式，非官方定義），這裡只是畫成時間序列，方便跟期貨收盤價一起看歷史走勢。</p>
+          </div>
+        </span></h3></div>
+        <div class="chart-wrap taifex-chart-clickable"><canvas id="taifex-option-bull-bear-chart"></canvas></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>Put/Call Ratio（含期貨收盤價疊圖）</h3></div>
+        <div class="chart-wrap taifex-chart-clickable"><canvas id="taifex-pc-ratio-chart"></canvas></div>
+      </div>
+
+      <!-- 外資／自營商／十大交易人 各自的部位走勢，比照原站分頁架構 -->
+      <div class="card">
+        <div class="card-header"><h3>身份別部位明細</h3></div>
+        <div class="filter-group" id="taifex-entity-tabs">
+          <button class="bt-tab active" data-entity="外資">外資</button>
+          <button class="bt-tab" data-entity="自營商">自營商</button>
+          <button class="bt-tab" data-entity="十大交易人">十大交易人</button>
+        </div>
+
+        <h4 class="fund-subtitle" id="taifex-entity-futures-title">期貨部位（約當大台淨部位，含期貨收盤價疊圖）</h4>
+        <div class="chart-wrap taifex-chart-clickable"><canvas id="taifex-entity-futures-chart"></canvas></div>
+
+        <h4 class="fund-subtitle">選擇權買方口數（買權／賣權）</h4>
+        <div class="chart-wrap taifex-chart-clickable"><canvas id="taifex-entity-opt-buy-vol-chart"></canvas></div>
+
+        <h4 class="fund-subtitle">選擇權賣方口數（買權／賣權）</h4>
+        <div class="chart-wrap taifex-chart-clickable"><canvas id="taifex-entity-opt-sell-vol-chart"></canvas></div>
+
+        <h4 class="fund-subtitle">選擇權買方契約金額（買權／賣權）</h4>
+        <div class="chart-wrap taifex-chart-clickable"><canvas id="taifex-entity-opt-buy-amt-chart"></canvas></div>
+        <div id="taifex-entity-opt-buy-amt-empty" class="stock-ai-body hidden">十大交易人資料沒有契約金額欄位（FinMind 該 dataset 只有口數/百分比）</div>
+
+        <h4 class="fund-subtitle">選擇權賣方契約金額（買權／賣權）</h4>
+        <div class="chart-wrap taifex-chart-clickable"><canvas id="taifex-entity-opt-sell-amt-chart"></canvas></div>
+        <div id="taifex-entity-opt-sell-amt-empty" class="stock-ai-body hidden">十大交易人資料沒有契約金額欄位（FinMind 該 dataset 只有口數/百分比）</div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>賣方支撐/壓力</h3></div>
+        <div class="filter-group" id="taifex-sr-tabs">
+          <button class="bt-tab active" data-type="week3">週三</button>
+          <button class="bt-tab" data-type="week5">週五</button>
+          <button class="bt-tab" data-type="month">月</button>
+          <button class="bt-tab" data-type="next_month">下月</button>
+        </div>
+        <div class="chart-wrap taifex-chart-clickable"><canvas id="taifex-sr-chart"></canvas></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>🗓️ 每日明細</h3>
+          <button class="btn btn-sm" id="taifex-detail-toggle-btn" onclick="toggleTaifexDetail()">展開/收合</button>
+        </div>
+        <div id="taifex-detail-wrap" class="hidden">
+          <div class="ann-table-wrap">
+            <table class="ann-table" id="taifex-detail-table">
+              <thead>
+                <tr>
+                  <th>日期</th><th class="num">收盤</th><th class="num">漲跌%</th>
+                  <th class="num">外資淨部位</th><th class="num">外資約當大台</th>
+                  <th class="num">自營商淨部位</th><th class="num">自營商約當大台</th>
+                  <th class="num">投信淨部位</th><th class="num">投信約當大台</th>
+                  <th class="num">PC成交量%</th><th class="num">PC未平倉%</th>
+                  <th class="num">十大淨部位(全部)</th><th class="num">十大淨部位(近月)</th>
+                  <th class="num">多空比%(約)</th><th class="td-center">趨勢</th>
+                </tr>
+              </thead>
+              <tbody id="taifex-detail-tbody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
@@ -491,9 +609,26 @@
       <!-- 股價圖 -->
       <div class="card">
         <div class="card-header">
-          <h3>股價走勢 <span class="help-icon" title="【籌碼峰怎麼看】&#10;POC：近120天經時間衰減＋法人品質加權後成交量最集中的價位，市場主要成本區&#10;VAL–VAH：涵蓋約70%加權成交量的價格區間，範圍外交易相對稀少&#10;現價距POC：正值＝現價在成本區之上，負值＝在之下&#10;主峰集中度：越高代表籌碼越集中在單一價位，訊號越明確；越低代表籌碼分散，參考價值較弱&#10;&#10;【實戰判讀】&#10;跌到VAL附近：理論上有支撐，但要看基本面——營收獲利沒惡化才是真支撐，若基本面走壞則只是套牢區&#10;站上VAH：若主峰集中度高、POC同步上移，較像健康推升；若集中度低、POC停滯，較像量縮假突破&#10;現價距POC過大（不論正負）：正值太大注意追高風險，負值太大注意趨勢是否已轉弱&#10;&#10;【重要限制】&#10;未還原除權息股價估算，僅接了三大法人資料，尚無融資融券/當沖/分點方向性&#10;籌碼峰只回答「籌碼堆在哪裡」，不能取代基本面判斷、不能替代買進理由&#10;資料不足30個交易日的新股不會顯示">ⓘ</span></h3>
+          <h3>股價走勢 <span class="help-icon" tabindex="0">ⓘ
+            <div class="help-popover">
+              <strong>【籌碼峰怎麼看】</strong>
+              <p>POC：近120天經時間衰減＋法人品質加權後成交量最集中的價位，市場主要成本區</p>
+              <p>VAL–VAH：涵蓋約70%加權成交量的價格區間，範圍外交易相對稀少。統計窗固定近120個交易日，但採半衰期30個交易日的指數衰減加權，愈接近今天權重愈高，30個交易日前的量權重已衰減一半，故實質影響力集中在最近約30～60個交易日，120天窗口邊緣的量貢獻已很小</p>
+              <p>現價距POC：正值＝現價在成本區之上，負值＝在之下</p>
+              <p>主峰集中度：越高代表籌碼越集中在單一價位，訊號越明確；越低代表籌碼分散，參考價值較弱</p>
+              <strong>【實戰判讀】</strong>
+              <p>跌到VAL附近：理論上有支撐，但要看基本面——營收獲利沒惡化才是真支撐，若基本面走壞則只是套牢區</p>
+              <p>站上VAH：若主峰集中度高、POC同步上移，較像健康推升；若集中度低、POC停滯，較像量縮假突破</p>
+              <p>現價距POC過大（不論正負）：正值太大注意追高風險，負值太大注意趨勢是否已轉弱</p>
+              <strong>【重要限制】</strong>
+              <p>未還原除權息股價估算，僅接了三大法人資料，尚無融資融券/當沖/分點方向性</p>
+              <p>籌碼峰只回答「籌碼堆在哪裡」，不能取代基本面判斷、不能替代買進理由</p>
+              <p>資料不足30個交易日的新股不會顯示</p>
+            </div>
+          </span></h3>
           <div class="days-selector">
             <button class="days-btn active" data-days="30">30天</button>
+            <button class="days-btn" data-days="60">60天</button>
             <button class="days-btn" data-days="90">90天</button>
             <button class="days-btn" data-days="120">120天</button>
             <button class="days-btn" data-days="180">180天</button>
@@ -798,6 +933,19 @@
     </div>
     <div class="modal-body">
       <div id="wl-pick-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 期權籌碼圖表放大檢視 -->
+<div id="taifex-chart-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeTaifexChartModal()">
+  <div class="modal-box taifex-chart-modal-box">
+    <div class="modal-header">
+      <span id="taifex-chart-modal-title" style="padding:14px 22px;font-weight:600;"></span>
+      <button class="modal-close" onclick="closeTaifexChartModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="chart-wrap taifex-chart-modal-wrap"><canvas id="taifex-chart-modal-canvas"></canvas></div>
     </div>
   </div>
 </div>
