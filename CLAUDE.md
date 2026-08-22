@@ -39,6 +39,8 @@ C:\Users\user\anaconda3\Scripts\pip.exe install -r requirements.txt
 
 雙擊 `ngrok.bat` 即可取得公開 `https://xxxx.ngrok-free.app` 網址，免費版每次重啟網址會變。
 
+`cloudflared.bat` 是替代方案（Cloudflare Quick Tunnel，`cloudflared.exe`，同樣不在版控內、`.gitignore` 排除），免帳號、無流量限制，網址 `https://xxxx.trycloudflare.com` 同樣每次重啟會變；兩者擇一即可，不需要同時開。
+
 **安全限制**：`POST /api/crawler/run/<task>` 僅允許 `127.0.0.1` / `::1` 呼叫，或是已用管理員帳號登入的 session；其他外部連線會收到 403。
 
 ## 架構
