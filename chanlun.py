@@ -192,25 +192,40 @@ def _find_divergences_and_signals(strokes, centers, merged, macd_hist):
         })
 
         # 第三類：離開中樞後第一筆完全留在區間外的回抽筆——持續往後找，
-        # 不是只看緊接的下一筆（可能還要再拉回試探一次才真正確認站穩）
+        # 不是只看緊接的下一筆（可能還要再拉回試探一次才真正確認站穩）。
+        # **只認跟突破同一側的「脫離區間」**：is_up（往上突破，賣點情境）
+        # 只看有沒有筆完全留在 ZG 之上（站穩不回補）；反之（往下突破，買點
+        # 情境）只看有沒有筆完全留在 ZD 之下。原本兩側用 or 一起判斷，等於
+        # 不管突破方向、只要「隨便哪一側」脫離區間就觸發——2026-08-22 使用者
+        # 回報「同一天出現買點又出現賣點」，用真實股票（2905）追出：某中樞
+        # 明明是往下跌破（該檢查「有沒有守住跌破、不回補到ZD之上」），卻因為
+        # 後續走勢反轉大漲、衝出 ZG 之上，被這個沒分方向的判斷式誤判成
+        # 「站穩確認」，跟另一個中樞真正的（往上突破）賣點三類點撞在同一天。
         for j in range(exit_idx + 1, len(strokes)):
             s = strokes[j]
             s_hi, s_lo = max(s['start_price'], s['end_price']), min(s['start_price'], s['end_price'])
-            if s_hi < c['zd'] or s_lo > c['zg']:
+            outside = (s_lo > c['zg']) if is_up else (s_hi < c['zd'])
+            if outside:
                 signals.append({
                     'type': '3s' if is_up else '3b', 'stroke_idx': j,
                     'date': s['end_date'], 'price': s['end_price'], 'approx': True,
                 })
                 break
 
-        # 第二類：第一類點之後下一筆，若沒有創破第一類點價位
-        if exit_idx + 1 < len(strokes):
-            s2 = strokes[exit_idx + 1]
+        # 第二類：第一類點之後「同方向」再次測試的那一筆，若沒有創破第一類
+        # 點價位——是 exit_idx+2，不是 exit_idx+1。exit_idx+1 是離開中樞後的
+        # 第一次反彈，跟一類點方向相反，它的端點幾乎必然不會超過一類點的
+        # 極值（本來就是從那個極值反彈回來的），拿它來檢查「有沒有創破」
+        # 這個條件形同虛設、永遠成立，等於每個一類點後面無條件多蓋一個
+        # 二類點（2026-08-22 用真實資料測試發現：全部二類訊號都剛好在一類
+        # 訊號後1筆，證實判斷式根本沒在檢查任何東西，已修正為 exit_idx+2）。
+        if exit_idx + 2 < len(strokes):
+            s2 = strokes[exit_idx + 2]
             broke = (s2['end_price'] > exit_stroke['end_price']) if is_up \
                 else (s2['end_price'] < exit_stroke['end_price'])
             if not broke:
                 signals.append({
-                    'type': '2s' if is_up else '2b', 'stroke_idx': exit_idx + 1,
+                    'type': '2s' if is_up else '2b', 'stroke_idx': exit_idx + 2,
                     'date': s2['end_date'], 'price': s2['end_price'], 'approx': True,
                 })
 
