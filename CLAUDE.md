@@ -439,7 +439,7 @@ python backfill_finmind.py --financials --from-year 2013   # financial_extra 只
 
 **本益比**計算：Q1–Q3 用 `close / (eps / quarter × 4)`（年化）；Q4 用 `close / year_eps`（`yeps` CTE 全年加總）。
 
-自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**、**價差%**、**甜蜜點**、**虧轉盈**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。飆股清單（`#star-table`）欄位則無**季營收**、**EPS期別**、**資料日期**，最後兩欄是**甜蜜點**、**虧轉盈**（後者在此表必為「—」，見上方 `turnaround_signal` 說明）。
+自選股表格（`#wl-table`）欄位與主表格一致（含**起始股價**、**價差%**、**甜蜜點**、**虧轉盈**），但無「季營收」欄；`renderWlTable()` 的 `columnDefs` 索引需與欄位順序同步。飆股清單（`#star-table`）欄位則無**季營收**、**EPS期別**、**資料日期**，最後三欄依序是**纏論買點**、**甜蜜點**、**虧轉盈**（虧轉盈在此表必為「—」，見上方 `turnaround_signal` 說明）。纏論買點欄資料不在 `state.allData`（`/api/market/summary`）裡，前端另外呼叫公開端點 `/api/experts/chanlun_buy`（`app.js` `_loadStarChanlunMap()`，快取成 `code → 一/二/三買` 的 map，只收 `passed=true` 的列），首次渲染時非同步抓取、抓到後再觸發一次 `renderStarTable()` 補上欄位值；欄位用 `[sortValue, displayHTML]` pair（`_starChanlunCell()`）比照 `sweetSpotCell()` 的 render 慣例做排序（三買=3、二買=2、一買=1、無訊號=0）。
 
 ### 重要 gotcha：jQuery `.data()` 型別轉換
 

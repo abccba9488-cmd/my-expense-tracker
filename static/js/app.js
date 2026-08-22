@@ -1106,6 +1106,25 @@ document.getElementById('star-latest-month').addEventListener('change', function
   renderStarTable();
 });
 
+/* 纏論買點訊號快取：code -> '一買'/'二買'/'三買'，只收 passed=true 的列——
+   飆股清單資料源（state.allData，/api/market/summary）不含纏論欄位，
+   需另外呼叫達人選股共用的 /api/experts/chanlun_buy 抓一次快取起來。 */
+let _starChanlunMap = null;
+async function _loadStarChanlunMap() {
+  if (_starChanlunMap) return;
+  _starChanlunMap = {};
+  try {
+    const rows = await fetch('/api/experts/chanlun_buy').then(r => r.json());
+    rows.filter(r => r.passed).forEach(r => { _starChanlunMap[r.code] = _chanlunSignalLabel(r); });
+  } catch (_) { /* keep empty map, column falls back to — */ }
+  renderStarTable();
+}
+const _STAR_CHANLUN_RANK = { '一買': 1, '二買': 2, '三買': 3 };
+function _starChanlunCell(code) {
+  const label = _starChanlunMap && _starChanlunMap[code];
+  return label ? [_STAR_CHANLUN_RANK[label] || 0, label] : [0, '—'];
+}
+
 function calcEst(s) {
   if (s.revenue == null || s.qf_revenue == null || s.qf_revenue <= 0 || s.eps == null || s.eps <= 0) return null;
   return (s.revenue / s.qf_revenue) * s.eps * 240;
@@ -1231,6 +1250,7 @@ ${lines.join('\n')}`;
 }
 
 function renderStarTable() {
+  if (_starChanlunMap === null) _loadStarChanlunMap();
   const all = _getStarBase();
 
   // Show month-filter checkbox only when multiple revenue months exist in the data
@@ -1271,6 +1291,7 @@ function renderStarTable() {
       s.revenue_yoy != null ? `<span class="${pctClass(s.revenue_yoy)}">${fmt.pct(s.revenue_yoy)}</span>` : '—',
       s.eps != null ? `<span class="${pctClass(s.eps)}">${fmt.eps(s.eps)}</span>` : '—',
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
+      _starChanlunCell(s.code),
       sweetSpotCell(s),
       turnaroundCell(s),
     ];
@@ -1289,8 +1310,9 @@ function renderStarTable() {
       columnDefs: [
         { targets: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13], className: 'dt-right', type: 'num-cell' },
         { targets: [0, 1, 2, 9], className: 'dt-left' },
-        { targets: 14, className: 'dt-right', render: { _: 0, display: 1 } },
-        { targets: 15, className: 'dt-left', width: '64px' },
+        { targets: 14, className: 'dt-center', render: { _: 0, display: 1 } },
+        { targets: 15, className: 'dt-right', render: { _: 0, display: 1 } },
+        { targets: 16, className: 'dt-left', width: '64px' },
       ],
     });
     $('#star-table tbody').on('click', 'td', function() {
