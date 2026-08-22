@@ -206,13 +206,18 @@ def _finmind_job():
 
 
 def _taifex_job():
-    """期權籌碼：期貨/選擇權每日行情＋十大交易人未沖銷部位。這幾個 FinMind
-    dataset 約16:30更新，17:00跟 _finmind_job 同批次執行是安全的。三大法人
-    期貨/選擇權買賣更新較晚，另外排在 _taifex_institutional_job。"""
+    """期權籌碼：期貨/選擇權每日行情＋十大交易人未沖銷部位＋TW VIX＋CNN
+    Fear & Greed Index。這幾個 FinMind dataset 約16:30更新，17:00跟
+    _finmind_job 同批次執行是安全的；CNN Fear & Greed 沒有更新時間限制
+    （非官方API每次呼叫拿到即時值，見 crawler_fear_greed.py），排在這裡
+    純粹是一起跑方便。三大法人期貨/選擇權買賣更新較晚，另外排在
+    _taifex_institutional_job。"""
     import crawler_taifex as ct
+    import crawler_fear_greed as cfg
     today = datetime.now(_TZ).strftime('%Y%m%d')
     for fn in (ct.crawl_finmind_taifex_futures_daily, ct.crawl_finmind_taifex_option_daily,
-               ct.crawl_finmind_taifex_futures_large_traders, ct.crawl_finmind_taifex_option_large_traders):
+               ct.crawl_finmind_taifex_futures_large_traders, ct.crawl_finmind_taifex_option_large_traders,
+               ct.crawl_finmind_taifex_option_vix, cfg.crawl_fear_greed_index):
         try:
             fn(today)
         except Exception as e:
@@ -235,7 +240,7 @@ def _taifex_institutional_job():
 
 
 def _taifex_all_job():
-    """手動觸發用（POST /api/crawler/run/taifex_data）：一次跑完全部6個期權
+    """手動觸發用（POST /api/crawler/run/taifex_data）：一次跑完全部8個期權
     籌碼 dataset，不分開等18:30那個批次——手動觸發是使用者當下想看結果，不
     是排程情境，不需要顧慮資料源更新時間的先後。"""
     _taifex_job()

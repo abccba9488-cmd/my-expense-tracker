@@ -353,7 +353,7 @@
                 <th class="ann-sortable" data-sort="close">收盤價<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="diff">價差%<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="chg">漲跌幅%<span class="ann-sort-arrow"></span></th>
-                <th class="ann-sortable" data-sort="score">評分<span class="ann-sort-arrow"></span></th>
+                <th class="ann-sortable" data-sort="score"><span id="expert-th-score-label">評分</span><span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="est">預估倍數<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="date">資料日期<span class="ann-sort-arrow"></span></th>
                 <th class="ann-sortable" data-sort="sweet">甜蜜點<span class="ann-sort-arrow"></span></th>
@@ -388,6 +388,66 @@
           </span></h3>
           <span class="stats-badge" id="taifex-date"></span>
         </div>
+      </div>
+
+      <!-- 三大量表縮小並排（大戶多空比／TW VIX／Fear & Greed），比照參考站排版 -->
+      <div class="taifex-gauge-row">
+        <div class="card taifex-mini-gauge-card">
+          <div class="card-header">
+            <h3>大戶多空比</h3>
+          </div>
+          <div class="taifex-mini-gauge-wrap">
+            <canvas id="taifex-gauge-mini-chart"></canvas>
+            <div class="taifex-mini-gauge-center">
+              <div class="taifex-mini-gauge-value" id="taifex-gauge-mini-value">—</div>
+              <div class="taifex-mini-gauge-status" id="taifex-gauge-mini-trend">—</div>
+            </div>
+          </div>
+          <div class="taifex-mini-gauge-scale">
+            <span>反指標看多</span><span>偏多</span><span>中性</span><span>偏空</span><span>過熱</span>
+          </div>
+          <div class="taifex-gauge-updated" id="taifex-gauge-mini-updated"></div>
+        </div>
+
+        <div class="card taifex-mini-gauge-card">
+          <div class="card-header">
+            <h3>TW VIX <span class="taifex-mini-gauge-subtitle">臺指波動率</span></h3>
+            <button class="btn btn-sm" onclick="openTaifexVixModal()">了解更多 →</button>
+          </div>
+          <div class="taifex-mini-gauge-wrap">
+            <canvas id="taifex-vix-gauge-chart"></canvas>
+            <div class="taifex-mini-gauge-center">
+              <div class="taifex-mini-gauge-value" id="taifex-vix-value">—</div>
+              <div class="taifex-mini-gauge-status" id="taifex-vix-status"></div>
+            </div>
+          </div>
+          <div class="taifex-mini-gauge-scale">
+            <span>低波動</span><span>偏低</span><span>正常</span><span>偏高</span><span>高波動</span>
+          </div>
+          <div class="taifex-gauge-updated" id="taifex-vix-updated"></div>
+        </div>
+
+        <div class="card taifex-mini-gauge-card">
+          <div class="card-header">
+            <h3>Fear & Greed <span class="taifex-mini-gauge-subtitle">CNN 恐懼貪婪</span></h3>
+            <button class="btn btn-sm" onclick="openTaifexFearGreedModal()">了解更多 →</button>
+          </div>
+          <div class="taifex-mini-gauge-wrap">
+            <canvas id="taifex-fg-gauge-chart"></canvas>
+            <div class="taifex-mini-gauge-center">
+              <div class="taifex-mini-gauge-value" id="taifex-fg-value">—</div>
+              <div class="taifex-mini-gauge-status" id="taifex-fg-status"></div>
+            </div>
+          </div>
+          <div class="taifex-mini-gauge-scale">
+            <span>極度恐懼</span><span>恐懼</span><span>中性</span><span>貪婪</span><span>極度貪婪</span>
+          </div>
+          <div class="taifex-gauge-updated" id="taifex-fg-updated"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>今日摘要</h3></div>
         <div class="taifex-summary-layout">
           <div class="taifex-gauge-card">
             <div class="taifex-gauge-title">大戶多空比</div>
@@ -397,8 +457,9 @@
                 <div class="taifex-gauge-value" id="taifex-gauge-value">—</div>
                 <div class="taifex-gauge-label" id="taifex-gauge-trend">—</div>
               </div>
-              <div class="taifex-gauge-min">-15%</div>
-              <div class="taifex-gauge-max">15%</div>
+            </div>
+            <div class="taifex-gauge-scale">
+              <span>反指標看多</span><span>偏多</span><span>中性</span><span>偏空</span><span>過熱</span>
             </div>
             <div class="taifex-gauge-updated" id="taifex-gauge-updated"></div>
           </div>
@@ -490,9 +551,9 @@
     <div class="container">
       <div class="detail-nav-bar">
         <button class="back-btn" onclick="showListView()">← 返回列表</button>
-        <div class="detail-nav-btns hidden" id="detail-nav-btns">
-          <button class="btn btn-sm" id="prev-stock-btn" onclick="goToAdjacentStock(-1)">← 上一檔</button>
-          <button class="btn btn-sm" id="next-stock-btn" onclick="goToAdjacentStock(1)">下一檔 →</button>
+        <div class="detail-nav-btns hidden">
+          <button class="btn btn-sm nav-prev-btn" onclick="goToAdjacentStock(-1)">← 上一檔</button>
+          <button class="btn btn-sm nav-next-btn" onclick="goToAdjacentStock(1)">下一檔 →</button>
         </div>
       </div>
 
@@ -514,14 +575,15 @@
         <div id="stock-ai-body" class="stock-ai-body">尚無分析，點擊「重新分析」開始</div>
       </div>
 
-      <!-- 我的分析筆記（僅管理員可見，自由文字，不綁定任何特定AI呼叫） -->
-      <div class="card admin-only hidden" id="stock-note-card">
+      <!-- AI分析筆記（所有使用者可讀，僅管理員可編輯，自由文字，不綁定任何特定AI呼叫） -->
+      <div class="card hidden" id="stock-note-card">
         <div class="card-header">
-          <h3>📝 我的分析筆記</h3>
+          <h3>📝 AI分析筆記</h3>
           <span class="stock-ai-updated" id="stock-note-updated"></span>
         </div>
-        <textarea id="stock-note-textarea" class="form-input stock-note-textarea" placeholder="貼上你的分析結果（ChatGPT、Claude 或自己寫的都可以），純文字儲存，不會呼叫任何 AI"></textarea>
-        <button class="btn btn-sm" id="stock-note-save-btn" onclick="saveStockNote()">儲存筆記</button>
+        <div id="stock-note-display" class="stock-note-display hidden"></div>
+        <textarea id="stock-note-textarea" class="form-input stock-note-textarea admin-only hidden" placeholder="貼上分析結果（ChatGPT、Claude 或自己寫的都可以），純文字儲存，不會呼叫任何 AI"></textarea>
+        <button class="btn btn-sm admin-only hidden" id="stock-note-save-btn" onclick="saveStockNote()">儲存筆記</button>
       </div>
 
       <!-- 達人選股評分 -->
@@ -624,6 +686,13 @@
               <p>未還原除權息股價估算，僅接了三大法人資料，尚無融資融券/當沖/分點方向性</p>
               <p>籌碼峰只回答「籌碼堆在哪裡」，不能取代基本面判斷、不能替代買進理由</p>
               <p>資料不足30個交易日的新股不會顯示</p>
+              <strong>【纏論怎麼看】</strong>
+              <p>橘色鋸齒線＝筆（趨勢最小單位）；灰色色塊＝中樞（盤整區間）；綠色三角＝買點、紅色三角＝賣點（1/2/3類）</p>
+              <p>買賣點的判斷依據是「離開中樞時的MACD力度是否比進入中樞時弱」（背馳），力度變弱代表原方向動能不足，較容易反轉</p>
+              <strong>【重要限制】</strong>
+              <p>買賣點是用「筆」推導的近似版，跳過了纏論理論裡「線段」這一層——線段的判斷方式在纏論圈子裡本來就沒有統一共識，不同實作常有分歧</p>
+              <p>只有日線單一級別，沒有分鐘級資料做「大級別定方向、小級別找買賣點」的多級別聯動</p>
+              <p>純技術面訊號，不構成投資建議，務必搭配基本面與其他指標交叉確認</p>
             </div>
           </span></h3>
           <div class="days-selector">
@@ -639,7 +708,38 @@
           </div>
         </div>
         <div class="fund-stats hidden" id="chip-peak-stats"></div>
+
+        <div class="chanlun-guide-header">
+          <span class="chanlun-guide-title">📖 纏論怎麼看</span>
+          <button class="btn btn-sm" id="chanlun-guide-toggle-btn" onclick="toggleChanlunGuide()">展開說明</button>
+        </div>
+        <div class="chanlun-guide hidden" id="chanlun-guide-body">
+          <strong>纏論是什麼</strong>
+          <p>纏論（缠中说禅技术分析理论）是一套從K線本身結構找買賣點的技術分析方法，透過「K線合併→分型→筆→中樞→背馳→買賣點」逐層歸納股價走勢。核心邏輯：股價離開一段盤整區間（中樞）時，若動能比進場時還弱（背馳），代表原方向後繼無力，較容易出現反轉，這就是買賣點訊號的由來。</p>
+          <strong>怎麼看這張圖</strong>
+          <p><span class="chanlun-swatch" style="background:#f2994a"></span>橘色鋸齒線＝<b>筆</b>：股價走勢最小的轉折單位，把每一次波段的高低點連起來，鋸齒轉折處就是分型（局部高點/低點）</p>
+          <p><span class="chanlun-swatch" style="background:var(--text2)"></span>灰色色塊＝<b>中樞</b>：連續3筆重疊出來的區間，代表股價在這段期間反覆震盪、還沒有明確方向</p>
+          <p><span class="chanlun-swatch chanlun-swatch-tri chanlun-swatch-buy"></span>綠色三角＝<b>買點</b>；<span class="chanlun-swatch chanlun-swatch-tri chanlun-swatch-sell"></span>紅色三角＝<b>賣點</b>：滑鼠移到三角形上會顯示是第幾類買賣點與價位</p>
+          <strong>買賣點是什麼意思</strong>
+          <p><b>一買／一賣</b>：離開中樞、創新高（或新低）但 MACD 動能比進場時弱（背馳），是最早出現、風險最高但潛在報酬也最大的訊號</p>
+          <p><b>二買／二賣</b>：緊接在一買／一賣之後，股價拉回測試但沒有跌破（或漲破）一買／一賣的價位，確認訊號還有效</p>
+          <p><b>三買／三賣</b>：離開中樞後第一次完全站穩在區間外的回測，確認突破成立，三者中相對保守、確認度最高</p>
+          <strong>重要限制</strong>
+          <p>這是近似版：跳過了纏論理論裡「線段」這一層（線段的判斷方式在纏論圈子裡本來就沒有統一共識），買賣點直接用「筆」推導</p>
+          <p>只有日線單一級別，沒有分鐘級資料可以做「大級別定方向、小級別找買賣點」的多級別聯動</p>
+          <p>固定用近一年（250個交易日）的資料計算，跟上面股價走勢圖選的天數區間無關</p>
+          <p>純技術面訊號，不構成投資建議，務必搭配基本面與其他指標交叉確認</p>
+        </div>
+        <div class="fund-stats hidden" id="chanlun-stats"></div>
         <div class="chart-wrap"><canvas id="price-chart"></canvas></div>
+      </div>
+
+      <!-- 上一檔/下一檔（中間，方便看完股價圖不用拉回最上方） -->
+      <div class="detail-nav-bar detail-nav-bar-mid">
+        <div class="detail-nav-btns hidden">
+          <button class="btn btn-sm nav-prev-btn" onclick="goToAdjacentStock(-1)">← 上一檔</button>
+          <button class="btn btn-sm nav-next-btn" onclick="goToAdjacentStock(1)">下一檔 →</button>
+        </div>
       </div>
 
       <!-- 每日股價表 -->
@@ -730,6 +830,10 @@
 
       <div class="detail-nav-bar detail-nav-bar-bottom">
         <button class="back-btn" onclick="showListView()">← 返回列表</button>
+        <div class="detail-nav-btns hidden">
+          <button class="btn btn-sm nav-prev-btn" onclick="goToAdjacentStock(-1)">← 上一檔</button>
+          <button class="btn btn-sm nav-next-btn" onclick="goToAdjacentStock(1)">下一檔 →</button>
+        </div>
       </div>
 
     </div>
@@ -946,6 +1050,50 @@
     </div>
     <div class="modal-body">
       <div class="chart-wrap taifex-chart-modal-wrap"><canvas id="taifex-chart-modal-canvas"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- TW VIX 歷史趨勢 -->
+<div id="taifex-vix-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeTaifexVixModal()">
+  <div class="modal-box taifex-chart-modal-box">
+    <div class="modal-header">
+      <span style="padding:14px 22px;font-weight:600;">TW VIX 臺指波動率 — 歷史趨勢</span>
+      <div class="taifex-modal-controls">
+        <select id="taifex-vix-range-select" class="industry-select">
+          <option value="30">近30天</option>
+          <option value="90" selected>近90天</option>
+          <option value="180">近180天</option>
+          <option value="365">近365天</option>
+        </select>
+        <button class="modal-close" onclick="closeTaifexVixModal()">✕</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="chart-wrap taifex-chart-modal-wrap"><canvas id="taifex-vix-history-chart"></canvas></div>
+      <div class="taifex-modal-stats" id="taifex-vix-stats"></div>
+    </div>
+  </div>
+</div>
+
+<!-- CNN Fear & Greed Index 歷史趨勢 -->
+<div id="taifex-fg-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeTaifexFearGreedModal()">
+  <div class="modal-box taifex-chart-modal-box">
+    <div class="modal-header">
+      <span style="padding:14px 22px;font-weight:600;">Fear & Greed CNN 恐懼貪婪 — 歷史趨勢</span>
+      <div class="taifex-modal-controls">
+        <select id="taifex-fg-range-select" class="industry-select">
+          <option value="30">近30天</option>
+          <option value="90" selected>近90天</option>
+          <option value="180">近180天</option>
+          <option value="365">近365天</option>
+        </select>
+        <button class="modal-close" onclick="closeTaifexFearGreedModal()">✕</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="chart-wrap taifex-chart-modal-wrap"><canvas id="taifex-fg-history-chart"></canvas></div>
+      <div class="taifex-modal-stats" id="taifex-fg-stats"></div>
     </div>
   </div>
 </div>

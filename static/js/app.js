@@ -315,13 +315,19 @@ function setDetailNavContext(codes, currentCode) {
 }
 
 function updateDetailNavButtons() {
-  const wrap = document.getElementById('detail-nav-btns');
+  // 上一檔/下一檔按鈕現在有3組（頂部/中間/底部，方便讀完一段內容不用拉
+  // 回最上方），共用 class 不用 id，這裡用 querySelectorAll 統一更新，
+  // 不用三份幾乎一樣的程式碼。
+  const wraps = document.querySelectorAll('.detail-nav-btns');
   const list = state.detailNavList || [];
   const idx = state.detailNavIndex;
-  if (!list.length || idx < 0) { wrap.classList.add('hidden'); return; }
-  wrap.classList.remove('hidden');
-  document.getElementById('prev-stock-btn').disabled = idx <= 0;
-  document.getElementById('next-stock-btn').disabled = idx >= list.length - 1;
+  const show = list.length > 0 && idx >= 0;
+  wraps.forEach(wrap => {
+    wrap.classList.toggle('hidden', !show);
+    if (!show) return;
+    wrap.querySelectorAll('.nav-prev-btn').forEach(b => { b.disabled = idx <= 0; });
+    wrap.querySelectorAll('.nav-next-btn').forEach(b => { b.disabled = idx >= list.length - 1; });
+  });
 }
 
 function goToAdjacentStock(delta) {
@@ -351,16 +357,19 @@ async function loadStockDetail(code) {
   });
 
   // Load data in parallel
-  const [prices, revenues, financials, fundamentals, chipPeak] = await Promise.all([
+  const [prices, revenues, financials, fundamentals, chipPeak, chanlunRes] = await Promise.all([
     fetch(`/api/stocks/${code}/prices?days=${state.priceDays}`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/revenue`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/financials`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/fundamentals`).then(r => r.json()).catch(() => null),
     fetch(`/api/stocks/${code}/chip-peak`).then(r => r.json()).catch(() => null),
+    fetch(`/api/stocks/${code}/chanlun`).then(r => r.json()).catch(() => null),
   ]);
 
   state.chipPeak = (chipPeak && chipPeak.poc != null) ? chipPeak : null;
   renderChipPeak(state.chipPeak);
+  state.chanlun = (chanlunRes && chanlunRes.strokes) ? chanlunRes : null;
+  renderChanlun(state.chanlun);
   renderPriceChart(prices);
   renderPriceTable(prices);
   renderRevenueChart(revenues);
@@ -375,8 +384,8 @@ async function loadStockDetail(code) {
 
   if (state.user && state.user.is_admin) {
     loadStockAiAnalysis(code);
-    loadStockNote(code);
   }
+  loadStockNote(code);
 }
 
 /* ── AI 個股分析（admin only） ── */
@@ -434,15 +443,33 @@ async function runStockAiAnalysis() {
   }
 }
 
-/* ── 我的分析筆記（admin only，自由文字，不呼叫任何 AI） ── */
+/* ── AI分析筆記（所有人可讀，僅管理員可編輯，自由文字，不呼叫任何 AI） ── */
+function _formatNoteForDisplay(text) {
+  // 讀者端把每個句號後面自動換行，原始貼上的文字常常整段沒有斷句，
+  // 純文字塊很難讀；admin 編輯用的 textarea 不做這個轉換，存檔內容維持原樣。
+  const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return esc.replace(/。/g, '。<br>').replace(/(<br>)+$/, '');
+}
+
 async function loadStockNote(code) {
+  document.getElementById('stock-note-card').classList.remove('hidden');
   const ta = document.getElementById('stock-note-textarea');
+  const display = document.getElementById('stock-note-display');
   const updated = document.getElementById('stock-note-updated');
+  const isAdmin = !!(state.user && state.user.is_admin);
+  ta.classList.toggle('hidden', !isAdmin);
+  display.classList.toggle('hidden', isAdmin);
   ta.value = '';
+  display.innerHTML = '';
   updated.textContent = '';
   try {
     const n = await fetch(`/api/stocks/${code}/note`).then(r => r.json());
-    ta.value = n.content || '';
+    const content = n.content || '';
+    if (isAdmin) {
+      ta.value = content;
+    } else {
+      display.innerHTML = _formatNoteForDisplay(content);
+    }
     updated.textContent = n.updated_at ? `最後更新：${n.updated_at.slice(0, 16)}` : '';
   } catch (_) {
     // 靜默失敗即可，筆記空白讓使用者重新輸入
@@ -522,6 +549,49 @@ function renderChipPeak(chipPeak) {
   box.classList.remove('hidden');
 }
 
+const _CHANLUN_SIGNAL_LABELS = { '1b': '一買', '2b': '二買', '3b': '三買', '1s': '一賣', '2s': '二賣', '3s': '三賣' };
+
+function renderChanlun(chanlun) {
+  const box = document.getElementById('chanlun-stats');
+  if (!chanlun) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const latest = chanlun.latest_signal;
+  const latestLabel = latest ? `${_CHANLUN_SIGNAL_LABELS[latest.type]} ${fmt.price(latest.price)}（${latest.date}）` : '近期無訊號';
+  const latestClass = latest ? (latest.type.endsWith('b') ? 'pos' : 'neg') : '';
+  box.innerHTML = `
+    <div class="fund-stat-tile" title="依「筆＋中樞＋MACD背馳」推導的近似買賣點，跳過線段層級判斷，見上方 ⓘ 說明的重要限制。">
+      <div class="fund-stat-label">纏論最新訊號</div>
+      <div class="fund-stat-value ${latestClass}">${latestLabel}</div>
+    </div>
+    <div class="fund-stat-tile" title="近一年（250個交易日）內辨識出的筆＋中樞數量，數量越多代表這段期間走勢越震盪。">
+      <div class="fund-stat-label">筆／中樞數</div>
+      <div class="fund-stat-value">${chanlun.strokes.length} / ${chanlun.centers.length}</div>
+    </div>
+  `;
+  box.classList.remove('hidden');
+}
+
+/* 把纏論的筆端點/中樞區間/買賣點（都是稀疏的特定日期）對應到股價圖完整
+   的日期軸上，只在該日期有值、其餘留 null——纏論固定用自己的250天分析
+   窗（跟籌碼峰一樣獨立於 days-selector），選較短天數時，落在可視範圍外
+   的點自然對不到 labels、不會出現，不用額外裁切。 */
+function _chanlunPointSeries(labels, points) {
+  const byDate = new Map(points.map(p => [p.date, p.price]));
+  return labels.map(d => byDate.has(d) ? byDate.get(d) : null);
+}
+
+function _chanlunCenterSeries(labels, centers, field) {
+  return labels.map(d => {
+    const c = centers.find(c => d >= c.start_date && d <= c.end_date);
+    return c ? c[field] : null;
+  });
+}
+
+function _chanlunSignalSeries(labels, signals, isBuy) {
+  const byDate = new Map();
+  signals.filter(s => s.type.endsWith(isBuy ? 'b' : 's')).forEach(s => byDate.set(s.date, s));
+  return labels.map(d => byDate.has(d) ? byDate.get(d).price : null);
+}
+
 /* 把 chip-peak 的 poc_history（較稀疏的取樣點，每筆帶 poc/vah/val，見
    chip_peak.py compute_chip_peak_series）對應到股價圖的完整日期軸上，取樣點
    之間用最近一次算出的值往後補滿（階梯狀，不是內插），取樣範圍以前的日期留
@@ -593,6 +663,51 @@ function renderPriceChart(prices) {
         borderColor: getCssVar('--text2') + 'aa', borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false,
         tension: 0, stepped: true, spanGaps: false },
     );
+  }
+
+  // Overlay 纏論（筆/中樞/買賣點）——固定用自己的250天分析窗，同樣獨立於
+  // days-selector（見上方 chip-peak 的說明）。筆畫成鋸齒線（spanGaps 讓
+  // Chart.js 把稀疏的轉折點直接連成直線）；中樞用跟 VAH/VAL 一樣的
+  // stepped+fill 手法畫成色塊，中樞之間留 null 讓填色自然斷開，不會連成
+  // 一整條；買賣點是稀疏的散點（showLine:false），顏色分買/賣，數字1/2/3
+  // 只在 tooltip 裡顯示，圖上不擠文字。
+  const cl = state.chanlun;
+  if (cl && cl.strokes.length) {
+    // Chart.js 進場動畫對「showLine:false 的稀疏散點 dataset」（買賣點）有個
+    // 踩過才知道的怪異行為：point 元素會整個卡在動畫起始位置（y 軸 baseline），
+    // 完全不會過渡到實際數值對應的位置——不管資料/canvas/其他 dataset 設定
+    // 怎麼調都一樣，逐一拔掉 chartOptions() 的欄位二分排查，最後鎖定就是
+    // animation 本身（不是 interaction mode，一開始誤判過一次）。這張圖表
+    // 本來就是資料變動就整個重繪，進場動畫沒有實質意義，直接關掉最單純。
+    opts.animation = false;
+    const strokePoints = [{ date: cl.strokes[0].start_date, price: cl.strokes[0].start_price },
+      ...cl.strokes.map(s => ({ date: s.end_date, price: s.end_price }))];
+    const signalByDate = new Map(cl.signals.map(s => [s.date, s]));
+    datasets.push(
+      { label: '筆', data: _chanlunPointSeries(labels, strokePoints),
+        borderColor: '#f2994a', borderWidth: 1.5, pointRadius: 0, fill: false,
+        tension: 0, spanGaps: true },
+      { label: '中樞上緣', data: _chanlunCenterSeries(labels, cl.centers, 'zg'),
+        borderColor: 'transparent', pointRadius: 0, stepped: true, spanGaps: false,
+        fill: '+1', backgroundColor: getCssVar('--text2') + '22' },
+      { label: '中樞下緣', data: _chanlunCenterSeries(labels, cl.centers, 'zd'),
+        borderColor: 'transparent', pointRadius: 0, stepped: true, spanGaps: false, fill: false },
+      { label: '買點', data: _chanlunSignalSeries(labels, cl.signals, true),
+        showLine: false, fill: false, pointStyle: 'triangle', rotation: 0, pointRadius: 6,
+        pointBackgroundColor: '#22c55e', borderColor: '#22c55e' },
+      { label: '賣點', data: _chanlunSignalSeries(labels, cl.signals, false),
+        showLine: false, fill: false, pointStyle: 'triangle', rotation: 180, pointRadius: 6,
+        pointBackgroundColor: '#ef4444', borderColor: '#ef4444' },
+    );
+    opts.plugins.tooltip.callbacks = {
+      label(ctx) {
+        if (ctx.dataset.label === '買點' || ctx.dataset.label === '賣點') {
+          const s = signalByDate.get(labels[ctx.dataIndex]);
+          return s ? `${_CHANLUN_SIGNAL_LABELS[s.type]} ${fmt.price(s.price)}` : ctx.dataset.label;
+        }
+        return `${ctx.dataset.label}: ${ctx.formattedValue}`;
+      },
+    };
   }
 
   state.priceChart = new Chart(canvas, {
@@ -1616,6 +1731,16 @@ document.addEventListener('click', function(e) {
   if (icon) icon.classList.toggle('show');
 });
 
+/* ── Announcement repeat-count badge popover (same tap-to-toggle pattern) ── */
+document.addEventListener('click', function(e) {
+  if (e.target.closest('.ann-repeat-popover')) return;
+  const badge = e.target.closest('.ann-repeat-badge');
+  document.querySelectorAll('.ann-repeat-badge.show').forEach(el => {
+    if (el !== badge) el.classList.remove('show');
+  });
+  if (badge) badge.classList.toggle('show');
+});
+
 /* ── Crawler control ── */
 async function runCrawler(task) {
   showToast(`已觸發：${task}，請稍候…`);
@@ -1685,10 +1810,28 @@ function _annRatingSelectHtml(i, rating) {
   return `<select class="ann-rating-select" data-idx="${i}">${opts.join('')}</select>`;
 }
 
+function _annRepeatCellHtml(a) {
+  if (a.repeat_count <= 1) return '<td class="td-center">首次</td>';
+  const dates = a.repeat_dates || [];
+  const rows = dates.map((d, idx) => {
+    const isCurrent = idx === dates.length - 1;
+    return `<p class="${isCurrent ? 'ann-repeat-current' : ''}">第${idx + 1}次：${d}</p>`;
+  }).join('');
+  return `<td class="td-center">
+    <span class="ann-repeat-badge" title="點擊展開近90天歷次公告日期">
+      🔁 第${a.repeat_count}次
+      <span class="ann-repeat-popover">
+        <strong>${a.name || a.stock_code} 近90天公告紀錄</strong>
+        ${rows}
+      </span>
+    </span>
+  </td>`;
+}
+
 function renderAnnRow(a, i) {
   return `<tr>
     <td>${a.announce_date}${a.announce_time ? ' ' + a.announce_time.slice(0, 5) : ''}</td>
-    <td class="td-center" title="近90天內（含本次）這是第幾次公告">${a.repeat_count > 1 ? `🔁 第${a.repeat_count}次` : '首次'}</td>
+    ${_annRepeatCellHtml(a)}
     <td><span class="stock-link" data-code="${a.stock_code}">${a.stock_code}</span></td>
     <td><span class="stock-link" data-code="${a.stock_code}">${a.name || ''}</span></td>
     <td><span class="ann-subject-link" data-idx="${i}">${_annTruncate(a.subject, 10)}</span></td>
@@ -2051,6 +2194,30 @@ function _isGutaiKey(key) {
   return key === 'gutai_bull' || key === 'gutai_bear';
 }
 
+function _isChanlunKey(key) {
+  return key === 'chanlun_buy' || key === 'chanlun_sell';
+}
+
+/* 纏論買/賣點的「評分」永遠是 100/100（二元通過/不通過，見 experts.py
+   _score_chanlun），數字本身沒有區分度——比起分數，使用者更想知道「這是
+   第幾買/第幾賣」。breakdown 裡的 score 項目 label 是後端刻意固定的格式
+   `「一/二/三買(賣) @ 價格（日期，N天前）」`（見 experts.py _score_chanlun），
+   直接取空白前那一段就是類型，不用另外加後端欄位。*/
+function _chanlunSignalLabel(s) {
+  const item = (s.breakdown || []).find(b => b.type === 'score' && b.met);
+  return item ? item.label.split(' ')[0] : '—';
+}
+
+// 「訊號類型」欄排序用：把一/二/三買(賣) 轉成 1/2/3 這樣的數字才排得動——
+// 原本表頭沿用 data-sort="score"，但纏論的 score 固定都是100，排序等於
+// 沒作用（使用者測試後回報「沒辦法排序」），改成纏論分頁時這個排序鍵
+// 換算成訊號類型的序位（1買/1賣最早出現、3買/3賣確認度最高，見纏論說明）。
+const _CHANLUN_TYPE_RANK = { '一買': 1, '二買': 2, '三買': 3, '一賣': 1, '二賣': 2, '三賣': 3 };
+function _chanlunSignalRank(s) {
+  const rank = _CHANLUN_TYPE_RANK[_chanlunSignalLabel(s)];
+  return rank ?? null;
+}
+
 async function loadExpertDetail(key) {
   const tbody = document.getElementById('expert-tbody');
   const colspan = 15; // 14 shared cols + 1 (轉換 for gutai tabs, 殖利率 for the rest)
@@ -2086,7 +2253,7 @@ const _EXPERT_SORT_GETTERS = {
   close:      s => _expertP(s.code).close,
   diff:       s => _expertP(s.code).price_diff,
   chg:        s => _expertP(s.code).change_pct,
-  score:      s => s.score,
+  score:      s => _isChanlunKey(_expertKey) ? _chanlunSignalRank(s) : s.score,
   est:        s => { const p = _expertP(s.code); const est = calcEst(p); return (est != null && p.close) ? est / p.close : null; },
   date:       s => _expertP(s.code).price_date,
   sweet:      s => sweetSpotCell(_expertP(s.code))[0],
@@ -2126,8 +2293,10 @@ function renderExpertTable() {
   // 股泰多方/空方訊號這一組有意義（見 experts.py ExpertScore 的
   // entered_at/transition 說明），其他規則不顯示這欄。
   const isGutai = _isGutaiKey(_expertKey);
+  const isChanlun = _isChanlunKey(_expertKey);
   document.getElementById('expert-th-transition').classList.toggle('hidden', !isGutai);
   document.getElementById('expert-th-yield').classList.toggle('hidden', isGutai);
+  document.getElementById('expert-th-score-label').textContent = isChanlun ? '訊號類型' : '評分';
   const colspan = 15;
 
   if (!_expertData.length) {
@@ -2151,7 +2320,7 @@ function renderExpertTable() {
           <td class="num">${p.close != null ? fmt.price(p.close) : '—'}</td>
           <td class="num">${p.price_diff != null ? `<span class="${pctClass(p.price_diff)}">${fmt.pct(p.price_diff)}</span>` : '—'}</td>
           <td class="num">${p.change_pct != null ? `<span class="${pctClass(p.change_pct)}">${fmt.pct(p.change_pct)}</span>` : '—'}</td>
-          <td class="num">${s.score} / ${s.max_score}</td>
+          <td class="num">${isChanlun ? `<b>${_chanlunSignalLabel(s)}</b>` : `${s.score} / ${s.max_score}`}</td>
           <td class="num">${ratio != null ? ratio.toFixed(2) + 'x' : '—'}</td>
           <td>${p.price_date || '—'}</td>
           <td class="td-left">${sweetSpotCell(p)[1]}</td>
@@ -3061,17 +3230,18 @@ async function loadTaifexView() {
 
 function renderTaifexSummary(s) {
   document.getElementById('taifex-date').textContent = s.date || '';
-  const gaugeValueEl = document.getElementById('taifex-gauge-value');
-  const gaugeTrendEl = document.getElementById('taifex-gauge-trend');
-  const gaugeUpdatedEl = document.getElementById('taifex-gauge-updated');
   const tableEl = document.getElementById('taifex-summary-table');
 
   if (!s.date) {
-    gaugeValueEl.textContent = '—';
-    gaugeTrendEl.textContent = '';
-    gaugeUpdatedEl.textContent = '';
-    if (state.taifexGaugeChart) { state.taifexGaugeChart.destroy(); state.taifexGaugeChart = null; }
+    renderTaifexGauge(null);
+    document.getElementById('taifex-gauge-updated').textContent = '';
+    renderTaifexGaugeMini(null);
+    document.getElementById('taifex-gauge-mini-updated').textContent = '';
     tableEl.innerHTML = '<div class="stock-ai-body">尚無資料，請先在「⚙ 爬蟲狀態」或後台管理頁面觸發「期權籌碼」爬蟲</div>';
+    renderTaifexVixGauge(null);
+    document.getElementById('taifex-vix-updated').textContent = '';
+    renderTaifexFearGreedGauge(null, null);
+    document.getElementById('taifex-fg-updated').textContent = '';
     return;
   }
 
@@ -3080,13 +3250,15 @@ function renderTaifexSummary(s) {
   const fmtSignedPct = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v}%`;
   const trend = s.bull_bear_ratio_pct == null ? '' : (s.bull_bear_ratio_pct >= 0 ? '偏多' : '偏空');
 
-  // Gauge (approx metric — see help popover for the formula/caveat)
-  gaugeValueEl.textContent = fmtSignedPct(s.bull_bear_ratio_pct);
-  gaugeValueEl.style.color = s.bull_bear_ratio_pct == null ? ''
-    : (s.bull_bear_ratio_pct >= 0 ? getCssVar('--pos') : getCssVar('--neg'));
-  gaugeTrendEl.textContent = trend;
-  gaugeUpdatedEl.textContent = `${s.date} 更新`;
+  // 兩份獨立 gauge：下面「今日摘要」的詳細版 + 最上方縮小三合一列的版本
   renderTaifexGauge(s.bull_bear_ratio_pct);
+  document.getElementById('taifex-gauge-updated').textContent = `${s.date} 更新`;
+  renderTaifexGaugeMini(s.bull_bear_ratio_pct);
+  document.getElementById('taifex-gauge-mini-updated').textContent = `${s.date} 更新`;
+  renderTaifexVixGauge(s.vix);
+  document.getElementById('taifex-vix-updated').textContent = `${s.date} 更新`;
+  renderTaifexFearGreedGauge(s.fear_greed_score, s.fear_greed_rating);
+  document.getElementById('taifex-fg-updated').textContent = s.fear_greed_date ? `${s.fear_greed_date} 更新` : '';
 
   // Label/value table — 3 pairs per row, matching the source site's summary layout
   const rows = [
@@ -3107,40 +3279,413 @@ function renderTaifexSummary(s) {
   }).join('');
 }
 
-function renderTaifexGauge(pct) {
-  const canvas = document.getElementById('taifex-gauge-chart');
-  if (state.taifexGaugeChart) { state.taifexGaugeChart.destroy(); state.taifexGaugeChart = null; }
-  // Bounds are ±15%, not the ±70% the source site uses — that scale fit their
-  // (unknown, likely differently-normalized) metric, not this formula's.
-  // Checked this project's own history: 152 trading days (2026-01-02~08-20)
-  // range from -11.9% to +9.0%, p95/p99 = +5.8%/+8.4%. ±70% would compress
-  // the entire observed range into a sliver of the gauge; ±15% covers all of
-  // it with headroom while still showing how extreme a reading actually is.
-  const min = -15, max = 15;
-  const clamped = pct == null ? 0 : Math.max(min, Math.min(max, pct));
-  const filledPct = pct == null ? 0 : ((clamped - min) / (max - min)) * 100;
-  const fillColor = pct == null ? getCssVar('--text2') : (pct >= 0 ? getCssVar('--pos') : getCssVar('--neg'));
-  const trackColor = getCssVar('--border');
+/* ── 大戶多空比 gauge：5 個等角度色塊＋指針＋外圈刻度數字，比照參考站
+   「大戶期權多空比」的設計（-70~70、六個刻度 -70/-30/-10/10/30/70，分五個
+   等寬色塊）。**刻度數字不是照抄參考站的 ±70**：那個尺度是配他們自己（未知
+   演算法）的指標算出來的，跟本站 compute_bull_bear_ratio() 這個近似公式
+   量級完全不同——查過本站實際歷史（152個交易日，2026-01-02~08-20）範圍只
+   有 -11.9%~+9.0%，沿用 ±70 會把整個波動範圍壓縮成表尺的一小塊。改用 ±15
+   （既有的 gauge 上限），刻度值等比例縮放參考站的 -70/-30/-10 比例
+   （7:3:1）算出 -15/-6/-2，四捨五入成好記的整數。 ── */
+const _BULL_BEAR_ZONES = [
+  { max: -6, label: '反指標看多', color: '#2e7d32' },
+  { max: -2, label: '偏多',       color: '#66bb6a' },
+  { max: 2,  label: '中性',       color: '#f2c744' },
+  { max: 6,  label: '偏空',       color: '#e8622c' },
+  { max: 15, label: '過熱',       color: '#dc2626' },
+];
+const _BULL_BEAR_MIN = -15;
 
-  state.taifexGaugeChart = new Chart(canvas, {
+/* 大戶多空比 gauge 有兩份獨立 DOM/canvas（頂部縮小三合一列 + 下面「今日
+   摘要」的詳細版），共用同一份繪圖邏輯，只是目標 element id 和
+   state chart key 不同——不是同一個 chart 重複渲染兩次。*/
+function _renderBullBearGauge(pct, canvasId, valueId, labelId, stateKey) {
+  const canvas = document.getElementById(canvasId);
+  const valueEl = document.getElementById(valueId);
+  const labelEl = document.getElementById(labelId);
+  if (state[stateKey]) { state[stateKey].destroy(); state[stateKey] = null; }
+
+  if (pct == null) {
+    valueEl.textContent = '—';
+    valueEl.style.color = '';
+    labelEl.textContent = '';
+    return;
+  }
+
+  const { index, fraction } = _zoneFraction(pct, _BULL_BEAR_ZONES, _BULL_BEAR_MIN);
+  const zone = _BULL_BEAR_ZONES[index];
+  valueEl.textContent = `${pct >= 0 ? '+' : ''}${pct}%`;
+  valueEl.style.color = zone.color;
+  labelEl.textContent = zone.label;
+  labelEl.style.color = zone.color;
+
+  state[stateKey] = new Chart(canvas, {
     type: 'doughnut',
     data: {
       datasets: [{
-        data: [filledPct, 100 - filledPct],
-        backgroundColor: [fillColor, trackColor],
+        data: _BULL_BEAR_ZONES.map(() => 1),
+        backgroundColor: _BULL_BEAR_ZONES.map(z => z.color),
         borderWidth: 0,
       }],
     },
     options: {
       circumference: 180,
       rotation: -90,
-      cutout: '75%',
+      cutout: '65%',
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      layout: { padding: { top: 14, left: 20, right: 20 } },
+      plugins: {
+        legend: { display: false }, tooltip: { enabled: false },
+        gaugeNeedle: { fraction },
+        gaugeTicks: { labels: _zoneTickLabels(_BULL_BEAR_ZONES, _BULL_BEAR_MIN) },
+      },
       animation: { duration: 400 },
     },
   });
+}
+
+function renderTaifexGauge(pct) {
+  _renderBullBearGauge(pct, 'taifex-gauge-chart', 'taifex-gauge-value', 'taifex-gauge-trend', 'taifexGaugeChart');
+}
+
+function renderTaifexGaugeMini(pct) {
+  _renderBullBearGauge(pct, 'taifex-gauge-mini-chart', 'taifex-gauge-mini-value', 'taifex-gauge-mini-trend', 'taifexGaugeMiniChart');
+}
+
+/* ── TW VIX gauge (5 fixed-width colored zones + needle, matches the
+   reference site's meter design) — zone boundaries are the standard TW VIX
+   reading bands (低波動/偏低/正常/偏高/高波動), not derived from our own
+   data distribution like the bull/bear gauge above. ── */
+const _VIX_ZONES = [
+  { max: 10, label: '低波動', color: '#2e7d32' },
+  { max: 15, label: '偏低',   color: '#66bb6a' },
+  { max: 20, label: '正常',   color: '#f2c744' },
+  { max: 30, label: '偏高',   color: '#f2994a' },
+  { max: 50, label: '高波動', color: '#ef4444' },
+];
+
+/* 通用版「等角度分區」計算：不管每一區實際數值寬度多寬，5個區永遠平分
+   180°半圓（跟 Fear & Greed 的線性 0-100 尺度刻意不同，見該區塊註解）。
+   min 是整條量表的下限（VIX/Fear&Greed 是0，大戶多空比是-15）。*/
+function _zoneFraction(v, zones, min) {
+  const max = zones[zones.length - 1].max;
+  const clamped = Math.max(min, Math.min(max, v));
+  let lo = min;
+  for (let i = 0; i < zones.length; i++) {
+    if (clamped <= zones[i].max || i === zones.length - 1) {
+      const hi = zones[i].max;
+      const local = hi === lo ? 0 : (clamped - lo) / (hi - lo);
+      return { index: i, fraction: (i + local) / zones.length };
+    }
+    lo = zones[i].max;
+  }
+}
+
+/* 每一區的邊界值（min + 各區 max，共 zones.length+1 個）對應到外圈刻度
+   數字，位置跟 _zoneFraction 用同一套等角度公式，故直接取 i/zones.length。*/
+function _zoneTickLabels(zones, min) {
+  const boundaries = [min, ...zones.map(z => z.max)];
+  return boundaries.map((b, i) => ({ fraction: i / zones.length, text: String(b) }));
+}
+
+const _gaugeTicksPlugin = {
+  id: 'gaugeTicks',
+  afterDatasetsDraw(chart) {
+    const opts = chart.config.options.plugins.gaugeTicks;
+    if (!opts || !opts.labels) return;
+    const meta = chart.getDatasetMeta(0);
+    const arc = meta.data[0];
+    if (!arc) return;
+    const { x: cx, y: cy, outerRadius } = arc;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = getCssVar('--text2');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const r = outerRadius + 12;
+    for (const { fraction, text } of opts.labels) {
+      const angle = Math.PI * (1 + fraction);
+      ctx.fillText(text, cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+    }
+    ctx.restore();
+  },
+};
+Chart.register(_gaugeTicksPlugin);
+
+const _gaugeNeedlePlugin = {
+  id: 'gaugeNeedle',
+  afterDatasetsDraw(chart) {
+    const frac = chart.config.options.plugins.gaugeNeedle && chart.config.options.plugins.gaugeNeedle.fraction;
+    if (frac == null) return;
+    const meta = chart.getDatasetMeta(0);
+    const arc = meta.data[0];
+    if (!arc) return;
+    const { x: cx, y: cy, outerRadius } = arc;
+    const angle = Math.PI * (1 + frac);
+    const len = outerRadius * 0.92;
+    const tipX = cx + len * Math.cos(angle);
+    const tipY = cy + len * Math.sin(angle);
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.strokeStyle = getCssVar('--text');
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = getCssVar('--text');
+    ctx.fill();
+    ctx.restore();
+  },
+};
+Chart.register(_gaugeNeedlePlugin);
+
+function renderTaifexVixGauge(vix) {
+  const canvas = document.getElementById('taifex-vix-gauge-chart');
+  const valueEl = document.getElementById('taifex-vix-value');
+  const statusEl = document.getElementById('taifex-vix-status');
+  if (state.taifexVixGaugeChart) { state.taifexVixGaugeChart.destroy(); state.taifexVixGaugeChart = null; }
+
+  if (vix == null) {
+    valueEl.textContent = '—';
+    valueEl.style.color = '';
+    statusEl.textContent = '';
+    return;
+  }
+
+  const { index, fraction } = _zoneFraction(vix, _VIX_ZONES, 0);
+  const zone = _VIX_ZONES[index];
+  valueEl.textContent = vix.toFixed(1);
+  valueEl.style.color = zone.color;
+  statusEl.textContent = zone.label;
+  statusEl.style.color = zone.color;
+
+  state.taifexVixGaugeChart = new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: _VIX_ZONES.map(() => 1),
+        backgroundColor: _VIX_ZONES.map(z => z.color),
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      circumference: 180,
+      rotation: -90,
+      cutout: '65%',
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { top: 16, left: 20, right: 20 } },
+      plugins: {
+        legend: { display: false }, tooltip: { enabled: false },
+        gaugeNeedle: { fraction },
+        gaugeTicks: { labels: _zoneTickLabels(_VIX_ZONES, 0) },
+      },
+      animation: { duration: 400 },
+    },
+  });
+}
+
+function openTaifexVixModal() {
+  document.getElementById('taifex-vix-modal').classList.remove('hidden');
+  loadTaifexVixHistory(+document.getElementById('taifex-vix-range-select').value);
+}
+
+function closeTaifexVixModal() {
+  document.getElementById('taifex-vix-modal').classList.add('hidden');
+}
+
+async function loadTaifexVixHistory(days) {
+  const rows = await fetch(`/api/taifex/vix-history?days=${days}`).then(r => r.json()).catch(() => []);
+  renderTaifexVixHistoryChart(rows);
+
+  const statsEl = document.getElementById('taifex-vix-stats');
+  const vixVals = rows.map(r => r.vix).filter(v => v != null);
+  if (!vixVals.length) {
+    statsEl.innerHTML = '<span>尚無資料</span>';
+    return;
+  }
+  const avg = vixVals.reduce((a, b) => a + b, 0) / vixVals.length;
+  const max = Math.max(...vixVals);
+  const min = Math.min(...vixVals);
+  const current = vixVals[vixVals.length - 1];
+  statsEl.innerHTML = `
+    <span>當前: <strong>${current.toFixed(1)}</strong> ｜ 區間平均: <strong>${avg.toFixed(1)}</strong></span>
+    <span>區間最高: <strong>${max.toFixed(1)}</strong> ／ 最低: <strong>${min.toFixed(1)}</strong></span>
+  `;
+}
+
+function renderTaifexVixHistoryChart(rows) {
+  const canvas = document.getElementById('taifex-vix-history-chart');
+  if (state.taifexVixHistoryChart) { state.taifexVixHistoryChart.destroy(); state.taifexVixHistoryChart = null; }
+
+  state.taifexVixHistoryChart = new Chart(canvas, {
+    data: {
+      labels: rows.map(r => r.date),
+      datasets: [
+        {
+          type: 'line', label: 'TW VIX', data: rows.map(r => r.vix),
+          borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,.12)',
+          fill: true, tension: 0.2, pointRadius: 0, yAxisID: 'y', borderWidth: 2,
+        },
+        {
+          type: 'line', label: '期貨收盤價', data: rows.map(r => r.futures_close),
+          borderColor: '#3b82f6', backgroundColor: 'transparent',
+          fill: false, tension: 0.2, pointRadius: 2, pointBackgroundColor: '#3b82f6',
+          yAxisID: 'y2', borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      ...chartOptions(),
+      scales: {
+        y:  { position: 'left',  title: { display: true, text: 'TW VIX', color: getCssVar('--text2') }, grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+        y2: { position: 'right', title: { display: true, text: '期貨收盤價', color: getCssVar('--text2') }, grid: { drawOnChartArea: false }, ticks: { color: getCssVar('--text2') } },
+      },
+    },
+  });
+}
+
+/* ── CNN Fear & Greed Index gauge — same needle-plugin mechanism as the TW
+   VIX gauge above, but the source site's own design uses a LINEAR 0-100
+   scale (unlike VIX's equal-angular zones), so the needle fraction is just
+   score/100; only the colored zone widths follow CNN's real published
+   boundaries (0/25/45/55/75/100). ── */
+const _FEAR_GREED_ZONES = [
+  { max: 25,  width: 25, color: '#b91c1c' },
+  { max: 45,  width: 20, color: '#f2994a' },
+  { max: 55,  width: 10, color: '#f2c744' },
+  { max: 75,  width: 20, color: '#66bb6a' },
+  { max: 100, width: 25, color: '#2e7d32' },
+];
+const _FEAR_GREED_RATING_LABELS = {
+  'extreme fear':  { label: '極度恐懼', color: '#b91c1c' },
+  'fear':          { label: '恐懼',     color: '#f2994a' },
+  'neutral':       { label: '中性',     color: '#f2c744' },
+  'greed':         { label: '貪婪',     color: '#66bb6a' },
+  'extreme greed': { label: '極度貪婪', color: '#2e7d32' },
+};
+
+function renderTaifexFearGreedGauge(score, rating) {
+  const canvas = document.getElementById('taifex-fg-gauge-chart');
+  const valueEl = document.getElementById('taifex-fg-value');
+  const statusEl = document.getElementById('taifex-fg-status');
+  if (state.taifexFgGaugeChart) { state.taifexFgGaugeChart.destroy(); state.taifexFgGaugeChart = null; }
+
+  if (score == null) {
+    valueEl.textContent = '—';
+    valueEl.style.color = '';
+    statusEl.textContent = '';
+    return;
+  }
+
+  const info = _FEAR_GREED_RATING_LABELS[rating] || { label: rating || '—', color: getCssVar('--text2') };
+  const fraction = Math.max(0, Math.min(100, score)) / 100;
+  valueEl.textContent = Math.round(score);
+  valueEl.style.color = info.color;
+  statusEl.textContent = info.label;
+  statusEl.style.color = info.color;
+
+  state.taifexFgGaugeChart = new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: _FEAR_GREED_ZONES.map(z => z.width),
+        backgroundColor: _FEAR_GREED_ZONES.map(z => z.color),
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      circumference: 180,
+      rotation: -90,
+      cutout: '65%',
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { top: 16, left: 20, right: 20 } },
+      plugins: {
+        legend: { display: false }, tooltip: { enabled: false },
+        gaugeNeedle: { fraction },
+        // Fear & Greed 是線性 0-100 尺度（不是等角度分區，見上方
+        // _FEAR_GREED_ZONES 註解），刻度位置直接用數值本身除以100，不能
+        // 套用 _zoneTickLabels 的等角度公式。
+        gaugeTicks: { labels: [0, 25, 45, 55, 75, 100].map(v => ({ fraction: v / 100, text: String(v) })) },
+      },
+      animation: { duration: 400 },
+    },
+  });
+}
+
+function openTaifexFearGreedModal() {
+  document.getElementById('taifex-fg-modal').classList.remove('hidden');
+  loadTaifexFearGreedHistory(+document.getElementById('taifex-fg-range-select').value);
+}
+
+function closeTaifexFearGreedModal() {
+  document.getElementById('taifex-fg-modal').classList.add('hidden');
+}
+
+async function loadTaifexFearGreedHistory(days) {
+  const rows = await fetch(`/api/taifex/fear-greed-history?days=${days}`).then(r => r.json()).catch(() => []);
+  renderTaifexFearGreedHistoryChart(rows);
+
+  const statsEl = document.getElementById('taifex-fg-stats');
+  const vals = rows.map(r => r.score).filter(v => v != null);
+  if (!vals.length) {
+    statsEl.innerHTML = '<span>尚無資料</span>';
+    return;
+  }
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  const max = Math.max(...vals);
+  const min = Math.min(...vals);
+  const current = vals[vals.length - 1];
+  statsEl.innerHTML = `
+    <span>當前: <strong>${current.toFixed(1)}</strong> ｜ 區間平均: <strong>${avg.toFixed(1)}</strong></span>
+    <span>區間最高: <strong>${max.toFixed(1)}</strong> ／ 最低: <strong>${min.toFixed(1)}</strong></span>
+  `;
+}
+
+function renderTaifexFearGreedHistoryChart(rows) {
+  const canvas = document.getElementById('taifex-fg-history-chart');
+  if (state.taifexFgHistoryChart) { state.taifexFgHistoryChart.destroy(); state.taifexFgHistoryChart = null; }
+
+  state.taifexFgHistoryChart = new Chart(canvas, {
+    data: {
+      labels: rows.map(r => r.date),
+      datasets: [
+        {
+          type: 'line', label: '期貨收盤價', data: rows.map(r => r.futures_close),
+          borderColor: '#7f1d1d', backgroundColor: 'transparent',
+          fill: false, tension: 0.2, pointRadius: 2, pointBackgroundColor: '#7f1d1d',
+          yAxisID: 'y2', borderWidth: 2,
+        },
+        {
+          type: 'line', label: 'Fear & Greed Index', data: rows.map(r => r.score),
+          borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,.15)',
+          fill: true, tension: 0.3, pointRadius: 0, yAxisID: 'y', borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      ...chartOptions(),
+      scales: {
+        y:  { position: 'left',  title: { display: true, text: 'Fear & Greed Index', color: getCssVar('--text2') }, grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+        y2: { position: 'right', title: { display: true, text: '期貨收盤價', color: getCssVar('--text2') }, grid: { drawOnChartArea: false }, ticks: { color: getCssVar('--text2') } },
+      },
+    },
+  });
+}
+
+function toggleChanlunGuide() {
+  const body = document.getElementById('chanlun-guide-body');
+  const btn = document.getElementById('chanlun-guide-toggle-btn');
+  const show = body.classList.contains('hidden');
+  body.classList.toggle('hidden', !show);
+  btn.textContent = show ? '收合說明' : '展開說明';
 }
 
 function toggleTaifexDetail() {
@@ -3362,6 +3907,14 @@ document.getElementById('taifex-sr-tabs').addEventListener('click', function (e)
   _taifexSrType = btn.dataset.type;
   this.querySelectorAll('.bt-tab').forEach(b => b.classList.toggle('active', b === btn));
   renderTaifexSrChart(_taifexSrByType[_taifexSrType]);
+});
+
+document.getElementById('taifex-vix-range-select').addEventListener('change', function () {
+  loadTaifexVixHistory(+this.value);
+});
+
+document.getElementById('taifex-fg-range-select').addEventListener('change', function () {
+  loadTaifexFearGreedHistory(+this.value);
 });
 
 /* ── 圖表放大檢視（點擊任一張期權籌碼圖表，比照原站行為） ── */

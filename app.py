@@ -15,6 +15,7 @@ from sqlalchemy import desc, text, func as sa_func
 from werkzeug.security import generate_password_hash, check_password_hash
 
 import backtest_sweet_spot
+import chanlun
 import chip_peak
 import crawler
 import experts
@@ -28,7 +29,7 @@ from database import (
     VisitLog, init_db,
     TaifexFuturesDaily, TaifexOptionDaily, TaifexFuturesInstitutional,
     TaifexOptionInstitutional, TaifexFuturesLargeTraders, TaifexOptionLargeTraders,
-    TaifexFuturesInstitutionalMini,
+    TaifexFuturesInstitutionalMini, TaifexOptionVix, CnnFearGreedIndex,
 )
 
 logging.basicConfig(
@@ -612,6 +613,27 @@ def api_chip_peak(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/chanlun')
+def api_chanlun(code):
+    """纏論：純運算，不落地存表（見 CLAUDE.md「纏論」章節），跟籌碼峰同一種
+    「即時算、不存表」模式。K線合併→分型→筆→中樞→MACD背馳→買賣點，全部
+    近似版（跳過線段層級），資料不足30筆時回傳空物件。"""
+    db = SessionLocal()
+    try:
+        lookback = int(request.args.get('lookback', 250))
+        rows = (
+            db.query(DailyPrice)
+            .filter(DailyPrice.stock_code == code)
+            .order_by(DailyPrice.date)
+            .all()
+        )
+        row_dicts = [{'date': r.date, 'high': r.high, 'low': r.low, 'close': r.close} for r in rows]
+        result = chanlun.compute_chanlun(row_dicts, lookback=lookback)
+        return jsonify(result)
+    finally:
+        db.close()
+
+
 @app.route('/api/stocks/<code>/institutional-trades')
 def api_institutional_trades(code):
     """三大法人（外資/投信/自營商）每日買賣超，近 N 天（預設90）。資料已由
@@ -862,12 +884,9 @@ def api_stock_ai_analysis_run(code):
 
 @app.route('/api/stocks/<code>/note')
 def api_stock_note_get(code):
-    """管理員個人分析筆記（自由文字，貼上哪裡來的分析都可以，不觸發任何 AI
-    呼叫，見 CLAUDE.md「個股筆記」章節）。僅管理員可讀——這是私人研究筆記，
-    不是給一般訪客看的公開內容，跟上面 ai-analysis（公開可讀的付費分析快取）
-    刻意分開兩張表、兩套權限。"""
-    if not _is_admin():
-        return jsonify({'error': 'unauthorized'}), 403
+    """AI分析筆記（自由文字，貼上哪裡來的分析都可以，不觸發任何 AI 呼叫，
+    見 CLAUDE.md「個股筆記」章節）。**2026-08-21 開放所有使用者可讀**——
+    只有下面 PUT（儲存/修改）還維持僅管理員，一般使用者唯讀不可編輯。"""
     db = SessionLocal()
     try:
         n = db.query(StockNote).filter_by(stock_code=code).first()
@@ -881,8 +900,8 @@ def api_stock_note_get(code):
 
 @app.route('/api/stocks/<code>/note', methods=['PUT'])
 def api_stock_note_save(code):
-    """管理員個人分析筆記：儲存（INSERT OR UPDATE，一檔股票只留最新一份，
-    不留歷史版本）。"""
+    """AI分析筆記：儲存（INSERT OR UPDATE，一檔股票只留最新一份，不留歷史
+    版本）。僅管理員可寫——內容公開可讀，但修改權限限定管理員。"""
     if not _is_admin():
         return jsonify({'error': 'unauthorized'}), 403
     content = (request.json or {}).get('content', '')
@@ -913,8 +932,10 @@ def api_announcements_today():
     新聞流直覺）。**2026-08-21 新增 `repeat_count`**：同一檔股票可能因為大幅
     漲跌，在一兩個月內被公告不只一次，但日期優先排序會讓這些列被大量其他
     股票的公告隔開、肉眼看不出來——不改排序（會犧牲「看今天新公告」的直覺），
-    改成額外算一個「近90天內這是第幾次公告」的計數欄位，前端顯示成徽章，
-    這樣還是能一眼看出重複公告，見 _compute_announcement_repeat_counts()。"""
+    改成額外算一個「近90天內這是第幾次公告」的計數欄位，前端顯示成徽章。
+    **2026-08-21 再補 `repeat_dates`**：只有次數還不夠，使用者要點開徽章就能
+    看到同一檔股票在區間內每一次公告各是哪一天，不用自己去表裡翻找上一筆，
+    見 _compute_announcement_repeat_counts()。"""
     db = SessionLocal()
     try:
         rows = (
@@ -923,7 +944,7 @@ def api_announcements_today():
             .order_by(desc(Announcement.announce_date), desc(Announcement.announce_time))
             .all()
         )
-        repeat_counts = _compute_announcement_repeat_counts(rows)
+        repeat_info = _compute_announcement_repeat_counts(rows)
         return jsonify([{
             'id':                   a.id,
             'stock_code':           a.stock_code,
@@ -941,7 +962,8 @@ def api_announcements_today():
             'estimated_pe':         a.estimated_pe,
             'ai_rating':            a.ai_rating or '',
             'ai_analysis':          a.ai_analysis or '',
-            'repeat_count':         repeat_counts[a.id],
+            'repeat_count':         repeat_info[a.id]['count'],
+            'repeat_dates':         repeat_info[a.id]['dates'],
         } for a, name in rows])
     finally:
         db.close()
@@ -952,11 +974,13 @@ _ANNOUNCEMENT_REPEAT_WINDOW_DAYS = 90
 
 def _compute_announcement_repeat_counts(rows):
     """rows: list of (Announcement, name) tuples, any order. 回傳
-    {announcement.id: N}，N＝以該筆公告日期為終點、往前推
-    _ANNOUNCEMENT_REPEAT_WINDOW_DAYS 天的區間內，同一檔股票（含這一筆自己）
-    總共公告了幾次。N=1 代表這是該股票近90天內唯一一筆（首次），N>=2 代表
-    重複公告。用 Python 逐股票分組+雙指標滑動視窗算，不下 SQL——公告總筆數
-    量級（千筆等級）小，且这個計算跟排序無關，不值得為此另開一條 SQL。"""
+    {announcement.id: {'count': N, 'dates': [...]}}，以該筆公告日期為終點、
+    往前推 _ANNOUNCEMENT_REPEAT_WINDOW_DAYS 天的區間內，同一檔股票（含這一筆
+    自己）的公告記錄：count 是次數（1=首次，>=2=重複），dates 是區間內所有
+    公告日期由舊到新排序的字串列表（含自己這筆，最後一個即自己），讓前端
+    徽章可以直接展開列出「第1次/第2次/…」各是哪天，不用使用者自己去表裡
+    翻找上一筆。用 Python 逐股票分組+雙指標滑動視窗算，不下 SQL——公告總筆數
+    量級（千筆等級）小，且這個計算跟排序無關，不值得為此另開一條 SQL。"""
     window = timedelta(days=_ANNOUNCEMENT_REPEAT_WINDOW_DAYS)
     by_code = {}
     for a, _name in rows:
@@ -969,7 +993,8 @@ def _compute_announcement_repeat_counts(rows):
         for right, a in enumerate(anns):
             while anns[right].announce_date - anns[left].announce_date > window:
                 left += 1
-            result[a.id] = right - left + 1
+            dates = [str(anns[i].announce_date) for i in range(left, right + 1)]
+            result[a.id] = {'count': right - left + 1, 'dates': dates}
     return result
 
 
@@ -1137,8 +1162,20 @@ def api_taifex_summary():
                 return None
             return (r.buy_top10_trader_open_interest or 0) - (r.sell_top10_trader_open_interest or 0)
 
+        vix_row = db.query(TaifexOptionVix).filter_by(date=latest_date).first()
+
+        # CNN Fear & Greed 用美股行事曆日期，跟 latest_date（台指期貨的
+        # 台灣行事曆日期）不會剛好相等（美股收盤時間換算成 UTC 日期，通常
+        # 落後台灣一天），所以不用 filter_by(date=latest_date)，直接抓
+        # 資料庫裡最新的一筆。
+        fg_row = db.query(CnnFearGreedIndex).order_by(CnnFearGreedIndex.date.desc()).first()
+
         return jsonify({
             'date':               str(latest_date),
+            'vix':                vix_row.vix if vix_row else None,
+            'fear_greed_score':   fg_row.score if fg_row else None,
+            'fear_greed_rating':  fg_row.rating if fg_row else None,
+            'fear_greed_date':    str(fg_row.date) if fg_row else None,
             'futures_contract':   front.contract_date if front else None,
             'futures_close':      front.close if front else None,
             'futures_spread':     front.spread if front else None,
@@ -1158,6 +1195,82 @@ def api_taifex_summary():
             'market_open_interest':   lt_all.market_open_interest if lt_all else None,
             'bull_bear_ratio_pct':    taifex_analysis.compute_bull_bear_ratio(lt_all),
         })
+    finally:
+        db.close()
+
+
+@app.route('/api/taifex/vix-history')
+def api_taifex_vix_history():
+    """TW VIX（臺指選擇權波動率指數）歷史趨勢，近N天（預設90），附帶同日
+    期貨收盤價供雙軸圖表疊圖。資料源 FinMind TaiwanOptionVix 只回溯到
+    2026-03-02，days 選更長也只會回傳資料源實際涵蓋的範圍。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+
+        vix_rows = (
+            db.query(TaifexOptionVix)
+            .filter(TaifexOptionVix.date >= cutoff)
+            .order_by(TaifexOptionVix.date)
+            .all()
+        )
+        futures_rows = (
+            db.query(TaifexFuturesDaily.date, TaifexFuturesDaily.close)
+            .filter(TaifexFuturesDaily.date >= cutoff)
+            .order_by(TaifexFuturesDaily.date, TaifexFuturesDaily.contract_date)
+            .all()
+        )
+        close_by_date = {}
+        for d, close in futures_rows:
+            close_by_date.setdefault(d, close)
+
+        return jsonify([{
+            'date':          str(r.date),
+            'vix':           r.vix,
+            'futures_close': close_by_date.get(r.date),
+        } for r in vix_rows])
+    finally:
+        db.close()
+
+
+@app.route('/api/taifex/fear-greed-history')
+def api_taifex_fear_greed_history():
+    """CNN Fear & Greed Index 歷史趨勢，近N天（預設90），附帶同日期期貨
+    收盤價供雙軸圖表疊圖。日期用美股行事曆（見 CnnFearGreedIndex 說明），
+    跟台指期貨收盤價用日期字串直接對齊，會有約1天的時區落差，比照參考
+    站本身的簡化對齊方式，不做精確的交易時段換算。僅管理員可用。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 90))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+
+        fg_rows = (
+            db.query(CnnFearGreedIndex)
+            .filter(CnnFearGreedIndex.date >= cutoff)
+            .order_by(CnnFearGreedIndex.date)
+            .all()
+        )
+        futures_rows = (
+            db.query(TaifexFuturesDaily.date, TaifexFuturesDaily.close)
+            .filter(TaifexFuturesDaily.date >= cutoff)
+            .order_by(TaifexFuturesDaily.date, TaifexFuturesDaily.contract_date)
+            .all()
+        )
+        close_by_date = {}
+        for d, close in futures_rows:
+            close_by_date.setdefault(d, close)
+
+        return jsonify([{
+            'date':          str(r.date),
+            'score':         r.score,
+            'rating':        r.rating,
+            'futures_close': close_by_date.get(r.date),
+        } for r in fg_rows])
     finally:
         db.close()
 

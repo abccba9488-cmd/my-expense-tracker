@@ -615,6 +615,45 @@ class TaifexFuturesInstitutionalMini(Base):
     short_open_interest_balance_amount   = Column(BigInteger)
 
 
+class TaifexOptionVix(Base):
+    """臺指選擇權波動率指數（TW VIX），來源 FinMind TaiwanOptionVix。原始資料
+    是盤中逐筆報價（09:00~13:45，每天約1100+筆逐15秒一筆），只保留當天
+    最後一筆（13:45 收盤值）存檔，不留逐筆——這裡的用途是「每天一個代表值」
+    的量表+歷史趨勢，不需要盤中走勢細節。**FinMind 這個資料集只回溯到
+    2026-03-02**（實測更早的 start_date 一律回傳空陣列），推測是即時類
+    資料集的保留窗口限制，非本站爬蟲遺漏，backfill 從這天開始即可。"""
+    __tablename__ = 'taifex_option_vix'
+    __table_args__ = (
+        UniqueConstraint('date'),
+        Index('ix_tov_date', 'date'),
+    )
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    date       = Column(Date, nullable=False)
+    vix        = Column(Float)
+    close_time = Column(String(8))
+
+
+class CnnFearGreedIndex(Base):
+    """CNN Fear & Greed Index（美股恐懼貪婪指數）。來源不是 FinMind，是 CNN
+    自家網頁前端打的非官方 JSON 端點
+    `production.dataviz.cnn.io/index/fearandgreed/graphdata/<date>`——無公開
+    文件，社群逆向工程確認可用（多個開源專案都用同一支），見
+    crawler_fear_greed.py 的說明。這是本站唯一一個非台股資料源，放在期權
+    籌碼分析底下只是使用情境相近（跟台指期貨收盤價一起畫圖當國際市場
+    情緒參考），實際跟台指期交所無關。date 用時間戳記的 UTC 日期（約等於
+    美股交易日），`rating` 是 CNN 自己的分類字串（'extreme fear'/'fear'/
+    'neutral'/'greed'/'extreme greed'），前端對應中文標籤。"""
+    __tablename__ = 'cnn_fear_greed_index'
+    __table_args__ = (
+        UniqueConstraint('date'),
+        Index('ix_cfgi_date', 'date'),
+    )
+    id     = Column(Integer, primary_key=True, autoincrement=True)
+    date   = Column(Date, nullable=False)
+    score  = Column(Float)
+    rating = Column(String(20))
+
+
 def _migrate_q4_to_individual(conn):
     """Convert Q4 annual cumulative data to individual Q4 by subtracting Q1+Q2+Q3."""
     for field in ('eps', 'revenue', 'operating_income', 'net_income'):

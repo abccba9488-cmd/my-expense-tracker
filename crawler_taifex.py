@@ -14,7 +14,7 @@ from database import (
     SessionLocal, TaifexFuturesDaily, TaifexOptionDaily,
     TaifexFuturesInstitutional, TaifexOptionInstitutional,
     TaifexFuturesLargeTraders, TaifexOptionLargeTraders,
-    TaifexFuturesInstitutionalMini,
+    TaifexFuturesInstitutionalMini, TaifexOptionVix,
 )
 import finmind_client
 from crawler import _log, _parse_iso_date
@@ -270,6 +270,39 @@ def crawl_finmind_taifex_futures_institutional_mini(date_str: str):
                 records.append(rec)
         if records:
             db.execute(TaifexFuturesInstitutionalMini.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log(task, 'success', f'{date_str}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log(task, 'failed', f'{date_str}: {e}')
+        logger.exception('%s failed for %s', task, date_str)
+        raise
+    finally:
+        db.close()
+
+
+def crawl_finmind_taifex_option_vix(date_str: str):
+    """臺指選擇權波動率指數（TW VIX）。date_str: YYYYMMDD。原始資料是盤中
+    逐筆報價（09:00~13:45，每天約1100+筆），只取當天最後一筆（時間最晚，
+    即13:45收盤值）存檔——見 database.TaifexOptionVix 的欄位說明。FinMind
+    這個資料集只回溯到2026-03-02，更早的日期一律回傳空陣列（非爬蟲錯誤）。"""
+    iso = f'{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}'
+    task = 'finmind_taifex_option_vix'
+    _log(task, 'running', date_str)
+    db = SessionLocal()
+    try:
+        rows = finmind_client.fetch('TaiwanOptionVix', start_date=iso, end_date=iso)
+        records = []
+        if rows:
+            last = max(rows, key=lambda r: r.get('time') or '')
+            records.append({
+                'date': _parse_iso_date(last['date']),
+                'vix': last.get('vix'),
+                'close_time': last.get('time'),
+            })
+        if records:
+            db.execute(TaifexOptionVix.__table__.insert().prefix_with('OR REPLACE'), records)
             db.commit()
         _log(task, 'success', f'{date_str}: {len(records)} records')
         return len(records)

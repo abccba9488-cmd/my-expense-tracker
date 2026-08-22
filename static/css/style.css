@@ -162,6 +162,49 @@ main { padding-top: 52px; min-height: 100vh; }
 .help-icon:hover .help-popover,
 .help-icon:focus .help-popover,
 .help-icon.show .help-popover { display: block; }
+.chanlun-guide-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.chanlun-guide-title { font-size: 13px; font-weight: 600; color: var(--text2); }
+.chanlun-guide {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 14px;
+  font-size: 13px; line-height: 1.7; color: var(--text2);
+}
+.chanlun-guide strong { display: block; margin: 12px 0 4px; color: var(--primary); font-size: 13px; }
+.chanlun-guide strong:first-child { margin-top: 0; }
+.chanlun-guide p { margin: 0 0 6px; }
+.chanlun-guide p:last-child { margin-bottom: 0; }
+.chanlun-guide b { color: var(--text); font-weight: 600; }
+.chanlun-swatch {
+  display: inline-block; width: 12px; height: 12px; border-radius: 2px;
+  margin-right: 4px; vertical-align: middle;
+}
+.chanlun-swatch-tri {
+  width: 0; height: 0; background: none; border-radius: 0;
+  border-left: 6px solid transparent; border-right: 6px solid transparent;
+}
+.chanlun-swatch-buy { border-bottom: 9px solid #22c55e; }
+.chanlun-swatch-sell { border-top: 9px solid #ef4444; }
+.ann-repeat-badge {
+  position: relative; display: inline-block; cursor: pointer;
+  color: var(--warn, #e8a33d); font-weight: 600;
+}
+.ann-repeat-popover {
+  display: none; position: absolute; top: 100%; right: 0; margin-top: 6px;
+  width: 220px; max-width: 80vw; padding: 10px 12px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: var(--card-shadow); z-index: 50;
+  font-size: 13px; line-height: 1.7; color: var(--text); font-weight: 400;
+  text-align: left; cursor: auto; white-space: normal;
+}
+.ann-repeat-popover strong { display: block; margin-bottom: 6px; color: var(--primary); font-size: 12px; }
+.ann-repeat-popover p { margin: 0; color: var(--text2); }
+.ann-repeat-popover p.ann-repeat-current { color: var(--primary); font-weight: 600; }
+.ann-repeat-badge:hover .ann-repeat-popover,
+.ann-repeat-badge:focus .ann-repeat-popover,
+.ann-repeat-badge.show .ann-repeat-popover { display: block; }
 .stock-ai-body { font-size: 13px; color: var(--text2); display: flex; flex-direction: column; gap: 10px; }
 .stock-ai-targets { font-size: 13px; color: var(--text); font-weight: 600; }
 .stock-ai-updated { font-size: 12px; color: var(--text2); }
@@ -248,6 +291,7 @@ main { padding-top: 52px; min-height: 100vh; }
 .detail-nav-btns { display: flex; gap: 8px; }
 .detail-nav-btns button:disabled { opacity: .4; cursor: not-allowed; }
 .detail-nav-bar-bottom { margin-top: 8px; margin-bottom: 0; }
+.detail-nav-bar-mid { justify-content: center; margin: 4px 0 16px; }
 
 /* Briefly rings the row the user was viewing when they return to a list. */
 @keyframes row-flash-ring {
@@ -282,27 +326,31 @@ main { padding-top: 52px; min-height: 100vh; }
 .fund-stat-label { font-size: 12px; color: var(--text2); margin-bottom: 4px; }
 .fund-stat-value { font-size: 17px; font-weight: 700; }
 
-/* ── Taifex summary: gauge + label/value table ── */
+/* ── Taifex：頂部三大量表縮小並排列（獨立於下面的詳細版） ── */
+.taifex-gauge-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.taifex-gauge-row > .card { flex: 1 1 300px; margin-bottom: 0; }
+.taifex-gauge-updated { font-size: 11px; color: var(--text2); margin-top: 8px; text-align: center; }
+
+/* ── Taifex 今日摘要：詳細版大戶多空比 gauge + label/value 表格並排，
+   跟上面縮小版三合一列是各自獨立的 DOM/canvas，不是同一個 chart 重複用 ── */
 .taifex-summary-layout { display: flex; gap: 16px; flex-wrap: wrap; }
 .taifex-gauge-card {
-  flex: 0 0 220px;
+  flex: 0 0 280px;
   background: var(--bg3); border: 1px solid var(--border);
   border-radius: 8px; padding: 14px; text-align: center;
 }
 .taifex-gauge-title { font-size: 13px; color: var(--text2); margin-bottom: 4px; }
-.taifex-gauge-wrap { position: relative; height: 130px; margin-top: 4px; }
+.taifex-gauge-wrap { position: relative; height: 150px; margin-top: 4px; }
 .taifex-gauge-center {
-  position: absolute; left: 50%; top: 68%; transform: translate(-50%, -50%);
+  position: absolute; left: 50%; top: 78%; transform: translate(-50%, -50%);
   text-align: center; pointer-events: none; width: 100%;
 }
 .taifex-gauge-value { font-size: 26px; font-weight: 700; }
-.taifex-gauge-label { font-size: 12px; color: var(--text2); margin-top: 2px; }
-.taifex-gauge-min, .taifex-gauge-max {
-  position: absolute; bottom: 2px; font-size: 11px; color: var(--text2);
+.taifex-gauge-label { font-size: 12px; color: var(--text2); margin-top: 2px; font-weight: 600; }
+.taifex-gauge-scale {
+  display: flex; justify-content: space-between; margin-top: 2px;
+  font-size: 10px; color: var(--text2); padding: 0 2px; gap: 2px;
 }
-.taifex-gauge-min { left: 4px; }
-.taifex-gauge-max { right: 4px; }
-.taifex-gauge-updated { font-size: 11px; color: var(--text2); margin-top: 8px; }
 
 .taifex-summary-table {
   flex: 1 1 420px;
@@ -321,6 +369,27 @@ main { padding-top: 52px; min-height: 100vh; }
 .taifex-chart-clickable { cursor: zoom-in; }
 .modal-box.taifex-chart-modal-box { width: 90vw; max-width: 1100px; }
 .taifex-chart-modal-wrap { height: 60vh; min-height: 320px; }
+
+/* ── 迷你儀表卡片（TW VIX、CNN Fear & Greed 共用）+ 歷史趨勢彈窗 ── */
+.taifex-mini-gauge-subtitle { font-size: 12px; color: var(--text2); font-weight: 400; margin-left: 4px; }
+.taifex-mini-gauge-wrap { position: relative; height: 190px; max-width: 360px; margin: 8px auto 0; }
+.taifex-mini-gauge-center {
+  position: absolute; left: 50%; top: 78%; transform: translate(-50%, -50%);
+  text-align: center; pointer-events: none; width: 100%;
+}
+.taifex-mini-gauge-value { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.taifex-mini-gauge-status { font-size: 14px; font-weight: 600; margin-top: 2px; }
+.taifex-mini-gauge-scale {
+  display: flex; justify-content: space-between; max-width: 360px; margin: 4px auto 0;
+  font-size: 11px; color: var(--text2); padding: 0 4px;
+}
+.taifex-modal-controls { display: flex; align-items: stretch; }
+.taifex-modal-controls .industry-select { margin: auto 0 auto 12px; }
+.taifex-modal-stats {
+  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  margin-top: 12px; font-size: 13px; color: var(--text2);
+}
+.taifex-modal-stats strong { color: var(--text); font-variant-numeric: tabular-nums; }
 .fund-subtitle { font-size: 13px; font-weight: 600; color: var(--text2); margin: 18px 0 8px; }
 .fund-subtitle:first-of-type { margin-top: 0; }
 
@@ -695,6 +764,11 @@ table.dataTable tbody td {
 }
 .msg-textarea { resize: none; height: 60px; }
 .stock-note-textarea { width: 100%; min-height: 160px; resize: vertical; margin-bottom: 10px; font-family: inherit; }
+.stock-note-display {
+  white-space: pre-wrap; line-height: 1.9; font-size: 14px; color: var(--text);
+  min-height: 40px;
+}
+.stock-note-display:empty::before { content: '尚無筆記'; color: var(--text2); }
 .msg-login-prompt {
   text-align: center; color: var(--text2); padding: 12px 16px;
   border-top: 1px solid var(--border); flex-shrink: 0;

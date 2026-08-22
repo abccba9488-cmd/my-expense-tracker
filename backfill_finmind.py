@@ -298,6 +298,22 @@ def backfill_taifex_futures_institutional_mini(from_year: int):
                            threshold=1, min_year=2018)
 
 
+def backfill_taifex_option_vix(from_year: int):
+    import crawler_taifex as ct
+    _backfill_taifex_daily('台指VIX', 'taifex_option_vix',
+                           ct.crawl_finmind_taifex_option_vix, from_year,
+                           threshold=1, min_year=2026)
+
+
+def backfill_fear_greed_index():
+    """CNN Fear & Greed Index 不需要逐日迴圈——一次呼叫就拿到全部歷史（見
+    crawler_fear_greed.py），沒有 from_year 參數。"""
+    import crawler_fear_greed as cfg
+    logger.info('=== CNN Fear & Greed Index backfill (single call, no day loop) ===')
+    n = cfg.crawl_fear_greed_index(datetime.now(_TZ).strftime('%Y%m%d'))
+    logger.info('CNN Fear & Greed Index backfill complete: %d records', n)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Backfill FinMind data for 達人選股')
     parser.add_argument('--from-year', type=int, default=2013,
@@ -308,7 +324,7 @@ if __name__ == '__main__':
     parser.add_argument('--dividend',      action='store_true', help='股利政策 + 填息事件')
     parser.add_argument('--valuation',     action='store_true', help='PER/PBR/殖利率')
     parser.add_argument('--taifex',        action='store_true',
-                        help='期權籌碼（期貨/選擇權每日行情、三大法人、十大交易人，共6個dataset）')
+                        help='期權籌碼（期貨/選擇權每日行情、三大法人、十大交易人、VIX、CNN Fear&Greed，共8個dataset）')
     parser.add_argument('--all', action='store_true', help='全部一起跑')
     args = parser.parse_args()
 
@@ -337,5 +353,7 @@ if __name__ == '__main__':
         backfill_taifex_futures_large_traders(args.from_year)
         backfill_taifex_option_large_traders(args.from_year)
         backfill_taifex_futures_institutional_mini(args.from_year)
+        backfill_taifex_option_vix(args.from_year)
+        backfill_fear_greed_index()
 
     logger.info('All done.')

@@ -44,6 +44,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 
 from database import SessionLocal, Stock, ExpertScore, DirectorHolding
+import chanlun
 import technical
 
 logger = logging.getLogger(__name__)
@@ -60,11 +61,14 @@ EXPERT_LABELS = {
     'laoniu':      '抱緊股',
     'haogongsi':   '好公司7指標',
     'momentum_guard': '動能防雷',
+    'chanlun_buy':  '纏論買點',
+    'chanlun_sell': '纏論賣點',
 }
 
 # 非公開已知選股法（不像 gutai/888/guyu/laoniu 4 套是抄錄自對外公開的達人選股
 # 法），是本站自製的實驗性規則，前端會加註 NEW 徽章。詳見 score_momentum_guard()。
-EXPERIMENTAL_EXPERTS = {'momentum_guard'}
+# chanlun_buy/sell 是 2026-08-22 新增的第二個實驗性項目，見 _score_chanlun()。
+EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell'}
 
 
 # ── small math helpers ──────────────────────────────────────────────────────
@@ -211,7 +215,7 @@ def _build_context(db):
             'per': None, 'pbr': None, 'pbr_avg_hist': None, 'dividend_yield': None,
             'revenue_yoy': None, 'rev_yoy_recent': [], 'rev3m_avg': None, 'rev12m_avg': None,
             'q': [], 'inst': [], 'hold': [], 'div_by_year': {}, 'div_fill_events': [],
-            'tech': {}, 'director_holding_pct': None,
+            'tech': {}, 'chanlun': {}, 'director_holding_pct': None,
         }
         for code, name, market, industry in
         db.query(Stock.code, Stock.name, Stock.market, Stock.industry).all()
@@ -374,6 +378,12 @@ def _build_context(db):
                 c['tech'] = technical.snapshot(rows)
             except Exception:
                 logger.exception('technical.snapshot failed for %s', code)
+            # 重用同一份已經抓好的 OHLC（760天），不用再對 daily_prices 多打一次
+            # 查詢——纏論買/賣點兩套規則（score_chanlun_buy/sell）要用。
+            try:
+                c['chanlun'] = chanlun.compute_chanlun(rows)
+            except Exception:
+                logger.exception('chanlun.compute_chanlun failed for %s', code)
 
     since_tech = (today - timedelta(days=760)).isoformat()
     current_code, current_rows = None, []
@@ -859,6 +869,53 @@ def score_momentum_guard(ctx):
     return s.result()
 
 
+# ── 纏論買/賣點（本站自製，實驗性，2026-08-22 新增）─────────────────────────────
+
+_CHANLUN_RECENT_DAYS = 30  # 訊號日期距今幾個曆日內還算「新」，超過就當作沒有
+_CHANLUN_TYPE_LABELS = {'1b': '一買', '2b': '二買', '3b': '三買', '1s': '一賣', '2s': '二賣', '3s': '三賣'}
+
+
+def _score_chanlun(ctx, want_buy):
+    """`ctx['chanlun']` 是 chanlun.compute_chanlun() 的完整回傳物件（見
+    `_build_context()` 的 `_flush_tech()`，跟技術指標共用同一份已經抓好的
+    OHLC，不用再查一次 DB）。這裡只看「最新一個訊號」是不是近期、且方向
+    對得上（買點 vs 賣點）——不是對每檔股票重新跑一次完整的筆/中樞判斷，
+    那份工作已經在 _build_context 做完了。用曆日（不是交易日）算「多新」，
+    30天約等於20個交易日，跟纏論本身「近似版、跳過線段」的定位一致，不
+    追求精確對齊交易日曆。"""
+    label = '買點' if want_buy else '賣點'
+    cl = ctx.get('chanlun') or {}
+    sig = cl.get('latest_signal')
+    s = ScoreCard()
+
+    if not sig:
+        s.require(f'近{_CHANLUN_RECENT_DAYS}曆日內有纏論{label}訊號', False)
+        return s.result()
+
+    sig_date = sig['date']
+    if isinstance(sig_date, str):
+        sig_date = datetime.strptime(sig_date, '%Y-%m-%d').date()
+    days_ago = (datetime.now(_TZ).date() - sig_date).days
+    is_buy = sig['type'].endswith('b')
+    is_match = (is_buy == want_buy) and days_ago <= _CHANLUN_RECENT_DAYS
+
+    s.require(f'近{_CHANLUN_RECENT_DAYS}曆日內有纏論{label}訊號', is_match)
+    if is_match:
+        s.award(f'{_CHANLUN_TYPE_LABELS[sig["type"]]} @ {sig["price"]}（{sig["date"]}，{days_ago}天前）',
+                True, 100, approx=True)
+    return s.result()
+
+
+def score_chanlun_buy(ctx):
+    """買賣點基於「筆」推導，未做線段層級判斷，見 chanlun.py 模組說明的完整
+    限制清單（跳過線段、只有日線單一級別、MACD背馳非原著逐字公式）。"""
+    return _score_chanlun(ctx, want_buy=True)
+
+
+def score_chanlun_sell(ctx):
+    return _score_chanlun(ctx, want_buy=False)
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -870,6 +927,8 @@ SCORERS = {
     'laoniu': score_laoniu,
     'haogongsi': score_haogongsi,
     'momentum_guard': score_momentum_guard,
+    'chanlun_buy': score_chanlun_buy,
+    'chanlun_sell': score_chanlun_sell,
 }
 
 
