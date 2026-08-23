@@ -1107,8 +1107,8 @@ document.getElementById('star-latest-month').addEventListener('change', function
 });
 
 /* 纏論買點訊號快取：code -> '一買'/'二買'/'三買'，只收 passed=true 的列——
-   飆股清單資料源（state.allData，/api/market/summary）不含纏論欄位，
-   需另外呼叫達人選股共用的 /api/experts/chanlun_buy 抓一次快取起來。 */
+   飆股清單／自選股資料源（state.allData，/api/market/summary）不含纏論欄位，
+   需另外呼叫達人選股共用的 /api/experts/chanlun_buy 抓一次快取起來，兩個表格共用。 */
 let _starChanlunMap = null;
 async function _loadStarChanlunMap() {
   if (_starChanlunMap) return;
@@ -1118,6 +1118,7 @@ async function _loadStarChanlunMap() {
     rows.filter(r => r.passed).forEach(r => { _starChanlunMap[r.code] = _chanlunSignalLabel(r); });
   } catch (_) { /* keep empty map, column falls back to — */ }
   renderStarTable();
+  if (wlDt) renderWlTable();
 }
 const _STAR_CHANLUN_RANK = { '一買': 1, '二買': 2, '三買': 3 };
 function _starChanlunCell(code) {
@@ -1582,6 +1583,7 @@ function healthBadgeCell(health) {
 }
 
 async function renderWlTable() {
+  if (_starChanlunMap === null) _loadStarChanlunMap();
   const wl = wlActive();
   if (!wl) return;
   document.getElementById('wl-count').textContent = `${wl.codes.length} 支`;
@@ -1595,7 +1597,7 @@ async function renderWlTable() {
   const rows = wl.codes.map(code => {
     const s = state.allData.find(d => d.code === code);
     const rmBtn = `<button class="wl-remove-btn" data-rm-code="${code}" title="移除">✕</button>`;
-    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
+    if (!s) return [rmBtn, code, '(未載入)', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
     const est = calcEst(s);
     const ratio = (est != null && s.close) ? est / s.close : null;
     let estCell = '—';
@@ -1624,6 +1626,7 @@ async function renderWlTable() {
       s.eps != null ? `<span class="${pctClass(s.eps)}">${fmt.eps(s.eps)}</span>` : '—',
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
       s.price_date || '—',
+      _starChanlunCell(code),
       sweetSpotCell(s),
       turnaroundCell(s),
       healthBadgeCell(healthByCode[code]),
@@ -1639,9 +1642,10 @@ async function renderWlTable() {
         { targets: 0, orderable: false, className: 'dt-center', width: '32px' },
         { targets: [4,5,6,7,8,9,11,12,13,14], className: 'dt-right', type: 'num-cell' },
         { targets: [1,2,3,10,15],             className: 'dt-left' },
-        { targets: 16, className: 'dt-right', render: { _: 0, display: 1 } },
-        { targets: 17, className: 'dt-left', width: '64px' },
-        { targets: 18, className: 'dt-left', width: '76px' },
+        { targets: 16, className: 'dt-center', render: { _: 0, display: 1 } },
+        { targets: 17, className: 'dt-right', render: { _: 0, display: 1 } },
+        { targets: 18, className: 'dt-left', width: '64px' },
+        { targets: 19, className: 'dt-left', width: '76px' },
       ],
     });
     $('#wl-table tbody').on('click', '.wl-remove-btn', function(e) {
