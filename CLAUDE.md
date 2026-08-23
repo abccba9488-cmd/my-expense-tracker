@@ -246,7 +246,7 @@ GET  /api/stocks/<code>/chanlun   纏論：筆/中樞/背馳/買賣點（?lookba
 GET  /api/stocks/<code>/broker-trades  券商分點單日買賣超近N天（?days=90），見「券商分點進出」章節
 POST /api/stocks/<code>/broker-trades/fetch  個股詳情頁「查詢」按鈕觸發（需登入），同步執行，見「券商分點進出」章節
 
-以下 9 個皆僅管理員可用（`_is_admin()` 擋 403，非只是前端隱藏），見「期權籌碼分析」章節：
+以下 10 個皆需登入才可用、不限管理員（`_is_logged_in()` 擋 403，非只是前端隱藏），見「期權籌碼分析」章節：
 GET  /api/taifex/summary                    今日摘要（期貨收盤/漲跌、PC Ratio、三大法人期貨淨部位+約當大台、十大交易人淨部位、大戶多空比、TW VIX、CNN Fear & Greed）
 GET  /api/taifex/futures-institutional      三大法人期貨買賣近N天（?days=90），依機構別分開，含約當大台
 GET  /api/taifex/option-institutional       三大法人選擇權買賣近N天，依買權/賣權+機構別分開，含契約金額
@@ -427,7 +427,7 @@ python backfill_finmind.py --financials --from-year 2013   # financial_extra 只
 | `#ann-view` | 自結公告：純表格（不用 DataTables），見下方「自結公告」章節 |
 | `#expert-view` | 達人選股：12 套規則切換分頁（9套公開+3套實驗性），見下方「達人選股」章節 |
 | `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表、達人選股評分卡、上一/下一檔導覽） |
-| `#taifex-view` | 期權籌碼分析（**admin-only**，nav 分頁與整個 view 都掛 `admin-only hidden`），見下方「期權籌碼分析」章節 |
+| `#taifex-view` | 期權籌碼分析（**需登入，不限管理員**，nav 分頁與整個 view 都掛 `login-only hidden`），見下方「期權籌碼分析」章節 |
 
 分頁列（`#page-tabs-bar`）在 detail view 時隱藏；`showListView()` 的 viewMap：`{ star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view', expert: 'expert-view' }`。
 
@@ -718,9 +718,9 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 **重要 gotcha：Chart.js 進場動畫會讓稀疏散點 dataset 的所有點位塌陷到 y 軸 baseline（2026-08-22 除錯半天才定位）**——買/賣點 dataset（`showLine:false`，大多數索引是 `null`，只有訊號那幾個日期有值）建立時，Chart.js 的預設進場動畫會讓這些點卡在動畫起始位置（baseline），完全不會過渡到實際數值對應的高度，不管資料/dataset 順序/canvas 是否重用怎麼調都一樣。**排查過程**：一開始誤判是 `chartOptions()` 的 `interaction.mode:'index'` 造成的（改成 `'nearest'` 沒用）、也懷疑過 Filler plugin／canvas 重用／dataset object 被 Chart.js 內部快取污染（用 `{...d}` 淺拷貝丟進全新 canvas 意外「修好」了，一度誤導方向）——最後用真實資料+真實 `chartOptions()` 逐一拔掉 `opts` 的欄位二分排查，鎖定就是 `animation` 本身：只要 `animation:false`，稀疏散點 dataset 就會正確定位；`animation` 預設開啟（或設成 `{}`）就會壞，跟 `interaction`/`fill`/dataset 順序都無關。修法：`renderPriceChart()` 偵測到有纏論資料時，直接在該次渲染的 `opts.animation = false`（這張圖表本來就是資料變動就整個重繪，進場動畫沒有實質意義，不影響其他圖表）。**未來任何要在這個專案的 Chart.js 圖表上疊加 `showLine:false` 的稀疏散點 dataset，都要記得順便關閉 animation**，不然會踩到同一個坑。
 
-## 期權籌碼分析（`crawler_taifex.py`/`taifex_analysis.py`，2026-08-20 新增，**admin-only**）
+## 期權籌碼分析（`crawler_taifex.py`/`taifex_analysis.py`，2026-08-20 新增，**需登入可見**）
 
-台指期貨/選擇權籌碼分析，仿照 `aistock.brain168.com/taifex` 這個第三方分析網站的內容重建（外資/自營商/十大交易人部位、PC Ratio、支撐壓力、大戶多空比、TW VIX、CNN Fear & Greed），**僅管理員可見**——實驗性功能，公式/資料完整度都還在驗證階段，不對一般使用者開放：前端 nav 分頁與整個 `#taifex-view` 都掛 `admin-only hidden`，後端 `/api/taifex/*` 全部 9 個 GET 端點也各自擋 `_is_admin()` 回 403（不是只藏畫面，直接打 API 也進不去）。
+台指期貨/選擇權籌碼分析，仿照 `aistock.brain168.com/taifex` 這個第三方分析網站的內容重建（外資/自營商/十大交易人部位、PC Ratio、支撐壓力、大戶多空比、TW VIX、CNN Fear & Greed）——實驗性功能，公式/資料完整度都還在驗證階段，因此不對匿名訪客開放，但**不限管理員**：前端 nav 分頁與整個 `#taifex-view` 都掛 `login-only hidden`（`updateAuthUI()` 依 `!!state.user` 切換，跟只給管理員看的 `admin-only` 是獨立的一組 class），後端 `/api/taifex/*` 全部 10 個 GET 端點也各自擋 `_is_logged_in()` 回 403（不是只藏畫面，直接打 API 也進不去；2026-08-23 從 `_is_admin()` 放寬成 `_is_logged_in()`，任何已登入帳號皆可用）。
 
 **資料來源決定用 FinMind、不爬期交所官網**：期交所有免金鑰的 OpenAPI，但只回傳「最新一天」、沒有日期參數，回補歷史還要處理另一套 HTML 表單+jQuery 日期選擇器的 POST 邏輯。FinMind 的對應 dataset（`TaiwanFuturesDaily`/`TaiwanOptionDaily`/`TaiwanFuturesInstitutionalInvestors`/`TaiwanOptionInstitutionalInvestors`/`TaiwanFuturesOpenInterestLargeTraders`/`TaiwanOptionOpenInterestLargeTraders`）能沿用專案既有的 `crawl_finmind_*` 寫法慣例，歷史也回得更早（三大法人/十大交易人 2018-06-05 起，期貨/選擇權行情最早到 1998/2001）。
 

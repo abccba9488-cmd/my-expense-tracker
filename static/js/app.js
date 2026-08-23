@@ -2956,6 +2956,7 @@ function updateAuthUI() {
   const area = document.getElementById('auth-area');
   const isAdmin = !!(state.user && state.user.is_admin);
   document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !isAdmin));
+  document.querySelectorAll('.login-only').forEach(el => el.classList.toggle('hidden', !state.user));
   if (state.user) {
     area.innerHTML = `
       <span class="auth-user" title="${state.user.username}">${state.user.username}</span>

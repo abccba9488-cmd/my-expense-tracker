@@ -53,6 +53,10 @@ def _is_admin():
     return session.get('username') == ADMIN_USERNAME
 
 
+def _is_logged_in():
+    return bool(session.get('username'))
+
+
 def _client_ip():
     # Behind ngrok the TCP peer is always the local ngrok agent (127.0.0.1) —
     # the real visitor IP only shows up in X-Forwarded-For.
@@ -1089,8 +1093,8 @@ def api_taifex_summary():
     """今日摘要：期貨收盤/漲跌、PC Ratio、三大法人期貨淨部位、十大交易人淨
     部位與大戶多空比（近似公式，見 taifex_analysis.compute_bull_bear_ratio）。
     以資料庫裡「最新一天」為準，不一定是今天（例如爬蟲還沒跑或非交易日）。
-    僅管理員可用——實驗性功能，公式/資料完整度都還在驗證階段，不對一般使用者開放。"""
-    if not _is_admin():
+    需登入才可用（不限管理員）——實驗性功能，公式/資料完整度都還在驗證階段。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1203,8 +1207,8 @@ def api_taifex_summary():
 def api_taifex_vix_history():
     """TW VIX（臺指選擇權波動率指數）歷史趨勢，近N天（預設90），附帶同日
     期貨收盤價供雙軸圖表疊圖。資料源 FinMind TaiwanOptionVix 只回溯到
-    2026-03-02，days 選更長也只會回傳資料源實際涵蓋的範圍。僅管理員可用。"""
-    if not _is_admin():
+    2026-03-02，days 選更長也只會回傳資料源實際涵蓋的範圍。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1241,8 +1245,8 @@ def api_taifex_fear_greed_history():
     """CNN Fear & Greed Index 歷史趨勢，近N天（預設90），附帶同日期期貨
     收盤價供雙軸圖表疊圖。日期用美股行事曆（見 CnnFearGreedIndex 說明），
     跟台指期貨收盤價用日期字串直接對齊，會有約1天的時區落差，比照參考
-    站本身的簡化對齊方式，不做精確的交易時段換算。僅管理員可用。"""
-    if not _is_admin():
+    站本身的簡化對齊方式，不做精確的交易時段換算。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1279,8 +1283,8 @@ def api_taifex_fear_greed_history():
 def api_taifex_futures_institutional():
     """三大法人期貨買賣，近N天（預設90），依機構別分開。net_deal_volume 只算
     大台(TX)；contract_equivalent 額外合併小台(MTX,÷4)/微台(TMF,÷20)算出約當
-    大台淨部位（taifex_analysis.compute_contract_equivalent）。僅管理員可用。"""
-    if not _is_admin():
+    大台淨部位（taifex_analysis.compute_contract_equivalent）。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1331,8 +1335,8 @@ def api_taifex_futures_institutional():
 @app.route('/api/taifex/option-institutional')
 def api_taifex_option_institutional():
     """三大法人選擇權（台指選擇權TXO）買賣，近N天（預設90），依買權/賣權＋
-    機構別分開。僅管理員可用。"""
-    if not _is_admin():
+    機構別分開。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1364,8 +1368,8 @@ def api_taifex_option_institutional():
 def api_taifex_pc_ratio():
     """Put/Call Ratio 時間序列，近N天（預設90）。SQL 端直接依日期+call_put
     分組加總 volume/open_interest（比逐日重複呼叫
-    taifex_analysis.compute_pc_ratio 省一次 Python 端迴圈）。僅管理員可用。"""
-    if not _is_admin():
+    taifex_analysis.compute_pc_ratio 省一次 Python 端迴圈）。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1420,8 +1424,8 @@ def api_taifex_pc_ratio():
 @app.route('/api/taifex/large-traders')
 def api_taifex_large_traders():
     """十大交易人期貨（台指期貨TX）未沖銷部位時間序列，近N天（預設90）。
-    ?contract_type= 預設 'all'（所有契約月份合計），可傳 'week' 或 YYYYMM。僅管理員可用。"""
-    if not _is_admin():
+    ?contract_type= 預設 'all'（所有契約月份合計），可傳 'week' 或 YYYYMM。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1452,8 +1456,8 @@ def api_taifex_option_large_traders():
     """十大交易人選擇權（台指選擇權TXO）未沖銷部位時間序列，近N天（預設90），
     依買權/賣權分開。?contract_type= 預設 'all'。沒有契約金額（FinMind
     TaiwanOptionOpenInterestLargeTraders 這個 dataset 本來就只有口數/百分比，
-    沒有金額欄位）。僅管理員可用。"""
-    if not _is_admin():
+    沒有金額欄位）。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1492,8 +1496,8 @@ def api_taifex_support_resistance():
     `by_date` 資料在 Python 端一次算完 4 個 bucket。每一天各自依
     taifex_analysis.classify_expiry_contracts 重新判斷該類別當時對應到哪個
     contract_date（週別契約會隨時間滾動）。附帶當天期貨（近月）收盤價方便
-    前端疊圖。僅管理員可用。"""
-    if not _is_admin():
+    前端疊圖。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
@@ -1552,8 +1556,8 @@ def api_taifex_daily_detail():
     比照原站「每日明細」展開表格的精神。**欄位不是原站的逐字複製**——
     「Call約當」「Put約當」是原站選擇權相關的專屬公式，未公開演算法無法
     複製，本站不收錄；三大法人「約當大台」則已用 TX+MTX/4+TMF/20 換算補上
-    （見 taifex_analysis.compute_contract_equivalent）。僅管理員可用。"""
-    if not _is_admin():
+    （見 taifex_analysis.compute_contract_equivalent）。需登入才可用（不限管理員）。"""
+    if not _is_logged_in():
         return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:

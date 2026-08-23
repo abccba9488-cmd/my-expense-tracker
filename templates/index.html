@@ -132,7 +132,7 @@
       <button class="page-tab" data-tab="watchlist">⭐ 自選股</button>
       <button class="page-tab" data-tab="ann">📰 自結公告</button>
       <button class="page-tab" data-tab="expert">🎯 達人選股</button>
-      <button class="page-tab admin-only hidden" data-tab="taifex">📈 期權籌碼</button>
+      <button class="page-tab login-only hidden" data-tab="taifex">📈 期權籌碼</button>
     </div>
   </div>
 
@@ -370,8 +370,8 @@
     </div>
   </div>
 
-  <!-- 期權籌碼分析（僅管理員可見，實驗性功能） -->
-  <div id="taifex-view" class="view admin-only hidden">
+  <!-- 期權籌碼分析（需登入可見，不限管理員，實驗性功能） -->
+  <div id="taifex-view" class="view login-only hidden">
     <div class="container">
       <div class="card">
         <div class="card-header">
