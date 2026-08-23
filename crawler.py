@@ -817,6 +817,62 @@ def crawl_quarterly_financials(year: int, quarter: int):
 _ANN_BASE = 'https://mopsov.twse.com.tw/mops/web'
 _TURNAROUND_RE = re.compile(r'由虧轉盈|轉虧為盈|虧轉盈')
 _EPS_LABEL_RE  = re.compile(r'每股盈餘|每股稅後盈餘|每股稅前盈餘|基本每股盈餘')
+_CJK_RE = re.compile(r'[一-鿿]')
+_ROW_PREFIX_OK_RE = re.compile(r'^[\s\d.()（）一二三四五六七八九十、A-Za-z]*$')
+# Every qualitative (non-numeric) YoY-column value seen in real self-
+# disclosure tables — a company reports whichever direction actually
+# happened, not just loss-to-profit (_TURNAROUND_RE above is scoped to
+# that one direction on purpose, for the doc-level `turnaround` flag).
+# Confirmed against production data: a full corpus scan of every EPS-row
+# candidate's leftover text (after stripping numbers/punctuation) turned
+# up exactly these phrases as the only qualitative placeholders directly
+# ADJACENT to the numeric columns, repeated across many companies/dates —
+# everything else that turned up was one-off narrative prose.
+_QUALITATIVE_EPS_YOY_RE = re.compile(
+    r'由虧轉盈|由盈轉虧|由平轉盈|轉虧為盈|盈轉虧|虧轉盈|持續虧損|虧損減少|虧損增加'
+)
+
+
+def _is_plausible_eps_row(line, label_match):
+    """A genuine self-disclosure table row is `label + whitespace-separated
+    numeric columns` — nothing else. But plenty of OTHER MOPS announcement
+    types also happen to contain the phrase 每股盈餘/基本每股盈餘 in a prose
+    sentence — T-IFRSs/IFRSs 會計原則差異公告 footnotes ("...歸屬母公司
+    業主淨利為新台幣36,958百萬元，基本每股盈餘為新台幣4.76元，民國112年12月
+    31日..."), 限制員工權利新股/認股權證 dilution disclosures ("...每股盈餘
+    稀釋情形..."), 股份買回公告, 媒體澄清稿, etc. Those sentences often still
+    contain >=5 stray numbers on the same line (profit figures, dates,
+    percentages), so they can satisfy Format A's column-count check and get
+    misread as a real EPS row — producing wildly implausible values (seen in
+    production: monthly_eps in the tens of thousands, because a NT$ profit
+    figure denominated in 百萬元/仟元 got treated as an EPS number). A real
+    table row never has Chinese prose connectives (為/新台幣/元，/民國...年
+    ...月...日/其他 unrelated financial-ratio names) between the numbers —
+    only the label itself and the known qualitative YoY placeholders
+    (虧轉盈/持續虧損). So: strip numbers/table punctuation/those placeholders
+    from everything after the matched label, and reject if any CJK text is
+    still left over — that's prose, not a table cell. Same idea applies
+    to whatever comes BEFORE the label on the same physical line: a real
+    row's label is always the first cell, so a prose lead-in fragment
+    there (possible when MOPS' fixed-width wrapping happens to land the
+    label at the tail end of a line — e.g. "第二年度(2026年度)、第三年度
+    (2027年度)...對公司每股盈餘", where 2026/2027 get mistaken for EPS
+    columns) is rejected too; only whitespace and known row-numbering
+    markers (digits/parens/CJK numerals) are allowed there."""
+    if not _ROW_PREFIX_OK_RE.match(line[:label_match.start()]):
+        return False
+    remainder = line[label_match.end():]
+    remainder = _QUALITATIVE_EPS_YOY_RE.sub('', remainder)
+    # Strip whole parenthetical groups wholesale (both half- and full-width
+    # brackets — MOPS text mixes both), not just the bracket characters
+    # themselves — genuine rows carry footnote refs like "(註4)" or unit/
+    # sign annotations like "（元）"/"(EPS)" right after the label, and
+    # MOPS' accounting-negative notation "(1.04)" wraps a real column
+    # value. None of that is prose; only what's OUTSIDE brackets indicates
+    # a genuine table row vs. a narrative sentence.
+    remainder = re.sub(r'[\(（][^\)）]*[\)）]', '', remainder)
+    remainder = re.sub(r'[\d,.\-+%\s元／/~—－、：；。﹪％]', '', remainder)
+    return not _CJK_RE.search(remainder)
 
 
 def _strip_cjk_spaces(s):
@@ -867,7 +923,8 @@ def _parse_disclosure(body):
     # stray digits — turning a Format B/C row into a false Format A
     # match. No confirmed real case needs the fallback, so it's gone.)
     for line in lines:
-        if _EPS_LABEL_RE.search(line):
+        m = _EPS_LABEL_RE.search(line)
+        if m and _is_plausible_eps_row(line, m):
             nums = _extract_numbers(line)
             if len(nums) >= 5:
                 monthly_eps, yoy = nums[0], nums[1]
@@ -895,17 +952,19 @@ def _parse_disclosure(body):
             break
         monthly_lines.append(line)
     for line in monthly_lines:
-        if _EPS_LABEL_RE.search(line):
-            nums = _extract_numbers(line)
-            # Usually 3 numbers (本期/去年同期/年增%), but the YoY column
-            # is sometimes qualitative text instead of a number (e.g.
-            # "虧轉盈", "持續虧損") — still take the two real values then.
-            if len(nums) >= 2:
-                result['monthly_eps']    = nums[0]
-                result['prior_year_eps'] = nums[1]
-                if len(nums) >= 3:
-                    result['eps_yoy'] = nums[2]
-            break
+        m = _EPS_LABEL_RE.search(line)
+        if not m or not _is_plausible_eps_row(line, m):
+            continue
+        nums = _extract_numbers(line)
+        # Usually 3 numbers (本期/去年同期/年增%), but the YoY column
+        # is sometimes qualitative text instead of a number (e.g.
+        # "虧轉盈", "持續虧損") — still take the two real values then.
+        if len(nums) >= 2:
+            result['monthly_eps']    = nums[0]
+            result['prior_year_eps'] = nums[1]
+            if len(nums) >= 3:
+                result['eps_yoy'] = nums[2]
+        break
 
     return result
 

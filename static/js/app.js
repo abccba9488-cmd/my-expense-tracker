@@ -685,7 +685,7 @@ function renderPriceChart(prices) {
     const signalByDate = new Map(cl.signals.map(s => [s.date, s]));
     datasets.push(
       { label: '筆', data: _chanlunPointSeries(labels, strokePoints),
-        borderColor: '#f2994a', borderWidth: 1.5, pointRadius: 0, fill: false,
+        borderColor: '#a78bfa', borderWidth: 1.5, pointRadius: 0, fill: false,
         tension: 0, spanGaps: true },
       { label: '中樞上緣', data: _chanlunCenterSeries(labels, cl.centers, 'zg'),
         borderColor: 'transparent', pointRadius: 0, stepped: true, spanGaps: false,
