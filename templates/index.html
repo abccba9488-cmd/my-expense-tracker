@@ -818,7 +818,10 @@
           <h4 class="fund-subtitle">週轉天數（存貨／應收帳款）</h4>
           <div class="chart-wrap"><canvas id="fund-turnover-chart"></canvas></div>
 
-          <h4 class="fund-subtitle">股利政策</h4>
+          <div class="card-header">
+            <h4 class="fund-subtitle" style="margin:0">股利政策</h4>
+            <button class="btn btn-sm" id="stock-dividend-btn" onclick="fetchStockDividend()">回補最新資料</button>
+          </div>
           <div class="chart-wrap"><canvas id="fund-dividend-chart"></canvas></div>
           <table id="fund-dividend-table" class="display compact" style="width:100%">
             <thead>

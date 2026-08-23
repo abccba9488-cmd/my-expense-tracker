@@ -792,6 +792,22 @@ def api_stock_fundamentals(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/dividend/fetch', methods=['POST'])
+def api_dividend_fetch(code):
+    """個股詳情頁「股利政策」回補按鈕：任何登入使用者可主動觸發，比照
+    api_broker_trades_fetch 的模式（同步執行、無自選股限制）。跟券商分點不同
+    的是這裡固定抓全部歷史（見 crawler.backfill_dividend_policy 說明），不分
+    「有無既有資料」兩種路徑——單一股票的股利事件數量少，一次全量重抓成本
+    不高，也順便修好任何過去因 FINMIND_TOKEN 未設定造成的資料缺口。"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'unauthorized'}), 401
+    try:
+        crawler.backfill_dividend_policy(code)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'ok': True})
+
+
 @app.route('/api/stocks/<code>/health')
 def api_stock_health(code):
     db = SessionLocal()

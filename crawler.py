@@ -1849,6 +1849,80 @@ def crawl_finmind_dividend_result(date_str: str, lookback_days: int = 14):
         db.close()
 
 
+def backfill_dividend_policy(stock_code: str):
+    """On-demand full-history refetch of one stock's dividend data — used by
+    the stock detail page's 股利政策「回補」button. Unlike the two crawlers
+    above (which loop day-by-day because a market-wide bulk query for these
+    event datasets is unreliable, see their docstrings), a single-stock
+    `data_id` query over a wide date range works fine here — verified
+    against the live FinMind API (2330 1994→today returned its full 26-event
+    history in one call for both datasets), so no day-by-day loop is needed.
+    Covers the case where a stock's own dividend_policy/dividend_fill_events
+    rows stopped updating (e.g. a stretch of days where FINMIND_TOKEN wasn't
+    set, see the startup-check comment in app.py) as well as the normal case
+    where a company simply hasn't declared a dividend since some date —
+    either way the user gets a fresh, authoritative answer on demand."""
+    start = '1994-01-01'
+    end = datetime.now(_TZ).strftime('%Y-%m-%d')
+    _log('finmind_dividend', 'running', f'backfill {stock_code}')
+    db = SessionLocal()
+    try:
+        div_rows = finmind_client.fetch('TaiwanStockDividend', start_date=start, end_date=end,
+                                         data_id=stock_code)
+        records = []
+        for r in div_rows:
+            m = re.match(r'(\d+)', str(r.get('year', '')))
+            if not m:
+                continue
+            records.append({
+                'stock_code': stock_code,
+                'event_date': _parse_iso_date(r['date']),
+                'fiscal_year': int(m.group(1)) + 1911,
+                'cash_dividend': r.get('CashEarningsDistribution') or 0.0,
+                'stock_dividend': r.get('StockEarningsDistribution') or 0.0,
+            })
+        if records:
+            db.execute(DividendPolicy.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log('finmind_dividend', 'success', f'backfill {stock_code}: {len(records)} records')
+
+        _log('finmind_dividend_result', 'running', f'backfill {stock_code}')
+        result_rows = finmind_client.fetch('TaiwanStockDividendResult', start_date=start, end_date=end,
+                                            data_id=stock_code)
+        result_records = [
+            {'stock_code': stock_code, 'ex_date': _parse_iso_date(r['date']),
+             'before_price': r.get('before_price'), 'filled': None}
+            for r in result_rows
+        ]
+        if result_records:
+            db.execute(DividendFillEvent.__table__.insert().prefix_with('OR IGNORE'), result_records)
+            db.commit()
+
+        db.execute(text('''
+            UPDATE dividend_fill_events
+            SET filled = 1
+            WHERE stock_code = :code
+              AND (filled IS NULL OR filled = 0)
+              AND before_price IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM daily_prices dp
+                  WHERE dp.stock_code = dividend_fill_events.stock_code
+                    AND dp.date > dividend_fill_events.ex_date
+                    AND dp.close >= dividend_fill_events.before_price
+              )
+        '''), {'code': stock_code})
+        db.commit()
+        _log('finmind_dividend_result', 'success', f'backfill {stock_code}: {len(result_records)} events')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('finmind_dividend', 'failed', f'backfill {stock_code}: {e}')
+        logger.exception('backfill_dividend_policy failed for %s', stock_code)
+        raise
+    finally:
+        db.close()
+
+
 def crawl_finmind_valuation(date_str: str, lookback_days: int = 3):
     """PER/PBR/殖利率寫回 daily_prices。用 UPDATE-only（不是 OR REPLACE），
     避免覆蓋掉當天已寫入的 OHLCV 欄位。UPDATE 對還沒有當天 daily_prices 列的

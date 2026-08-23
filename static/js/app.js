@@ -2509,6 +2509,31 @@ async function fetchStockBrokerTrades() {
   }
 }
 
+/* ── 股利政策（詳情頁按需回補全部歷史） ── */
+async function fetchStockDividend() {
+  if (!state.currentCode) return;
+  if (!state.user) { showToast('請先登入才能回補股利資料'); return; }
+  const btn = document.getElementById('stock-dividend-btn');
+  btn.disabled = true;
+  btn.textContent = '回補中，請稍候…';
+  try {
+    const resp = await fetch(`/api/stocks/${state.currentCode}/dividend/fetch`, {method: 'POST'});
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(`回補失敗：${data.error || '未知錯誤'}`);
+    } else {
+      const fundamentals = await fetch(`/api/stocks/${state.currentCode}/fundamentals`).then(r => r.json()).catch(() => null);
+      renderFundamentalsPanel(fundamentals);
+      showToast('股利資料已更新至最新');
+    }
+  } catch (_) {
+    showToast('回補失敗，請稍後再試');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '回補最新資料';
+  }
+}
+
 /* ── 甜蜜點訊號回測（詳情頁按需查詢） ── */
 const _BACKTEST_TARGETS = [10, 15, 20, 25, 30];
 const _BACKTEST_TIERS = ['ma20', 'ma60', 'ma120', 'ma240'];

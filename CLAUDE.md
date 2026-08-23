@@ -102,7 +102,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `institutional_trades` | `(stock_code, date)` | 三大法人買賣超（股），FinMind，達人選股用 |
 | `holding_concentration` | `(stock_code, date)` | 股權分散表（週資料），FinMind，達人選股用 |
 | `financial_extra` | `(stock_code, year, quarter)` | 資產負債表/現金流量表/毛利項目（千元），FinMind，獨立於 MOPS 來源的 `quarterly_financials` |
-| `dividend_policy` | `(stock_code, event_date)` | 逐筆股利分派事件（非年度加總），FinMind |
+| `dividend_policy` | `(stock_code, event_date)` | 逐筆股利分派事件（非年度加總），FinMind。個股詳情頁「股利政策」區塊有「回補最新資料」按鈕（2026-08-23 新增，任何登入使用者可用）——`crawler.backfill_dividend_policy(code)` 對這一支股票用 `data_id` 查全部歷史（已用真實 API 驗證單一股票、寬日期範圍一次查詢可靠，不像下方兩個 crawler 函式要逐日查詢），修過去 `FINMIND_TOKEN` 未設定期間造成的資料缺口，也能單純確認某股票近期真的沒有新股利事件 |
 | `dividend_fill_events` | `(stock_code, ex_date)` | 除權息事件 + 填息判斷，FinMind |
 | `director_holdings` | `(stock_code, year_month)` | 董監持股比例，TWSE/TPEX OpenAPI（非 FinMind） |
 | `broker_trades` | `(stock_code, date, broker_id)` | 券商分點單日買賣超（股），FinMind `TaiwanStockTradingDailyReport`，見下方「券商分點進出」章節 |
@@ -245,6 +245,7 @@ GET  /api/stocks/<code>/chip-peak  籌碼峰 POC/VAH/VAL + poc_history（POC遷�
 GET  /api/stocks/<code>/chanlun   纏論：筆/中樞/背馳/買賣點（?lookback=250），純運算不落地存表，近似版（跳過線段層級），見「纏論」章節
 GET  /api/stocks/<code>/broker-trades  券商分點單日買賣超近N天（?days=90），見「券商分點進出」章節
 POST /api/stocks/<code>/broker-trades/fetch  個股詳情頁「查詢」按鈕觸發（需登入），同步執行，見「券商分點進出」章節
+POST /api/stocks/<code>/dividend/fetch  個股詳情頁「股利政策」區塊「回補最新資料」按鈕觸發（需登入），同步執行 `crawler.backfill_dividend_policy(code)`
 
 以下 10 個皆需登入才可用、不限管理員（`_is_logged_in()` 擋 403，非只是前端隱藏），見「期權籌碼分析」章節：
 GET  /api/taifex/summary                    今日摘要（期貨收盤/漲跌、PC Ratio、三大法人期貨淨部位+約當大台、十大交易人淨部位、大戶多空比、TW VIX、CNN Fear & Greed）
