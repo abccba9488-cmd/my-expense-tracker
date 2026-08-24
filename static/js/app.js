@@ -2323,6 +2323,7 @@ function renderExpertTable() {
   document.getElementById('expert-th-transition').classList.toggle('hidden', !isGutai);
   document.getElementById('expert-th-yield').classList.toggle('hidden', isGutai);
   document.getElementById('expert-th-score-label').textContent = isChanlun ? '訊號類型' : '評分';
+  document.getElementById('expert-chanlun-note').classList.toggle('hidden', !isChanlun);
   const colspan = 15;
 
   if (!_expertData.length) {
