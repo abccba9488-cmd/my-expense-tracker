@@ -342,6 +342,7 @@ function goToAdjacentStock(delta) {
 async function loadStockDetail(code) {
   code = String(code);
   state.currentCode = code;
+  state.chanlunStarTrades = null;  // 上一支股票的歷史訊號疊圖不能沿用到新股票，見 renderPriceChart()
   showDetailView();
 
   // Stock info
@@ -370,6 +371,7 @@ async function loadStockDetail(code) {
   renderChipPeak(state.chipPeak);
   state.chanlun = (chanlunRes && chanlunRes.strokes) ? chanlunRes : null;
   renderChanlun(state.chanlun);
+  state.prices = prices;
   renderPriceChart(prices);
   renderPriceTable(prices);
   renderRevenueChart(revenues);
@@ -515,6 +517,7 @@ document.querySelectorAll('.days-btn').forEach(btn => {
     state.priceDays = Number(days);
     const prices = await fetch(`/api/stocks/${state.currentCode}/prices?days=${days}`)
       .then(r => r.json()).catch(() => []);
+    state.prices = prices;
     renderPriceChart(prices);
     renderPriceTable(prices);
   });
@@ -591,6 +594,17 @@ function _chanlunSignalSeries(labels, signals, isBuy) {
   const byDate = new Map();
   signals.filter(s => s.type.endsWith(isBuy ? 'b' : 's')).forEach(s => byDate.set(s.date, s));
   return labels.map(d => byDate.has(d) ? byDate.get(d).price : null);
+}
+
+function _chanlunStarEntrySeries(labels, trades) {
+  const byDate = new Map(trades.map(t => [t.entry_date, t.entry_price]));
+  return labels.map(d => byDate.has(d) ? byDate.get(d) : null);
+}
+
+function _chanlunStarExitSeries(labels, trades) {
+  const byDate = new Map();
+  trades.filter(t => t.exit_date).forEach(t => byDate.set(t.exit_date, t.exit_price));
+  return labels.map(d => byDate.has(d) ? byDate.get(d) : null);
 }
 
 /* 把 chip-peak 的 poc_history（較稀疏的取樣點，每筆帶 poc/vah/val，見
@@ -673,6 +687,7 @@ function renderPriceChart(prices) {
   // 一整條；買賣點是稀疏的散點（showLine:false），顏色分買/賣，數字1/2/3
   // 只在 tooltip 裡顯示，圖上不擠文字。
   const cl = state.chanlun;
+  let signalByDate = null;
   if (cl && cl.strokes.length) {
     // Chart.js 進場動畫對「showLine:false 的稀疏散點 dataset」（買賣點）有個
     // 踩過才知道的怪異行為：point 元素會整個卡在動畫起始位置（y 軸 baseline），
@@ -683,7 +698,7 @@ function renderPriceChart(prices) {
     opts.animation = false;
     const strokePoints = [{ date: cl.strokes[0].start_date, price: cl.strokes[0].start_price },
       ...cl.strokes.map(s => ({ date: s.end_date, price: s.end_price }))];
-    const signalByDate = new Map(cl.signals.map(s => [s.date, s]));
+    signalByDate = new Map(cl.signals.map(s => [s.date, s]));
     datasets.push(
       { label: '筆', data: _chanlunPointSeries(labels, strokePoints),
         borderColor: '#a78bfa', borderWidth: 1.5, pointRadius: 0, fill: false,
@@ -700,13 +715,52 @@ function renderPriceChart(prices) {
         showLine: false, fill: false, pointStyle: 'triangle', rotation: 180, pointRadius: 6,
         pointBackgroundColor: '#ef4444', borderColor: '#ef4444' },
     );
+  }
+
+  // Overlay 纏論買點+營收飆股 歷史進出場（🎯 卡片「開始回測」後才有資料，
+  // 見 runStockChanlunStarBacktest()，2026-08-30 使用者要求「在圖表中顯示
+  // 出來，包含過去的歷史記錄」新增）。跟上面原始纏論買/賣點三角形共用同一
+  // 張圖，但故意用不同形狀+顏色（星形、藍/橘）區分，因為策略進場點本來就是
+  // 纏論買點的子集（多了營收飆股條件），同一天很可能兩個 dataset 疊在同一個
+  //位置——形狀不同才分得出「這是原始纏論訊號」還是「這是通過完整策略條件
+  // 的進場點」。出場點只畫「真的觸發停損/停利」的那些，「持有中」的部位
+  // 沒有真正出場事件，不畫在圖上（用最後一天股價算的未實現報酬只存在於
+  // 下面的表格，不是圖表上的一個歷史事件）。
+  const cst = state.chanlunStarTrades;
+  let entryByDate = null, exitByDate = null;
+  if (cst && cst.length) {
+    opts.animation = false;
+    entryByDate = new Map(cst.map(t => [t.entry_date, t]));
+    exitByDate = new Map(cst.filter(t => t.exit_date).map(t => [t.exit_date, t]));
+    datasets.push(
+      { label: '策略進場', data: _chanlunStarEntrySeries(labels, cst),
+        showLine: false, fill: false, pointStyle: 'star', pointRadius: 9,
+        pointBackgroundColor: '#38bdf8', borderColor: '#38bdf8' },
+      { label: '策略出場', data: _chanlunStarExitSeries(labels, cst),
+        showLine: false, fill: false, pointStyle: 'star', pointRadius: 9,
+        pointBackgroundColor: '#fb923c', borderColor: '#fb923c' },
+    );
+  }
+
+  if (signalByDate || entryByDate) {
     opts.plugins.tooltip.callbacks = {
       label(ctx) {
-        if (ctx.dataset.label === '買點' || ctx.dataset.label === '賣點') {
+        const label = ctx.dataset.label;
+        if (signalByDate && (label === '買點' || label === '賣點')) {
           const s = signalByDate.get(labels[ctx.dataIndex]);
-          return s ? `${_CHANLUN_SIGNAL_LABELS[s.type]} ${fmt.price(s.price)}` : ctx.dataset.label;
+          return s ? `${_CHANLUN_SIGNAL_LABELS[s.type]} ${fmt.price(s.price)}` : label;
         }
-        return `${ctx.dataset.label}: ${ctx.formattedValue}`;
+        if (entryByDate && label === '策略進場') {
+          const t = entryByDate.get(labels[ctx.dataIndex]);
+          return t ? `進場 ${fmt.price(t.entry_price)}` : label;
+        }
+        if (exitByDate && label === '策略出場') {
+          const t = exitByDate.get(labels[ctx.dataIndex]);
+          return t
+            ? `出場 ${fmt.price(t.exit_price)}（${_exitReasonLabel(t.exit_reason)}，${t.return_pct > 0 ? '+' : ''}${t.return_pct}%）`
+            : label;
+        }
+        return `${label}: ${ctx.formattedValue}`;
       },
     };
   }
@@ -2742,6 +2796,11 @@ async function runStockChanlunStarBacktest() {
       empty.classList.add('hidden');
       body.classList.remove('hidden');
       _renderChanlunStarResult(data);
+      // 使用者要求「在圖表中顯示出來，包含過去的歷史記錄」——存進 state 後
+      // 重繪股價圖，renderPriceChart() 會偵測到 state.chanlunStarTrades 疊上
+      // 藍色（進場）/橘色（出場）星形標記，見該函式內的說明。
+      state.chanlunStarTrades = data.trades;
+      if (state.prices) renderPriceChart(state.prices);
       showToast(data.trades.length ? '回測完成' : '回測完成，近5年沒有出現訊號');
     }
   } catch (_) {
