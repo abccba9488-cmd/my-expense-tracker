@@ -14,6 +14,7 @@ from flask import Flask, jsonify, render_template, request, Response, session, s
 from sqlalchemy import desc, text, func as sa_func
 from werkzeug.security import generate_password_hash, check_password_hash
 
+import backtest_chanlun_chippeak
 import backtest_sweet_spot
 import chanlun
 import chip_peak
@@ -861,6 +862,31 @@ def api_stock_backtest_sweet_spot(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/backtest/chanlun-star')
+def api_stock_backtest_chanlun_star(code):
+    """On-demand、單一股票的「纏論買點+營收飆股」歷史進出場訊號——重用
+    backtest_chanlun_chippeak.py 的 run_single_stock()/simulate_stock()，
+    跟 chanlun_star 這個達人選股規則（見 experts.py score_chanlun_star）
+    同一套訊號定義／同一套移動停利出場規則，不是另外發明的簡化版。
+    **admin-only**，比照 chanlun_star 本身在 ADMIN_ONLY_EXPERTS 的存取限制
+    （不是只藏前端，直接打 API 也擋）。單一股票近5年通常數秒內完成（逐日
+    重算纏論，見 backtest_chanlun_chippeak.py 模組 docstring 的效能說明）。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    years = request.args.get('years', 5, type=int)
+    db = SessionLocal()
+    try:
+        result = backtest_chanlun_chippeak.run_single_stock(db, code, years=years)
+        if result is None:
+            return jsonify({'error': '股價資料不足，無法回測（至少需要約30個交易日的歷史資料）'}), 400
+        return jsonify(result)
+    except Exception as e:
+        logger.exception('Backtest (chanlun_star) failed for %s', code)
+        return jsonify({'error': str(e)}), 500
+    finally:
+        db.close()
+
+
 @app.route('/api/stocks/<code>/ai-analysis')
 def api_stock_ai_analysis_get(code):
     """Return the cached latest AI analysis for this stock, if any —
@@ -1057,6 +1083,7 @@ def api_experts_list():
             .all()
         )
         by_key = {r.expert_key: r for r in rows}
+        is_admin = _is_admin()
         return jsonify([{
             'expert_key': key,
             'expert_label': label,
@@ -1064,7 +1091,8 @@ def api_experts_list():
             'total': by_key[key].total if key in by_key else 0,
             'computed_at': str(by_key[key].computed_at) if key in by_key else None,
             'is_experimental': key in experts.EXPERIMENTAL_EXPERTS,
-        } for key, label in experts.EXPERT_LABELS.items()])
+        } for key, label in experts.EXPERT_LABELS.items()
+          if is_admin or key not in experts.ADMIN_ONLY_EXPERTS])
     finally:
         db.close()
 
@@ -1073,6 +1101,8 @@ def api_experts_list():
 def api_experts_detail(key):
     if key not in experts.EXPERT_LABELS:
         return jsonify({'error': 'Unknown expert_key'}), 404
+    if key in experts.ADMIN_ONLY_EXPERTS and not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
     db = SessionLocal()
     try:
         rows = (

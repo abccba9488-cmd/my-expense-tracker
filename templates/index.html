@@ -670,6 +670,27 @@
         </div>
       </div>
 
+      <!-- 纏論買點+營收飆股 歷史訊號（詳情頁按需查詢，admin-only） -->
+      <div class="card admin-only hidden">
+        <div class="card-header">
+          <h3>🎯 纏論買點+營收飆股 歷史訊號</h3>
+          <button class="btn btn-sm" id="stock-chanlun-star-btn" onclick="runStockChanlunStarBacktest()">開始回測（近5年）</button>
+        </div>
+        <div class="stock-ai-updated">進場條件：近30曆日內出現纏論買點（一/二/三買皆算）且同時符合營收飆股入榜條件（預估股價/收盤 >= 1.5倍 且 月營收年增 >= 20%）。<strong>不加碼</strong>——持有期間忽略新訊號，出場後才能再進場。出場條件：固定停損（收盤跌破進場價10%）或移動停利（收盤從進場後最高點回檔10%），兩者以先到者為準，不設封頂，超過5年觀察期仍未觸發則列為「持有中」。使用未還原除權息的原始收盤價，跟站內其他股價功能一致。</div>
+        <div id="stock-chanlun-star-empty" class="stock-ai-body">點擊「開始回測」開始（單一股票計算，因為要逐日重算纏論訊號，通常數秒內完成）</div>
+        <div id="stock-chanlun-star-body" class="hidden">
+          <div id="stock-chanlun-star-summary" class="health-grid health-grid-wide"></div>
+          <div class="ann-table-wrap">
+            <table class="ann-table" id="stock-chanlun-star-table">
+              <thead>
+                <tr><th>進場日期</th><th>進場價</th><th>出場日期</th><th>出場價</th><th>出場原因</th><th>持有天數</th><th>報酬%</th></tr>
+              </thead>
+              <tbody id="stock-chanlun-star-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- 股價圖 -->
       <div class="card">
         <div class="card-header">
@@ -1043,6 +1064,27 @@
     </div>
     <div class="modal-body">
       <div id="wl-pick-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 纏論買點+營收飆股 歷史訊號（達人選股 chanlun_star 分頁「📊歷史」按鈕觸發） -->
+<div id="chanlun-star-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeChanlunStarHistoryModal()">
+  <div class="modal-box taifex-chart-modal-box">
+    <div class="modal-header">
+      <span id="chanlun-star-history-title" style="padding:14px 22px;font-weight:600;"></span>
+      <button class="modal-close" onclick="closeChanlunStarHistoryModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="chanlun-star-history-summary" class="health-grid health-grid-wide"></div>
+      <div class="ann-table-wrap">
+        <table class="ann-table">
+          <thead>
+            <tr><th>進場日期</th><th>進場價</th><th>出場日期</th><th>出場價</th><th>出場原因</th><th>持有天數</th><th>報酬%</th></tr>
+          </thead>
+          <tbody id="chanlun-star-history-tbody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>

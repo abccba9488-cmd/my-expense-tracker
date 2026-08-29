@@ -52,10 +52,13 @@ finmind_client.py  FinMind API 薄封裝（crawler.py 的 crawl_finmind_* 函式
 technical.py    純 Python 技術指標（EMA/MACD/RSI/KD），達人選股股泰規則用
 chip_peak.py    純 Python 籌碼峰計算（POC/VAH/VAL，時間衰減＋法人品質加權），見「籌碼峰」章節
 chanlun.py      純 Python 纏論計算（K線合併/分型/筆/中樞/背馳/買賣點），見「纏論」章節
-experts.py      達人選股計分引擎（9 套公開規則 + 3 套實驗規則），見「達人選股」章節
+experts.py      達人選股計分引擎（9 套公開規則 + 4 套實驗規則，其中1套admin-only），見「達人選股」章節
 crawler_taifex.py    台指期貨/選擇權籌碼爬蟲（FinMind），見「期權籌碼分析」章節
 taifex_analysis.py   期權籌碼衍生計算（PC Ratio/支撐壓力/大戶多空比），見「期權籌碼分析」章節
 crawler_fear_greed.py  CNN Fear & Greed Index 爬蟲（唯一非台股/非FinMind資料源），見「期權籌碼分析」章節
+force_kline.py           純 Python 力道K線分數計算（個人專屬實驗功能，尚未接前端），見「力道K線」章節
+backtest_force_kline.py  力道K線訊號回測腳本（僅本機CLI，不寫DB），見「力道K線」章節
+backtest_chanlun_chippeak.py  纏論買點+籌碼峰VAL/VAH+營收飆股進出場模擬（僅本機CLI，不寫DB），見「纏論買點×籌碼峰回測」章節
 scheduler.py    APScheduler 排程（BackgroundScheduler，Asia/Taipei）
 database.py     SQLAlchemy models + SQLite 設定 + migration
 templates/index.html   單頁前端（DataTables + Chart.js，CDN）
@@ -426,7 +429,7 @@ python backfill_finmind.py --financials --from-year 2013   # financial_extra 只
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
 | `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
 | `#ann-view` | 自結公告：純表格（不用 DataTables），見下方「自結公告」章節 |
-| `#expert-view` | 達人選股：12 套規則切換分頁（9套公開+3套實驗性），見下方「達人選股」章節 |
+| `#expert-view` | 達人選股：13 套規則切換分頁（9套公開+4套實驗性，其中 `chanlun_star` 1套 admin-only、非管理員看不到這個分頁），見下方「達人選股」章節 |
 | `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表、達人選股評分卡、上一/下一檔導覽） |
 | `#taifex-view` | 期權籌碼分析（**需登入，不限管理員**，nav 分頁與整個 view 都掛 `login-only hidden`），見下方「期權籌碼分析」章節 |
 
@@ -568,7 +571,7 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 - `ScoreCard`：`require(label, cond)` 是選股門檻（`passed` = 全部 `require` 皆真；輸入為 `None` 一律視為不通過，不放行無法驗證的股票）；`award(label, cond, points)` 是配分項，`cond=None` 時整項跳過不計入 `max_score`（資料不足不扣分，也不算分）；`award_count(label, achieved, max_occurrences, unit_points)` 是「每命中一次 +N 分，封頂 M 次」的漸進計分（如「近5日外資買超次數」）。
 - `_build_context(db)`：一次 bulk 查完全部表，組成 `{stock_code: ctx}`。**技術指標快照是逐股流式計算**（`daily_prices` 查詢本身已 `ORDER BY stock_code, date`，累積到換股票就 flush 該股的 `technical.snapshot()` 後捨棄），而不是先把全市場~2 年 OHLC 全部塞進記憶體再統一算——後者在 Zeabur 容器上會直接 OOM（~1,982 檔 × ~500 筆同時在記憶體是實測會爆的規模）。**`per`/`pbr`/`dividend_yield` 刻意不跟 `close`/`volume` 綁同一個「最新一天」查詢**，而是另外抓「最近一筆這三欄實際有值」的資料列：`crawl_finmind_valuation` 排在股價爬蟲之後跑，且容許落後 1–3 天回補（見下方爬蟲章節），若跟 `close` 一樣強制要求同一天，只要當天估值資料還沒進來，888標準1（淨值比）/888標準3（殖利率）會瞬間全數判定不通過（曾經在這個確切原因下發生過 0/1982、1/1982 的假性全滅，已修復）。
-- `compute_expert_scores()`：對每檔股票跑全部 12 套規則（`SCORERS` 字典驅動），寫入 `expert_scores`（`INSERT OR REPLACE`，跟 `stock_ai_analysis` 同樣的「只存最新一筆快照，不留歷史」模式，**唯二例外是 `entered_at`/`transition`**）。單一規則對單一股票算分丟例外時只記 log 跳過，不影響其他規則/股票。
+- `compute_expert_scores()`：對每檔股票跑全部 13 套規則（`SCORERS` 字典驅動），寫入 `expert_scores`（`INSERT OR REPLACE`，跟 `stock_ai_analysis` 同樣的「只存最新一筆快照，不留歷史」模式，**唯二例外是 `entered_at`/`transition`**）。單一規則對單一股票算分丟例外時只記 log 跳過，不影響其他規則/股票。
 - **`entered_at`/`transition`（僅股泰多方/空方訊號有意義）**：每次執行都先讀出覆寫前的舊列（`old_rows`），`passed` 狀態沒變就延續舊的 `entered_at`（入榜日期）；狀態改變（或該列第一次寫入/剛加欄位的 bootstrap）才把 `entered_at` 更新成當天。`transition` 只在 `gutai_bull`/`gutai_bear` 這對互斥規則、且是「真正的狀態翻轉」時才計算：進榜當下若「舊快照」發現該股正好在對面那個訊號上榜，記錄 `空轉多`/`多轉空`；bootstrap（欄位剛加入，`old.entered_at is None`）或非翻轉的正常首次進榜一律是 `None`，不會亂猜。
 
 ### API / 排程
@@ -579,7 +582,7 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 - **`#expert-view`**（列表）：`#expert-tabs` 8 個規則切換鈕（`loadExperts()`/`renderExpertTabs()`），下方純表格 13 欄：排名/代號/名稱/產業/營收月份/起始股價/收盤價/價差%/漲跌幅%/評分/預估倍數/資料日期/甜蜜點。**`gutai_bull`/`gutai_bear` 這兩個分頁額外多兩欄**（入榜日期/轉換，來自 `expert_scores.entered_at`/`transition`）：`renderExpertTable()` 用 `_isGutaiKey(_expertKey)` 判斷，動態 toggle 這兩個 `<th>`（`#expert-th-entered`/`#expert-th-transition`，預設 `.hidden`）並在列資料多帶兩個 `<td>`，其他 6 套規則不顯示。「預估倍數」欄（2026-07-22 從「評分明細」按鈕改版）沿用 `#star-view`（營收飆股清單）既有的 `calcEst(s)` 公式即時算：`(revenue / qf_revenue) × eps × 240`，再除以 `close`，跟 `#star-view`/主表格用同一套邏輯與顯示格式（`x.xx` + `x` 字尾），純前端算、不需要後端額外欄位。原本點按鈕開 `#expert-modal` 彈窗看評分明細長條圖的機制已整個移除（`openExpertModal`/`closeExpertModal`/`renderModalExpertChart` 連同 HTML 一併刪除，不留死代碼）——同樣的評分明細長條圖在詳情頁的「達人選股評分」卡（`#stock-expert-card`，`renderStockExpertChart()`）仍看得到，資訊沒有真的消失，只是列表頁不再重複提供彈窗入口。
 - **`#detail-view` 達人選股評分卡**（`#stock-expert-card`）：`loadStockExpertScores(code)` 抓 `/api/stocks/<code>/expert-scores`，`#stock-expert-tabs` 列出該股所有已算出分數的規則，`renderStockExpertDetail()` 一樣先畫「總分 X/Y 分」大字標頭，再選股標準清單，再呼叫 `renderStockExpertChart()`。**圖表繪製邏輯抽成共用的 `_renderExpertChart(scoreItems, canvasId, wrapId, chartKey)`**，`renderStockExpertChart`/`renderModalExpertChart` 只是帶入各自的 canvas/state key 呼叫它——確保列表 modal 跟詳情頁兩處的視覺化永遠同步；`state.stockExpertChart`/`state.modalExpertChart` 各自持有 Chart.js 實例，切換分頁/關閉彈窗時 `.destroy()` 再建新的，避免 canvas 重用衝突。
-- **重要 gotcha：`_stockExpertKey`（目前選中的達人分頁）刻意跨股票延續，不是每次都重置**——`loadStockExpertScores()` 只有在 `_stockExpertKey` 對新股票不存在（`!scored.some(s => s.expert_key === _stockExpertKey)`，理論上不會發生，因為每檔股票都算好全部 12 套規則）時才 fallback 到「第一個通過的規則」。曾經每次都重置成「這檔股票自己第一個通過的規則」，導致用上一檔/下一檔導覽瀏覽時，選中的達人分頁會隨機跳來跳去（每檔股票通過的規則不同）。另外，從 `#expert-view` 列表點股票進入詳情頁時，`renderExpertTable()` 的點擊事件必須在呼叫 `loadStockDetail()` 之前手動把 `_stockExpertKey` 設成該列表目前的 `_expertKey`，否則會沿用使用者上次在別處瀏覽時殘留的分頁，而不是使用者點擊當下所在的那個達人榜單。
+- **重要 gotcha：`_stockExpertKey`（目前選中的達人分頁）刻意跨股票延續，不是每次都重置**——`loadStockExpertScores()` 只有在 `_stockExpertKey` 對新股票不存在（`!scored.some(s => s.expert_key === _stockExpertKey)`，理論上不會發生，因為每檔股票都算好全部 13 套規則）時才 fallback 到「第一個通過的規則」。曾經每次都重置成「這檔股票自己第一個通過的規則」，導致用上一檔/下一檔導覽瀏覽時，選中的達人分頁會隨機跳來跳去（每檔股票通過的規則不同）。另外，從 `#expert-view` 列表點股票進入詳情頁時，`renderExpertTable()` 的點擊事件必須在呼叫 `loadStockDetail()` 之前手動把 `_stockExpertKey` 設成該列表目前的 `_expertKey`，否則會沿用使用者上次在別處瀏覽時殘留的分頁，而不是使用者點擊當下所在的那個達人榜單。
 - **總分一定要清楚顯示**：詳情頁的評分卡（`#stock-expert-card`，唯一還會畫評分明細長條圖的地方，見上方「列表彈窗已移除」說明），`.stock-expert-total`（大字、`--primary` 顏色數字）都放在選股標準清單「之前」，不是只靠分頁按鈕上的小字 `(X/Y)` 讓使用者自己找。
 - **`#expert-table` 表格排序**（2026-07-13 新增，2026-07-22 補上「預估倍數」欄可排序）：跟自結公告表格（`#ann-table`）同一套純前端排序機制（`class="ann-sortable" data-sort="<field>"` + `.ann-sort-arrow`，兩個表格都是 `class="ann-table"` 所以共用同一份 CSS），但獨立實作一份 `_EXPERT_SORT_GETTERS`/`sortExpertTable()`/`_applyExpertSort()`，**沒有**跟 `sortAnnTable()` 共用程式碼——刻意保持兩份獨立，因為欄位取值邏輯不同：達人選股表格排序用到的價格類欄位（起始股價/收盤價/價差%/漲跌幅%/預估倍數/資料日期/甜蜜點）並不在 `_expertData` 本身上，而是要透過 `_expertP(code)`（`state.allData.find(...)`）另外查表算，`_ANN_SORT_GETTERS` 沒有這個需求。**排序偏好跨切換達人分頁（`_expertKey`）延續**：`loadExpertDetail()` fetch 到新規則的資料後，若 `_expertSortField` 已設定就呼叫 `_applyExpertSort()` 套用同一個排序，不會因為換分頁就悄悄變回 API 預設順序、卻讓表頭箭頭誤導使用者以為還在排序中。「排名」（純序號）一欄不可排序，理由同自結公告表格的主旨/AI分析/自選股欄。
 
@@ -720,7 +723,66 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 - **列表頁「評分」欄對纏論兩個分頁沒有意義（2026-08-22 發現+修正）**：因為 `_score_chanlun` 是二元通過/不通過、`award()` 固定給 100 分，通過的列全部都是「100/100」，沒有區分度，使用者看了截圖問「這是第幾買還是第幾賣」。修法：`renderExpertTable()` 新增 `_isChanlunKey(key)` 判斷，是纏論分頁時把「評分」欄標題換成「訊號類型」、內容換成 `_chanlunSignalLabel(s)`——從該筆 `breakdown` 裡找 `type==='score'` 那一項的 `label`（後端刻意固定成 `「一/二/三買(賣) @ 價格（日期，N天前）」` 這個格式，見 `_score_chanlun`），取空白字元前那一段就是「一買」/「二買」/「三買」/「一賣」/「二賣」/「三賣」，不用另外加後端欄位或 API 呼叫。**排序（2026-08-22 同日補上）**：一開始沒改排序邏輯（`data-sort="score"` 還是按數值 `score` 排序，對纏論分頁沒有實質效果，因為全部都是100），使用者實測後回報「沒辦法排序」才補上——`_EXPERT_SORT_GETTERS.score` 改成 `_isChanlunKey(_expertKey)` 為真時改用 `_chanlunSignalRank(s)`（把 `_chanlunSignalLabel()` 取到的中文類型透過 `_CHANLUN_TYPE_RANK` 對照表換算成 1/2/3，一買/一賣=1…三買/三賣=3），非纏論分頁完全不受影響繼續用原本的 `s.score`。沒有做同分時的次要排序鍵（例如同樣是「二買」的股票之間再依日期排），並列的維持原本相對順序（JS `Array.sort` 穩定排序），這是可接受的簡化。
 - **訊號「時有時無」是已知特性、不是bug（2026-08-24 使用者回報+查明）**：使用者發現 4729熒茂 達人選股「入榜日期」顯示 8/24，但訊號本身標示的三買日期是 8/10，兩者對不上。追查方式：用同一份 `daily_prices` 資料，把日期依序裁到不同截止日重跑 `compute_chanlun()`，結果 8/19 算得出「三買@8/10」，8/20～8/23 這個訊號**消失**（`latest_signal` 變 `None`），8/24 又重新出現——因為 `compute_chanlun()` 每次都是拿當下全部歷史K棒從頭重算（沒有任何鎖定/增量狀態，見上方設計哲學），筆／中樞的判定會隨後續新進K棒改變，同一個歷史訊號因此可能隨時間「抖動」。`entered_at`（入榜日期）記錄的是 `compute_expert_scores()` 連續判定「通過」狀態的起始日（`passed` 從 False 翻成 True 那天，見 `compute_expert_scores()` 的 `is_new_streak` 邏輯）——8/20～8/23 那幾天 `passed` 曾經翻回 False，所以 8/24 訊號重新出現時 `entered_at` 也跟著重置，不會等於訊號自己標示的 8/10。這不是資料錯誤，是「近似版」纏論演算法固有的限制（沒有線段層級、沒有多級別確認、每天全量重算不鎖定），已在前端補上明確提示：`#chanlun-guide-body`（個股詳情頁纏論走勢圖說明框）「重要限制」新增一條、`#expert-chanlun-note`（達人選股頁，僅 `chanlun_buy`/`chanlun_sell` 分頁顯示，`renderExpertTable()` 用 `_isChanlunKey()` 切換 `.hidden`）。
 
+**`chanlun_star`（纏論買點+營收飆股，2026-08-30 新增，第13套規則，實驗性且 admin-only）**：使用者拿 `backtest_chanlun_chippeak.py` 的 `chanlun_star` tier 回測驗證過（全市場5年、766筆交易、勝率37.3%、平均報酬0.99%，四種濾網組合裡表現最好，見「纏論買點×籌碼峰回測」章節），確認後要求做成獨立的選股規則，訊號出現時把股票抓進清單，並且明確要求**只有自己（管理員）看得到**。
+- **`score_chanlun_star(ctx)`**：兩個 `require()` 用 AND 合併（`ScoreCard.result()` 是 `all(self.criteria)`，不用另外寫布林運算）——近30曆日內有纏論買點（跟 `_score_chanlun` 同一套新鮮度判斷）、且符合營收飆股條件。營收飆股 ratio 公式**刻意跟 `app.js` `calcEst()`/`_getStarBase()` 完全一致**（`est = 最新月營收/最新季營收 × 最新季EPS × 240`，`ratio = est/收盤`，要求 `ratio>=1.5` 且 `月營收年增>=20%`），不是另外發明一套算法——`ctx['q'][0]` 已經是依 `(year,quarter)` 降冪排序的最新一季（`_build_context()` 既有邏輯），`revenue`（最新一個月原始營收）原本沒有存進 ctx（月營收查詢那段只存了 `revenue_yoy`/`rev_yoy_recent`/`rev3m_avg`/`rev12m_avg` 這些衍生值），這次補上 `c['revenue'] = rows[0]['revenue']`。
+- **`ADMIN_ONLY_EXPERTS = {'chanlun_star'}`（2026-08-30 新增的存取控制機制，第一次用到）**：跟 `EXPERIMENTAL_EXPERTS`（純粹加「NEW」徽章，前端一樣公開）是不同層級的東西——這是真正擋存取，`app.py` 的 `/api/experts`（列表，過濾掉非管理員不該看到的 key）跟 `/api/experts/<key>`（明細，非管理員直接打 API 也回403）都要擋，不是只藏前端分頁，比照 taifex/AI分析等既有的 admin-only 慣例（「不是只藏畫面，直接打 API 也進不去」）。前端完全不用改——`renderExpertTabs()` 本來就是讀 `/api/experts` 回傳的列表渲染分頁，非管理員的回應裡本來就不會有這個 key，分頁自然不會出現。
+- **範圍刻意最小化**：沒有比照 `_isChanlunKey()`/`_chanlunSignalLabel()` 幫這個新規則也做「訊號類型」欄位換算（`chanlun_buy`/`chanlun_sell` 當初是因為使用者具體抱怨「評分沒意義」才加的），`chanlun_star` 通過的列一樣顯示 100/100，沒有另外解析 `breakdown` 顯示第幾買——這次沒有被要求要做這個，之後如果使用者反應同樣的問題再比照辦理即可。
+- **歷史進出場訊號 UI（2026-08-30 同日追加，使用者要求「把過去的進出場信號都表示出來」）**：`backtest_chanlun_chippeak.py` 新增 `run_single_stock(db, code, years=5, tier='chanlun_star')`——單股、同步、on-demand 版本，比照 `backtest_sweet_spot.run_backtest(db, code, years)` 的既有模式（`app.py` 直接 import 整個模組呼叫），完全重用 `simulate_stock()`/`_build_disclosure_series()`，不是另外寫一套簡化邏輯，所以個股詳情頁看到的歷史訊號**跟批次回測腳本、跟即時的 `chanlun_star` 選股規則，三處用的是同一套訊號/出場定義**，不會互相矛盾。`simulate_stock()` 的交易紀錄 dict 順便補上 `entry_price`/`exit_price`（原本只有 `return_pct`，UI 要顯示實際價格）。新端點 `GET /api/stocks/<code>/backtest/chanlun-star`（admin-only，跟 `chanlun_star` 本身的 `ADMIN_ONLY_EXPERTS` 存取限制一致，不是只藏前端）。**兩個顯示位置共用同一組 HTML-builder**（`_chanlunStarSummaryHtml()`/`_chanlunStarTradesHtml()`，`app.js`）：①個股詳情頁新增一張 `admin-only` 卡片（比照 🧪甜蜜點訊號回測卡片的按鈕觸發模式）；②達人選股 `chanlun_star` 分頁每一列在評分欄位旁加一顆「📊歷史」按鈕，點擊開 `#chanlun-star-history-modal`（重用 `.modal-box.taifex-chart-modal-box` 的寬版 modal 樣式，不用另外寫 CSS），不用先跳去個股詳情頁才能看歷史——使用者原話「兩個都要」，兩處都做。
+
 **重要 gotcha：Chart.js 進場動畫會讓稀疏散點 dataset 的所有點位塌陷到 y 軸 baseline（2026-08-22 除錯半天才定位）**——買/賣點 dataset（`showLine:false`，大多數索引是 `null`，只有訊號那幾個日期有值）建立時，Chart.js 的預設進場動畫會讓這些點卡在動畫起始位置（baseline），完全不會過渡到實際數值對應的高度，不管資料/dataset 順序/canvas 是否重用怎麼調都一樣。**排查過程**：一開始誤判是 `chartOptions()` 的 `interaction.mode:'index'` 造成的（改成 `'nearest'` 沒用）、也懷疑過 Filler plugin／canvas 重用／dataset object 被 Chart.js 內部快取污染（用 `{...d}` 淺拷貝丟進全新 canvas 意外「修好」了，一度誤導方向）——最後用真實資料+真實 `chartOptions()` 逐一拔掉 `opts` 的欄位二分排查，鎖定就是 `animation` 本身：只要 `animation:false`，稀疏散點 dataset 就會正確定位；`animation` 預設開啟（或設成 `{}`）就會壞，跟 `interaction`/`fill`/dataset 順序都無關。修法：`renderPriceChart()` 偵測到有纏論資料時，直接在該次渲染的 `opts.animation = false`（這張圖表本來就是資料變動就整個重繪，進場動畫沒有實質意義，不影響其他圖表）。**未來任何要在這個專案的 Chart.js 圖表上疊加 `showLine:false` 的稀疏散點 dataset，都要記得順便關閉 animation**，不然會踩到同一個坑。
+
+## 力道K線（`force_kline.py`/`backtest_force_kline.py`，2026-08-24 新增，**Phase A：只有計算+回測，尚未接前端，計畫是 admin-only**）
+
+使用者分享一段 ChatGPT 對話設計了一套原創「台股力道K線指標」（坊間同名產品沒有公開統一公式），分完整版「1.0」（5因子加權+A/S/SS三級買點+紅綠K線視覺化）跟「實戰版」（ZScore標準化後加權，方便回測）兩種。比照這個專案一貫的開發哲學（`chip_peak.py`/`chanlun.py` 都是「先驗證訊號有沒有用，再決定要不要投入視覺化」）：**先只做實戰版算分模組＋回測腳本，驗證有效後才規劃 Phase B（買賣點分級/K線視覺化/前端整合/admin-only 存取限制）**。
+
+**`force_kline.py` `compute_force_score(rows, inst_rows, zscore_window=60)`**：五因子（Momentum 30%／Volume 25%／Candle 20%／Trend 15%／MoneyFlow 10%）各自做滾動 ZScore 標準化後加權合成 `Force`，`PowerK = EMA(Force, 3)`。跟原始 ChatGPT 設計唯一的實質差異是 **MoneyFlow 因子升級成用真實三大法人買賣超**（`institutional_trades` 表，達人選股評分已在用同一份資料）取代原始的簡化版 `CLV×RVOL`——這是使用者明確要求的升級，缺資料的日子仍照原始設計退回 `CLV×RVOL`（比照 `chip_peak.py` `_quality_weight()` 的「缺值→中性」精神）。回傳 `dates`/`force_score`/`power_k` 三個跟輸入 `rows` 一一對齊（等長同索引，缺值處 `None`）的陣列，不是像 `chanlun.py` 那樣只回傳訊號摘要——這是刻意的，方便 `backtest_force_kline.py` 直接 zip 逐日比對，不用另外做索引映射。EMA 平滑**沒有**重用 `technical.ema_series`（開發時才發現：那個函式假設輸入從頭到尾連續無缺、用前N筆SMA當種子，遇到序列中段的 `None` 缺口會直接拋 `TypeError`——力道K線的五個因子任一個當天缺資料就會讓 `force[i]` 是 `None`，這種缺口是常態不是例外），改成自己寫一個 gap-aware 的遞迴 EMA（遇到 `None` 就重置狀態，下一個非 `None` 值重新當種子）。
+
+**`backtest_force_kline.py`**：獨立唯讀 CLI 腳本，不寫任何DB表。基礎訊號定義＝`PowerK` 由 `<=0` 翻到 `>0`（比照 ChatGPT 對話裡「第一根翻紅」的精神，實戰版還沒有分級所以先測最基本的翻正訊號）。**故意不比照 `backtest_gutai.py` 的 point-in-time 揭露日期gating／weekly resample**：股泰依賴季報/月營收這種有法定揭露截止日的基本面資料，力道K線只用價格/成交量/三大法人日資料，三者都是「當天即為已知」沒有揭露時間差問題，可以省掉這兩層複雜度直接逐日回測。市場基準沿用 `backtest_gutai.py` 的定義（`_mean(all_fwd)`：同一天全市場 horizon 日後報酬率的平均），「獲勝」＝訊號報酬率 > 當天市場基準，不是單純為正就算贏。資料讀取比照 `experts.py` `_build_context()` 的 bulk-query 串流分組模式（`ORDER BY stock_code, date` 一次撈完，不逐股票查詢），避免 N+1。
+
+六種訊號 tier（`find_signals(stock_data, horizon, bench_by_date, tier=...)`／`_is_signal()`；籌碼峰疊加系列共用 `apply_chip_peak_filter(stock_data, signals, level, comparison)`，`_DERIVED_TIERS` 這個 dict 定義每個衍生 tier 來源base tier+籌碼峰level('val'/'vah')+比較方向('below'/'above')三個參數）：
+- `base`：PowerK翻正，無確認條件
+- `s`：加 ChatGPT「1.0完整版」S級確認條件（ForceScore>+30、收盤>MA20、MA20上彎、RVOL>1.3）——`compute_force_score()` 為此回傳新增了 `ma20`/`rvol` 兩個中間值陣列（本來只在函式內部用，2026-08-24 補上）
+- `base_val`／`s_val`：在 `base`／`s` 之上，**再要求訊號當天收盤價 <= 該股票當時的籌碼峰VAL**（便宜區買）——使用者在 base/s 兩輪都沒優勢後，想測試「力道翻正+價格在籌碼峰便宜區」的組合
+- `base_vah`／`s_vah`：在 `base`／`s` 之上，**再要求訊號當天收盤價 >= 該股票當時的籌碼峰VAH**（突破貴的一端才買）——使用者接著想比較相反方向的組合，用 `apply_chip_peak_filter()` 的同一套機制傳 `level='vah', comparison='above'` 即可，不用另外寫一個函式
+
+以上四個籌碼峰疊加 tier 都重用既有的 `chip_peak.compute_chip_peak()`，同樣的 point-in-time 原則，只傳 `rows[:i+1]`（訊號當天及之前的資料，不會看到未來的成交量分佈）。
+
+**效能：`_load_stock_series()` 用 `multiprocessing.Pool` 平行算每支股票的 `compute_force_score()`（2026-08-24 使用者要求「跑回測時把電腦效能開到最大」新增）**——DB bulk query 仍在主行程一次做完（SQLite 不適合多行程同時打），平行的只有純CPU、不碰DB的算分本身，這是實際瓶頸所在（近2000檔股票單執行緒要跑5分半，44核平行後降到17秒）。`--workers` 預設吃滿 `os.cpu_count()` 全部核心，**刻意不跟 `backtest_gutai.py` 一樣預設「核心數-2」**——這支腳本是使用者明確要求全速跑的一次性研究腳本，不是常駐服務，不需要為其他工作留餘裕。平行化前後跑同一份資料，結果數字完全一致（已驗證），純粹是加速、不影響正確性。
+
+**Phase A 回測結果（2026-08-24，全市場1963檔、近5年、10日horizon）**：
+
+| 訊號 | 訊號數 | avg_fwd_return | median_fwd_return | win_rate_vs_benchmark | positive_return_rate | avg_max_drawdown |
+|---|---|---|---|---|---|---|
+| `base`（PowerK翻正，無確認條件） | 181,175 | 0.49% | -0.33% | 41.0% | 45.7% | -3.76% |
+| `s`（+S級確認條件） | 29,105 | 0.95% | -0.49% | 41.6% | 45.3% | -4.34% |
+| `base_val`（+收盤<=籌碼峰VAL，便宜區買） | 40,747 | 0.52% | 0.00% | 40.1% | 47.8% | -3.26% |
+| `s_val`（S級+收盤<=籌碼峰VAL） | 1,257 | 0.08% | -0.67% | 36.6% | 42.6% | -3.77% |
+| `base_vah`（+收盤>=籌碼峰VAH，突破貴的一端買） | 25,473 | 0.84% | -0.24% | 43.8% | 46.7% | -4.17% |
+| `s_vah`（S級+收盤>=籌碼峰VAH） | 11,996 | **1.13%** | -0.29% | **43.9%** | 47.2% | -4.56% |
+
+**結論：六種訊號定義，沒有一種展現出站得住腳的統計優勢（勝率全部低於50%），但方向上籌碼峰VAH突破組合明顯優於VAL便宜區組合**。`base_val`/`s_val`（便宜區買）對市場基準的勝率是六組裡最低的兩組（40.1%/36.6%，`s_val` 甚至是所有指標最差的一組）；`base_vah`/`s_vah`（突破買）則是六組裡表現最好的（勝率43.8%/43.9%、`s_vah` 平均報酬1.13%也是六組最高），推測原因：這套指標的核心邏輯是動能/趨勢追蹤（Momentum/Trend/Volume三個因子權重合計70%），「便宜區買」（價格在成交量密集區之下）在邏輯上更接近「逆勢承接」，跟動能指標的方向性假設互相矛盾；「突破貴的一端買」（價格站上成交量密集區之上）才是跟動能邏輯一致的「順勢突破」，即使還沒展現出統計顯著的優勢，方向至少是對的。即使是表現最好的 `s_vah`，43.9% 的勝率仍然低於50%，還不到能實際使用的門檻。截至目前**尚未進入 Phase B**（買賣點分級/K線視覺化/前端整合）。這個結論性段落之後如有更新，應該回來更新這裡，不要留著過時的狀態當作長期結論。
+
+## 纏論買點×籌碼峰回測（`backtest_chanlun_chippeak.py`，2026-08-24 新增）
+
+使用者發現力道K線回測（上一節）用固定horizon天數量遠期報酬，沒有真正的出場條件，要求換一套訊號來源（纏論買點，`chanlun.py`，只測買點不測賣點）＋完整的進出場模擬重新測試，並比照力道K線那一輪一樣搭配籌碼峰VAL/VAH兩種濾網。
+
+**方法論刻意跟 `backtest_force_kline.py` 不同**：
+- **纏論訊號逐日 point-in-time 重算，不是算一次拿來對日期**——已知纏論訊號會隨後續K棒重算而「時有時無」（見上方「纏論」章節2026-08-24的記錄），所以 `simulate_stock()` 沒有持倉時，每一天都重新呼叫一次 `chanlun.compute_chanlun(rows[:i+1])` 才能正確重現「使用者當天實際會看到什麼訊號」。`compute_chanlun()` 內部固定只取 `rows[-lookback:]`（預設250天），單次呼叫成本因此跟 `i` 無關（不會越算越慢，實測約0.7ms/次），全市場5年在44核心平行下仍可在數分鐘內跑完。
+- **四個tier（`chanlun`／`chanlun_val`／`chanlun_vah`／`chanlun_star`）各自獨立完整模擬一輪，不是事後篩選同一批訊號**——因為濾網會改變「哪些訊號真的進場」，進場了才會有持倉期間去阻擋後續訊號（no-pyramiding），不同濾網下同一支股票在同一段時間持倉與否可能完全不同，事後篩選（像 `backtest_force_kline.py` 那樣）在這裡會得到錯誤的持倉序列。
+- **`chanlun_star`（2026-08-25 新增，使用者要求搭配營收飆股訊號）**：進場當下同時要求符合 `app.js` `_getStarBase()` 的營收飆股入榜條件（`ratio=(月營收/季營收×季EPS×240)/收盤 >= 1.5` 且 `月營收年增 >= 20%`）。**關鍵：必須用「揭露當時已公開」的月營收/季報，不是資料庫裡最新的那筆**（否則有 lookahead bias）——月營收法定揭露截止日是次月10日、季報依季別有固定截止日，這套規則 `backtest_gutai.py` 的 `_revenue_known_by()`/`_quarter_known_by()` 已經在用，但那兩個函式只回傳布林值，這裡另外寫了回傳實際日期的版本（`_mr_disclosure_date()`/`_qf_disclosure_date()`），把月營收/季報都轉成依揭露日期排序的序列（`_build_disclosure_series()`），`simulate_stock()` 逐日用雙指標推進（`_advance_ptr()`）取得「as of 今天」實際已公開的最新一筆，這樣月營收/季報這種資料量小的表也不用每天重新查詢一次。
+- **出場條件（2026-08-24 使用者糾正一次，從「固定停利+10%」改成「移動停利」）**：`_STOP_PCT=-0.10` 固定停損（收盤跌破**進場價**10%）、`_TRAIL_PCT=0.10` 移動停利（收盤從進場後**最高收盤價**回檔10%）。`simulate_stock()` 逐日追蹤 `peak = max(peak, close)`（起始值＝進場價），只要 `peak > 進場價`（代表曾經賺錢過），從 `peak` 回檔10%就出場，標記 `exit_reason='trailing'`——**移動停利出場不保證賺錢**（股價可能只小漲一點就回檔10%，出場價還在進場價之下），只有股價「從進場後就沒漲過」才會走到固定停損分支（`exit_reason='stop'`）。兩者都用收盤價判斷、不設封頂（比照 `backtest_sweet_spot.py`）。**勝率因此改成直接看已實現報酬是不是正的**（`return_pct > 0`），不是用 `exit_reason` 當代理指標。
+- 沒有市場基準比較（不像 `backtest_force_kline.py` 用 `_mean(all_fwd)`）——這裡是完整的進出場模擬，改用勝率／平均已實現報酬／平均持有天數這組更直觀對應「這樣交易賺不賺錢」的指標，比照 `backtest_sweet_spot.py` 的報表風格。
+
+**回測結果（2026-08-25，全市場507~1765檔、近5年，移動停利版本）**：
+
+| tier | 已平倉筆數 | 移動停利出場 | 固定停損出場 | 勝率(報酬>0) | 平均報酬 | 中位數報酬 | 平均持有天數 |
+|---|---|---|---|---|---|---|---|
+| `chanlun`（純纏論買點，無濾網） | 7,764 | 6,700 | 1,064 | 34.7% | 0.47% | -4.96% | 43.8天 |
+| `chanlun_val`（+收盤<=VAL，便宜區買） | 5,965 | 5,182 | 783 | 35.0% | 0.59% | -4.87% | 45.3天 |
+| `chanlun_vah`（+收盤>=VAH，突破買） | 1,645 | 1,367 | 278 | 36.2% | 0.92% | -4.65% | 46.1天 |
+| `chanlun_star`（+符合營收飆股條件） | 766 | 677 | 89 | **37.3%** | **0.99%** | **-4.18%** | 44.0天 |
+
+**結論：勝率偏低（34.7%~37.3%，多數交易是虧錢出場）但平均報酬是正的、中位數報酬是負的——典型的移動停利「肥尾」特徵**：大部分交易只是小賺小賠就被10%回檔洗出場，但少數真正抓到大波段的交易漲幅遠超過10%（移動停利讓獲利持續奔跑，不會像固定停利那樣在剛達標就停止），把平均值拉成正的。**四組裡 `chanlun_star`（纏論買點+營收飆股）目前是表現最好的一組**：勝率、平均報酬、中位數報酬三項指標都是四組最高（勝率37.3%、平均報酬0.99%、中位數-4.18%相對最不負），比單獨的 `chanlun_vah` 又再進一步——推測「營收年增20%+以上、股價相對預估合理價還有機會」這個基本面條件，跟纏論的技術面買點確實有一定互補效果，篩選後樣本數也大幅縮小（766筆，是四組裡最少的），代表這是相對少見但品質較高的訊號組合。**這份回測一樣沒有隨機進場對照組**，所以嚴格來說還是無法完全排除「移動停利機制本身的正報酬肥尾特徵」跟「訊號真的有選股能力」的混淆，但四組之間的排序（無濾網 < VAL < VAH < 營收飆股）方向一致且逐步遞增，至少說明疊加的條件不是隨機雜訊。
 
 ## 期權籌碼分析（`crawler_taifex.py`/`taifex_analysis.py`，2026-08-20 新增，**需登入可見**）
 

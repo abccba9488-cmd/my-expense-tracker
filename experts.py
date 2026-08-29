@@ -63,12 +63,19 @@ EXPERT_LABELS = {
     'momentum_guard': '動能防雷',
     'chanlun_buy':  '纏論買點',
     'chanlun_sell': '纏論賣點',
+    'chanlun_star': '纏論買點+營收飆股',
 }
 
 # 非公開已知選股法（不像 gutai/888/guyu/laoniu 4 套是抄錄自對外公開的達人選股
 # 法），是本站自製的實驗性規則，前端會加註 NEW 徽章。詳見 score_momentum_guard()。
 # chanlun_buy/sell 是 2026-08-22 新增的第二個實驗性項目，見 _score_chanlun()。
-EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell'}
+EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star'}
+
+# 只有管理員能看到的規則（2026-08-30 新增，chanlun_star 是第一個）——跟
+# EXPERIMENTAL_EXPERTS（純粹加「NEW」徽章，前端一樣公開）不同層級，這裡是
+# 真正的存取控制：/api/experts（列表）跟 /api/experts/<key>（明細）都要擋，
+# 不是只藏前端分頁，比照 taifex/AI分析等既有的 admin-only 慣例。
+ADMIN_ONLY_EXPERTS = {'chanlun_star'}
 
 
 # ── small math helpers ──────────────────────────────────────────────────────
@@ -213,7 +220,7 @@ def _build_context(db):
             'code': code, 'name': name, 'market': market, 'industry': industry,
             'close': None, 'volume': None, 'avg_vol_10d': None,
             'per': None, 'pbr': None, 'pbr_avg_hist': None, 'dividend_yield': None,
-            'revenue_yoy': None, 'rev_yoy_recent': [], 'rev3m_avg': None, 'rev12m_avg': None,
+            'revenue': None, 'revenue_yoy': None, 'rev_yoy_recent': [], 'rev3m_avg': None, 'rev12m_avg': None,
             'q': [], 'inst': [], 'hold': [], 'div_by_year': {}, 'div_fill_events': [],
             'tech': {}, 'chanlun': {}, 'director_holding_pct': None,
         }
@@ -288,6 +295,7 @@ def _build_context(db):
         c = ctx.get(code)
         if not c:
             continue
+        c['revenue'] = rows[0]['revenue']  # 最新一個月的原始營收（千元），score_chanlun_star 的營收飆股 ratio 算式要用
         c['revenue_yoy'] = rows[0]['revenue_yoy']
         c['rev_yoy_recent'] = [x['revenue_yoy'] for x in rows[:2]]
         rev3 = [x['revenue'] for x in rows[:3] if x['revenue'] is not None]
@@ -916,6 +924,56 @@ def score_chanlun_sell(ctx):
     return _score_chanlun(ctx, want_buy=False)
 
 
+def score_chanlun_star(ctx):
+    """纏論買點 + 營收飆股（app.js `_getStarBase()` 的入榜條件）組合訊號，
+    2026-08-30 新增，**admin-only**（見 ADMIN_ONLY_EXPERTS）。使用者拿
+    `backtest_chanlun_chippeak.py` 的 `chanlun_star` tier 回測過（全市場5年、
+    766筆交易、勝率37.3%、平均報酬0.99%，是回測過的四種濾網組合裡表現最好
+    的一組），確認後要求做成獨立的選股規則，訊號出現時把股票抓進清單。
+
+    營收飆股 ratio 公式必須跟 `app.js` `calcEst()`/`_getStarBase()` 完全
+    一致（不是另外發明一套）：`est = (最新月營收 / 最新季營收) × 最新季EPS
+    × 240`，`ratio = est / 收盤`，要求 `ratio >= 1.5` 且 `月營收年增 >=
+    20%`。跟前端不同的是這裡不用擔心 lookahead bias（不是回測，是即時算當下
+    資料庫裡「已經寫入的最新一筆」，跟其他10套規則的即時計分是同一種
+    「用當下最新資料」的語意，不需要 backtest_chanlun_chippeak.py 那套
+    「揭露當時已公開」的 point-in-time gating）。"""
+    s = ScoreCard()
+    cl = ctx.get('chanlun') or {}
+    sig = cl.get('latest_signal')
+
+    is_buy_fresh = False
+    if sig and sig['type'].endswith('b'):
+        sig_date = sig['date']
+        if isinstance(sig_date, str):
+            sig_date = datetime.strptime(sig_date, '%Y-%m-%d').date()
+        days_ago = (datetime.now(_TZ).date() - sig_date).days
+        is_buy_fresh = days_ago <= _CHANLUN_RECENT_DAYS
+    s.require(f'近{_CHANLUN_RECENT_DAYS}曆日內有纏論買點訊號', is_buy_fresh)
+
+    close = ctx.get('close')
+    revenue = ctx.get('revenue')
+    revenue_yoy = ctx.get('revenue_yoy')
+    q = ctx.get('q') or []
+    qf_revenue = q[0].get('revenue') if q else None
+    eps = q[0].get('eps') if q else None
+
+    ratio = None
+    if close and revenue is not None and qf_revenue and qf_revenue > 0 and eps is not None and eps > 0:
+        ratio = (revenue / qf_revenue) * eps * 240 / close
+
+    is_star = ratio is not None and ratio >= 1.5 and revenue_yoy is not None and revenue_yoy >= 20
+    s.require('符合營收飆股條件（預估股價/收盤 >= 1.5倍 且 月營收年增 >= 20%）', is_star)
+
+    if is_buy_fresh and is_star:
+        s.award(
+            f'{_CHANLUN_TYPE_LABELS[sig["type"]]} @ {sig["price"]}（{sig["date"]}） '
+            f'+ 營收飆股（{ratio:.2f}倍／年增{revenue_yoy:.1f}%）',
+            True, 100, approx=True,
+        )
+    return s.result()
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -929,6 +987,7 @@ SCORERS = {
     'momentum_guard': score_momentum_guard,
     'chanlun_buy': score_chanlun_buy,
     'chanlun_sell': score_chanlun_sell,
+    'chanlun_star': score_chanlun_star,
 }
 
 

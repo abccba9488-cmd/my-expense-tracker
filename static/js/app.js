@@ -381,6 +381,7 @@ async function loadStockDetail(code) {
   loadStockInstitutionalTrades(code);
   loadStockBrokerTrades(code);
   resetStockBacktestCard();
+  resetStockChanlunStarCard();
 
   if (state.user && state.user.is_admin) {
     loadStockAiAnalysis(code);
@@ -2347,7 +2348,11 @@ function renderExpertTable() {
           <td class="num">${p.close != null ? fmt.price(p.close) : '—'}</td>
           <td class="num">${p.price_diff != null ? `<span class="${pctClass(p.price_diff)}">${fmt.pct(p.price_diff)}</span>` : '—'}</td>
           <td class="num">${p.change_pct != null ? `<span class="${pctClass(p.change_pct)}">${fmt.pct(p.change_pct)}</span>` : '—'}</td>
-          <td class="num">${isChanlun ? `<b>${_chanlunSignalLabel(s)}</b>` : `${s.score} / ${s.max_score}`}</td>
+          <td class="num">${isChanlun ? `<b>${_chanlunSignalLabel(s)}</b>` : `${s.score} / ${s.max_score}`}${
+            _expertKey === 'chanlun_star'
+              ? ` <button class="btn btn-sm" onclick="openChanlunStarHistoryModal('${s.code}')">📊歷史</button>`
+              : ''
+          }</td>
           <td class="num">${ratio != null ? ratio.toFixed(2) + 'x' : '—'}</td>
           <td>${p.price_date || '—'}</td>
           <td class="td-left">${sweetSpotCell(p)[1]}</td>
@@ -2655,6 +2660,130 @@ async function runStockBacktest() {
     btn.disabled = false;
     btn.textContent = '開始回測（近5年）';
   }
+}
+
+/* ── 纏論買點+營收飆股 歷史訊號（詳情頁按需查詢，admin-only） ── */
+function resetStockChanlunStarCard() {
+  document.getElementById('stock-chanlun-star-body').classList.add('hidden');
+  const empty = document.getElementById('stock-chanlun-star-empty');
+  empty.textContent = '點擊「開始回測」開始（單一股票計算，因為要逐日重算纏論訊號，通常數秒內完成）';
+  empty.classList.remove('hidden');
+  const btn = document.getElementById('stock-chanlun-star-btn');
+  btn.disabled = false;
+  btn.textContent = '開始回測（近5年）';
+}
+
+function _exitReasonLabel(reason) {
+  return { trailing: '移動停利', stop: '固定停損', open: '持有中' }[reason] || reason;
+}
+
+// 卡片版（個股詳情頁）跟 modal 版（達人選股 chanlun_star 分頁）共用這兩個
+// HTML-builder，只是塞進去的容器不同——這樣兩處畫面永遠一致，不用維護兩份
+//重複的樣板。
+function _chanlunStarSummaryHtml(s) {
+  if (!s.n_trades_total) {
+    return `<div class="health-tile"><div class="health-tile-label">訊號次數</div><div class="health-tile-value">0</div></div>`;
+  }
+  return `
+    <div class="health-tile">
+      <div class="health-tile-label">已平倉 ${s.n_closed} 次${s.n_still_open ? `（另有 ${s.n_still_open} 次持有中）` : ''}</div>
+      <div class="health-tile-value">${s.win_rate_pct ?? '—'}%</div>
+      <div class="stock-ai-updated" style="margin-top:4px;">
+        勝率（已實現報酬&gt;0 的比例）<br>
+        移動停利出場 ${s.n_trailing_exit ?? 0} 次｜固定停損出場 ${s.n_stop_exit ?? 0} 次
+      </div>
+    </div>
+    <div class="health-tile">
+      <div class="health-tile-label">平均報酬 / 中位數</div>
+      <div class="health-tile-value">${s.avg_return_pct != null ? `${s.avg_return_pct > 0 ? '+' : ''}${s.avg_return_pct}%` : '—'}</div>
+      <div class="stock-ai-updated" style="margin-top:4px;">
+        中位數 ${s.median_return_pct != null ? `${s.median_return_pct > 0 ? '+' : ''}${s.median_return_pct}%` : '—'}｜平均持有 ${s.avg_holding_days ?? '—'} 天
+      </div>
+    </div>`;
+}
+
+function _chanlunStarTradesHtml(trades, years) {
+  return trades.length ? [...trades].reverse().map(t => `
+    <tr>
+      <td>${t.entry_date}</td>
+      <td class="num">${fmt.price(t.entry_price)}</td>
+      <td>${t.exit_date || '持有中'}</td>
+      <td class="num">${fmt.price(t.exit_price)}</td>
+      <td>${_exitReasonLabel(t.exit_reason)}</td>
+      <td class="num">${t.holding_days}天</td>
+      <td class="num ${t.return_pct > 0 ? 'pos' : t.return_pct < 0 ? 'neg' : ''}">${
+        t.return_pct != null ? `${t.return_pct > 0 ? '+' : ''}${t.return_pct}%` : '—'
+      }</td>
+    </tr>
+  `).join('') : `<tr><td colspan="7" class="ann-empty">近${years}年沒有出現纏論買點+營收飆股訊號</td></tr>`;
+}
+
+function _renderChanlunStarResult(data) {
+  document.getElementById('stock-chanlun-star-summary').innerHTML = _chanlunStarSummaryHtml(data.summary);
+  document.getElementById('stock-chanlun-star-tbody').innerHTML = _chanlunStarTradesHtml(data.trades || [], data.years);
+}
+
+async function runStockChanlunStarBacktest() {
+  if (!state.currentCode) return;
+  const btn = document.getElementById('stock-chanlun-star-btn');
+  const empty = document.getElementById('stock-chanlun-star-empty');
+  const body = document.getElementById('stock-chanlun-star-body');
+  btn.disabled = true;
+  btn.textContent = '回測中，請稍候…';
+  body.classList.add('hidden');
+  empty.textContent = '回測中，請稍候（逐日重算纏論訊號，可能需要數秒）…';
+  empty.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/stocks/${state.currentCode}/backtest/chanlun-star?years=5`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      empty.textContent = `回測失敗：${data.error || '未知錯誤'}`;
+    } else {
+      empty.classList.add('hidden');
+      body.classList.remove('hidden');
+      _renderChanlunStarResult(data);
+      showToast(data.trades.length ? '回測完成' : '回測完成，近5年沒有出現訊號');
+    }
+  } catch (_) {
+    empty.classList.remove('hidden');
+    body.classList.add('hidden');
+    empty.textContent = '回測失敗，請稍後再試';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '開始回測（近5年）';
+  }
+}
+
+/* 達人選股 chanlun_star 分頁「📊歷史」按鈕 → modal（跟上面個股詳情頁卡片
+   共用 _chanlunStarSummaryHtml()/_chanlunStarTradesHtml()，同一支 API，
+   同一套訊號/出場定義，只是容器換成 modal，方便在清單頁直接看，不用先跳
+   去個股詳情頁）。*/
+async function openChanlunStarHistoryModal(code) {
+  const modal = document.getElementById('chanlun-star-history-modal');
+  const title = document.getElementById('chanlun-star-history-title');
+  const summaryEl = document.getElementById('chanlun-star-history-summary');
+  const tbody = document.getElementById('chanlun-star-history-tbody');
+  const stock = state.allData.find(d => d.code === code);
+  title.textContent = `${code} ${stock ? stock.name : ''} — 纏論買點+營收飆股 歷史訊號`;
+  summaryEl.innerHTML = '';
+  tbody.innerHTML = `<tr><td colspan="7" class="ann-empty">載入中…</td></tr>`;
+  modal.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/stocks/${code}/backtest/chanlun-star?years=5`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      tbody.innerHTML = `<tr><td colspan="7" class="ann-empty">載入失敗：${data.error || '未知錯誤'}</td></tr>`;
+      return;
+    }
+    summaryEl.innerHTML = _chanlunStarSummaryHtml(data.summary);
+    tbody.innerHTML = _chanlunStarTradesHtml(data.trades || [], data.years);
+  } catch (_) {
+    tbody.innerHTML = `<tr><td colspan="7" class="ann-empty">載入失敗，請稍後再試</td></tr>`;
+  }
+}
+
+function closeChanlunStarHistoryModal() {
+  document.getElementById('chanlun-star-history-modal').classList.add('hidden');
 }
 
 function _brokerLots(shares) {
