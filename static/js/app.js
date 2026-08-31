@@ -343,6 +343,7 @@ async function loadStockDetail(code) {
   code = String(code);
   state.currentCode = code;
   state.chanlunStarTrades = null;  // 上一支股票的歷史訊號疊圖不能沿用到新股票，見 renderPriceChart()
+  state.flag888GuyuTrades = null;  // 同上，888標準3+股魚 疊圖
   showDetailView();
 
   // Stock info
@@ -384,6 +385,7 @@ async function loadStockDetail(code) {
   loadStockBrokerTrades(code);
   resetStockBacktestCard();
   resetStockChanlunStarCard();
+  resetStockFlag888GuyuCard();
 
   if (state.user && state.user.is_admin) {
     loadStockAiAnalysis(code);
@@ -607,6 +609,20 @@ function _chanlunStarExitSeries(labels, trades) {
   return labels.map(d => byDate.has(d) ? byDate.get(d) : null);
 }
 
+// 888標準3+股魚 疊圖用，跟上面兩個函式邏輯完全一樣，只是分開命名對應
+// state.flag888GuyuTrades（見 renderPriceChart()），保持跟 chanlun_star
+// 疊圖同樣獨立、互不影響。
+function _flag888GuyuEntrySeries(labels, trades) {
+  const byDate = new Map(trades.map(t => [t.entry_date, t.entry_price]));
+  return labels.map(d => byDate.has(d) ? byDate.get(d) : null);
+}
+
+function _flag888GuyuExitSeries(labels, trades) {
+  const byDate = new Map();
+  trades.filter(t => t.exit_date).forEach(t => byDate.set(t.exit_date, t.exit_price));
+  return labels.map(d => byDate.has(d) ? byDate.get(d) : null);
+}
+
 /* 把 chip-peak 的 poc_history（較稀疏的取樣點，每筆帶 poc/vah/val，見
    chip_peak.py compute_chip_peak_series）對應到股價圖的完整日期軸上，取樣點
    之間用最近一次算出的值往後補滿（階梯狀，不是內插），取樣範圍以前的日期留
@@ -742,7 +758,27 @@ function renderPriceChart(prices) {
     );
   }
 
-  if (signalByDate || entryByDate) {
+  // Overlay 888標準3+股魚 歷史進出場（📐 卡片「開始回測」後才有資料，見
+  // runStockFlag888GuyuBacktest()）。跟上面兩組疊圖共用同一張圖，故意用
+  // 第三種形狀+顏色（菱形、黃/粉）區分，避免三組訊號視覺上混在一起分不清
+  // 是哪一套規則的標記。
+  const fgt = state.flag888GuyuTrades;
+  let fgEntryByDate = null, fgExitByDate = null;
+  if (fgt && fgt.length) {
+    opts.animation = false;
+    fgEntryByDate = new Map(fgt.map(t => [t.entry_date, t]));
+    fgExitByDate = new Map(fgt.filter(t => t.exit_date).map(t => [t.exit_date, t]));
+    datasets.push(
+      { label: '組合進場', data: _flag888GuyuEntrySeries(labels, fgt),
+        showLine: false, fill: false, pointStyle: 'rectRot', pointRadius: 8,
+        pointBackgroundColor: '#facc15', borderColor: '#facc15' },
+      { label: '組合出場', data: _flag888GuyuExitSeries(labels, fgt),
+        showLine: false, fill: false, pointStyle: 'rectRot', pointRadius: 8,
+        pointBackgroundColor: '#f472b6', borderColor: '#f472b6' },
+    );
+  }
+
+  if (signalByDate || entryByDate || fgEntryByDate) {
     opts.plugins.tooltip.callbacks = {
       label(ctx) {
         const label = ctx.dataset.label;
@@ -756,6 +792,16 @@ function renderPriceChart(prices) {
         }
         if (exitByDate && label === '策略出場') {
           const t = exitByDate.get(labels[ctx.dataIndex]);
+          return t
+            ? `出場 ${fmt.price(t.exit_price)}（${_exitReasonLabel(t.exit_reason)}，${t.return_pct > 0 ? '+' : ''}${t.return_pct}%）`
+            : label;
+        }
+        if (fgEntryByDate && label === '組合進場') {
+          const t = fgEntryByDate.get(labels[ctx.dataIndex]);
+          return t ? `進場 ${fmt.price(t.entry_price)}` : label;
+        }
+        if (fgExitByDate && label === '組合出場') {
+          const t = fgExitByDate.get(labels[ctx.dataIndex]);
           return t
             ? `出場 ${fmt.price(t.exit_price)}（${_exitReasonLabel(t.exit_reason)}，${t.return_pct > 0 ? '+' : ''}${t.return_pct}%）`
             : label;
@@ -2405,7 +2451,9 @@ function renderExpertTable() {
           <td class="num">${isChanlun ? `<b>${_chanlunSignalLabel(s)}</b>` : `${s.score} / ${s.max_score}`}${
             _expertKey === 'chanlun_star'
               ? ` <button class="btn btn-sm" onclick="openChanlunStarHistoryModal('${s.code}')">📊歷史</button>`
-              : ''
+              : _expertKey === 'flag888_guyu'
+                ? ` <button class="btn btn-sm" onclick="openFlag888GuyuHistoryModal('${s.code}')">📊歷史</button>`
+                : ''
           }</td>
           <td class="num">${ratio != null ? ratio.toFixed(2) + 'x' : '—'}</td>
           <td>${p.price_date || '—'}</td>
@@ -2756,7 +2804,8 @@ function _chanlunStarSummaryHtml(s) {
     </div>`;
 }
 
-function _chanlunStarTradesHtml(trades, years) {
+function _chanlunStarTradesHtml(trades, years, signalLabel) {
+  signalLabel = signalLabel || '纏論買點+營收飆股';
   return trades.length ? [...trades].reverse().map(t => `
     <tr>
       <td>${t.entry_date}</td>
@@ -2769,7 +2818,7 @@ function _chanlunStarTradesHtml(trades, years) {
         t.return_pct != null ? `${t.return_pct > 0 ? '+' : ''}${t.return_pct}%` : '—'
       }</td>
     </tr>
-  `).join('') : `<tr><td colspan="7" class="ann-empty">近${years}年沒有出現纏論買點+營收飆股訊號</td></tr>`;
+  `).join('') : `<tr><td colspan="7" class="ann-empty">近${years}年沒有出現${signalLabel}訊號</td></tr>`;
 }
 
 function _renderChanlunStarResult(data) {
@@ -2843,6 +2892,90 @@ async function openChanlunStarHistoryModal(code) {
 
 function closeChanlunStarHistoryModal() {
   document.getElementById('chanlun-star-history-modal').classList.add('hidden');
+}
+
+/* ── 888標準3+股魚 歷史訊號（詳情頁按需查詢，admin-only） ── */
+// 直接重用 _chanlunStarSummaryHtml()/_chanlunStarTradesHtml()/_exitReasonLabel()
+// ——summary/trades 的資料形狀跟 chanlun_star 完全一樣（見
+// backtest_signal_combos.summarize()，兩邊共用同一個聚合函式），沒有理由
+// 另外複製一份幾乎一樣的 HTML-builder。
+function resetStockFlag888GuyuCard() {
+  document.getElementById('stock-flag888-guyu-body').classList.add('hidden');
+  const empty = document.getElementById('stock-flag888-guyu-empty');
+  empty.textContent = '點擊「開始回測」開始';
+  empty.classList.remove('hidden');
+  const btn = document.getElementById('stock-flag888-guyu-btn');
+  btn.disabled = false;
+  btn.textContent = '開始回測（近5年）';
+}
+
+function _renderFlag888GuyuResult(data) {
+  document.getElementById('stock-flag888-guyu-summary').innerHTML = _chanlunStarSummaryHtml(data.summary);
+  document.getElementById('stock-flag888-guyu-tbody').innerHTML =
+    _chanlunStarTradesHtml(data.trades || [], data.years, '888標準3+股魚');
+}
+
+async function runStockFlag888GuyuBacktest() {
+  if (!state.currentCode) return;
+  const btn = document.getElementById('stock-flag888-guyu-btn');
+  const empty = document.getElementById('stock-flag888-guyu-empty');
+  const body = document.getElementById('stock-flag888-guyu-body');
+  btn.disabled = true;
+  btn.textContent = '回測中，請稍候…';
+  body.classList.add('hidden');
+  empty.textContent = '回測中，請稍候…';
+  empty.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/stocks/${state.currentCode}/backtest/flag888-guyu?years=5`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      empty.textContent = `回測失敗：${data.error || '未知錯誤'}`;
+    } else {
+      empty.classList.add('hidden');
+      body.classList.remove('hidden');
+      _renderFlag888GuyuResult(data);
+      state.flag888GuyuTrades = data.trades;
+      if (state.prices) renderPriceChart(state.prices);
+      showToast(data.trades.length ? '回測完成' : '回測完成，近5年沒有出現訊號');
+    }
+  } catch (_) {
+    empty.classList.remove('hidden');
+    body.classList.add('hidden');
+    empty.textContent = '回測失敗，請稍後再試';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '開始回測（近5年）';
+  }
+}
+
+/* 達人選股 flag888_guyu 分頁「📊歷史」按鈕 → modal，跟 chanlun_star 那組
+   同樣的容器切換模式，共用同一批 HTML-builder。*/
+async function openFlag888GuyuHistoryModal(code) {
+  const modal = document.getElementById('flag888-guyu-history-modal');
+  const title = document.getElementById('flag888-guyu-history-title');
+  const summaryEl = document.getElementById('flag888-guyu-history-summary');
+  const tbody = document.getElementById('flag888-guyu-history-tbody');
+  const stock = state.allData.find(d => d.code === code);
+  title.textContent = `${code} ${stock ? stock.name : ''} — 888標準3+股魚 歷史訊號`;
+  summaryEl.innerHTML = '';
+  tbody.innerHTML = `<tr><td colspan="7" class="ann-empty">載入中…</td></tr>`;
+  modal.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/stocks/${code}/backtest/flag888-guyu?years=5`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      tbody.innerHTML = `<tr><td colspan="7" class="ann-empty">載入失敗：${data.error || '未知錯誤'}</td></tr>`;
+      return;
+    }
+    summaryEl.innerHTML = _chanlunStarSummaryHtml(data.summary);
+    tbody.innerHTML = _chanlunStarTradesHtml(data.trades || [], data.years, '888標準3+股魚');
+  } catch (_) {
+    tbody.innerHTML = `<tr><td colspan="7" class="ann-empty">載入失敗，請稍後再試</td></tr>`;
+  }
+}
+
+function closeFlag888GuyuHistoryModal() {
+  document.getElementById('flag888-guyu-history-modal').classList.add('hidden');
 }
 
 function _brokerLots(shares) {

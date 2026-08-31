@@ -64,18 +64,20 @@ EXPERT_LABELS = {
     'chanlun_buy':  '纏論買點',
     'chanlun_sell': '纏論賣點',
     'chanlun_star': '纏論買點+營收飆股',
+    'flag888_guyu': '888標準3+股魚',
 }
 
 # 非公開已知選股法（不像 gutai/888/guyu/laoniu 4 套是抄錄自對外公開的達人選股
 # 法），是本站自製的實驗性規則，前端會加註 NEW 徽章。詳見 score_momentum_guard()。
 # chanlun_buy/sell 是 2026-08-22 新增的第二個實驗性項目，見 _score_chanlun()。
-EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star'}
+EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star', 'flag888_guyu'}
 
-# 只有管理員能看到的規則（2026-08-30 新增，chanlun_star 是第一個）——跟
-# EXPERIMENTAL_EXPERTS（純粹加「NEW」徽章，前端一樣公開）不同層級，這裡是
-# 真正的存取控制：/api/experts（列表）跟 /api/experts/<key>（明細）都要擋，
-# 不是只藏前端分頁，比照 taifex/AI分析等既有的 admin-only 慣例。
-ADMIN_ONLY_EXPERTS = {'chanlun_star'}
+# 只有管理員能看到的規則（2026-08-30 新增，chanlun_star 是第一個，
+# flag888_guyu 是同一天稍後新增的第二個）——跟 EXPERIMENTAL_EXPERTS（純粹加
+# 「NEW」徽章，前端一樣公開）不同層級，這裡是真正的存取控制：
+# /api/experts（列表）跟 /api/experts/<key>（明細）都要擋，不是只藏前端
+# 分頁，比照 taifex/AI分析等既有的 admin-only 慣例。
+ADMIN_ONLY_EXPERTS = {'chanlun_star', 'flag888_guyu'}
 
 
 # ── small math helpers ──────────────────────────────────────────────────────
@@ -974,6 +976,32 @@ def score_chanlun_star(ctx):
     return s.result()
 
 
+def score_flag888_guyu(ctx):
+    """888標準3（低價價值）AND 股魚（價值K線）組合訊號，2026-08-30新增，
+    **admin-only**（見 ADMIN_ONLY_EXPERTS）。使用者用
+    `backtest_signal_combos.py` 對 flag888_3 錨定做過45組系統性掃描（跟其餘
+    9套訊號的所有2~3套AND組合），`flag888_3+guyu` 是其中唯一通過「切成
+    2016-2021／2021-2026兩段互不重疊期間交叉驗證」的組合——兩段獨立期間
+    勝率都從flag888_3單獨的~43%穩定提升到49~50%，見 CLAUDE.md「達人選股
+    組合回測」章節的完整數字。**注意**：平均報酬的優勢沒有通過交叉驗證
+    （兩段期間互有勝負，比較像flag888_3本身逐年波動大，不是這個組合的
+    穩定優勢），所以這套規則賣點是「勝率較高、報酬分佈波動較小」，不是
+    「報酬更高」——跟 chanlun_star 當初拿到的「平均報酬也提升」證據強度
+    不同，這點務必如實呈現，不要誇大。
+
+    直接呼叫 `score_flag888_3()`/`score_guyu()` 兩個既有函式的
+    `passed`（`require()`門檻要兩套都通過），不重寫任何選股邏輯，避免跟
+    這兩套規則各自的即時計分結果產生分歧。"""
+    s = ScoreCard()
+    p3, _, _, _ = score_flag888_3(ctx)
+    pg, _, _, _ = score_guyu(ctx)
+    s.require('通過888標準3（低價價值）選股門檻', p3)
+    s.require('通過股魚（價值K線）選股門檻', pg)
+    if p3 and pg:
+        s.award('888標準3 + 股魚 雙重確認', True, 100, approx=True)
+    return s.result()
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -988,6 +1016,7 @@ SCORERS = {
     'chanlun_buy': score_chanlun_buy,
     'chanlun_sell': score_chanlun_sell,
     'chanlun_star': score_chanlun_star,
+    'flag888_guyu': score_flag888_guyu,
 }
 
 

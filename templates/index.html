@@ -691,6 +691,27 @@
         </div>
       </div>
 
+      <!-- 888標準3+股魚 歷史訊號（詳情頁按需查詢，admin-only） -->
+      <div class="card admin-only hidden">
+        <div class="card-header">
+          <h3>📐 888標準3+股魚 歷史訊號</h3>
+          <button class="btn btn-sm" id="stock-flag888-guyu-btn" onclick="runStockFlag888GuyuBacktest()">開始回測（近5年）</button>
+        </div>
+        <div class="stock-ai-updated">進場條件：同時通過888標準3（低價價值）跟股魚（價值K線）兩套規則各自的選股門檻。<strong>不加碼</strong>——持有期間忽略新訊號，出場後才能再進場。出場條件：固定停損（收盤跌破進場價10%）或移動停利（收盤從進場後最高點回檔10%），兩者以先到者為準，不設封頂，超過5年觀察期仍未觸發則列為「持有中」。使用未還原除權息的原始收盤價。回測完成後，下方股價走勢圖會疊上<span style="color:#facc15">黃色菱形＝進場</span>／<span style="color:#f472b6">粉色菱形＝出場</span>標記（「持有中」的部位還沒有真正出場事件，不會畫出場標記）。<strong>注意</strong>：這套規則用2016-2021／2021-2026兩段獨立期間交叉驗證過，勝率提升（~43%→49~50%）兩段都成立，但平均報酬的優勢沒有通過交叉驗證（兩段互有勝負）——賣點是「勝率較高、波動較小」，不是「報酬更高」。</div>
+        <div id="stock-flag888-guyu-empty" class="stock-ai-body">點擊「開始回測」開始</div>
+        <div id="stock-flag888-guyu-body" class="hidden">
+          <div id="stock-flag888-guyu-summary" class="health-grid health-grid-wide"></div>
+          <div class="ann-table-wrap">
+            <table class="ann-table" id="stock-flag888-guyu-table">
+              <thead>
+                <tr><th>進場日期</th><th>進場價</th><th>出場日期</th><th>出場價</th><th>出場原因</th><th>持有天數</th><th>報酬%</th></tr>
+              </thead>
+              <tbody id="stock-flag888-guyu-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- 股價圖 -->
       <div class="card">
         <div class="card-header">
@@ -1083,6 +1104,27 @@
             <tr><th>進場日期</th><th>進場價</th><th>出場日期</th><th>出場價</th><th>出場原因</th><th>持有天數</th><th>報酬%</th></tr>
           </thead>
           <tbody id="chanlun-star-history-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 888標準3+股魚 歷史訊號（達人選股 flag888_guyu 分頁「📊歷史」按鈕觸發） -->
+<div id="flag888-guyu-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeFlag888GuyuHistoryModal()">
+  <div class="modal-box taifex-chart-modal-box">
+    <div class="modal-header">
+      <span id="flag888-guyu-history-title" style="padding:14px 22px;font-weight:600;"></span>
+      <button class="modal-close" onclick="closeFlag888GuyuHistoryModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="flag888-guyu-history-summary" class="health-grid health-grid-wide"></div>
+      <div class="ann-table-wrap">
+        <table class="ann-table">
+          <thead>
+            <tr><th>進場日期</th><th>進場價</th><th>出場日期</th><th>出場價</th><th>出場原因</th><th>持有天數</th><th>報酬%</th></tr>
+          </thead>
+          <tbody id="flag888-guyu-history-tbody"></tbody>
         </table>
       </div>
     </div>

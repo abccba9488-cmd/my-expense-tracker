@@ -15,6 +15,7 @@ from sqlalchemy import desc, text, func as sa_func
 from werkzeug.security import generate_password_hash, check_password_hash
 
 import backtest_chanlun_chippeak
+import backtest_signal_combos
 import backtest_sweet_spot
 import chanlun
 import chip_peak
@@ -882,6 +883,29 @@ def api_stock_backtest_chanlun_star(code):
         return jsonify(result)
     except Exception as e:
         logger.exception('Backtest (chanlun_star) failed for %s', code)
+        return jsonify({'error': str(e)}), 500
+    finally:
+        db.close()
+
+
+@app.route('/api/stocks/<code>/backtest/flag888-guyu')
+def api_stock_backtest_flag888_guyu(code):
+    """On-demand、單一股票的「888標準3+股魚」歷史進出場訊號——重用
+    backtest_signal_combos.py 的 run_single_stock()/simulate_stock()，跟
+    flag888_guyu 這個達人選股規則（見 experts.py score_flag888_guyu）同一套
+    訊號定義／同一套移動停利出場規則。**admin-only**，比照 chanlun_star
+    （見上一個 endpoint）的存取限制慣例。"""
+    if not _is_admin():
+        return jsonify({'error': 'unauthorized'}), 403
+    years = request.args.get('years', 5, type=int)
+    db = SessionLocal()
+    try:
+        result = backtest_signal_combos.run_single_stock(db, code, years=years)
+        if result is None:
+            return jsonify({'error': '股價資料不足，無法回測（至少需要約30個交易日的歷史資料）'}), 400
+        return jsonify(result)
+    except Exception as e:
+        logger.exception('Backtest (flag888_guyu) failed for %s', code)
         return jsonify({'error': str(e)}), 500
     finally:
         db.close()
