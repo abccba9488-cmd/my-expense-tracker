@@ -402,6 +402,9 @@ main { padding-top: 52px; min-height: 100vh; }
 
 /* ── Chart ── */
 .chart-wrap { position: relative; height: 260px; }
+/* Match via :has() too, so it applies even when Flask still serves a cached index.html without the class */
+.chart-wrap.price-chart-wrap, .chart-wrap:has(> #price-chart) { height: 560px; }
+@media (max-width: 768px) { .chart-wrap.price-chart-wrap, .chart-wrap:has(> #price-chart) { height: 420px; } }
 .days-selector { display: flex; gap: 6px; }
 .days-btn {
   background: var(--bg3); border: 1px solid var(--border);
@@ -617,6 +620,11 @@ table.dataTable tbody td {
   text-align: left; position: sticky; left: 0; background: var(--bg2); z-index: 1;
 }
 .broker-trade-matrix thead th { color: var(--text2); font-weight: 600; background: var(--bg2); }
+.broker-trade-matrix th.broker-th-clickable { cursor: pointer; }
+.broker-trade-matrix th.broker-th-clickable:hover { color: var(--primary); text-decoration: underline; }
+
+#institutional-table th.inst-th-clickable { cursor: pointer; }
+#institutional-table th.inst-th-clickable:hover { color: var(--primary); text-decoration: underline; }
 .broker-trade-matrix .broker-trade-total-row td { font-weight: 700; border-top: 2px solid var(--border); }
 .broker-trade-empty { color: var(--text2); font-size: 13px; padding: 6px 0; }
 
@@ -848,6 +856,20 @@ table.dataTable tbody td {
   font-size: 13px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
 }
 .wl-remove-btn:hover { background: var(--neg); color: #fff; }
+
+/* ── 總體分析（機構級研究備忘錄提示詞產生器） ── */
+.macro-selected {
+  margin-top: 8px; font-size: 13px; color: var(--primary); font-weight: 600;
+}
+.macro-form-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 20px;
+}
+.macro-unit-row { display: flex; gap: 8px; }
+.macro-unit-row select { width: auto; flex: 0 0 auto; }
+.macro-ai-links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+@media (max-width: 640px) {
+  .macro-form-grid { grid-template-columns: 1fr; }
+}
 
 /* ── Admin dashboard page (/admin) ── */
 .health-grid {

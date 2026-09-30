@@ -14,14 +14,7 @@ cloudflared.exe
 # Local logs and generated backtest output — not source, not reproducible
 # input, shouldn't be in version control
 *.log
-backtest_gutai_full.json
-backtest_force_kline_result.json
-backtest_chanlun_chippeak_result.json
-backtest_expert_signals_result.json
-backtest_signal_combos_result.json
-backtest_flag888_3_anchor_result.json
-backtest_flag888_3_periodA_result.json
-backtest_flag888_3_periodB_result.json
+backtest_*.json
 
 # Personal helper scripts that bridge to an unrelated local project
 # (hardcoded paths, only meaningful on this machine — see CLAUDE.md

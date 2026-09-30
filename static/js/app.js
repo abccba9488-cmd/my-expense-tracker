@@ -360,7 +360,7 @@ async function loadStockDetail(code) {
 
   // Load data in parallel
   const [prices, revenues, financials, fundamentals, chipPeak, chanlunRes] = await Promise.all([
-    fetch(`/api/stocks/${code}/prices?days=${state.priceDays}`).then(r => r.json()).catch(() => []),
+    _fetchPriceSeries(code, state.priceDays),
     fetch(`/api/stocks/${code}/revenue`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/financials`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/fundamentals`).then(r => r.json()).catch(() => null),
@@ -374,7 +374,7 @@ async function loadStockDetail(code) {
   renderChanlun(state.chanlun);
   state.prices = prices;
   renderPriceChart(prices);
-  renderPriceTable(prices);
+  renderPriceTable(_visiblePrices(prices));
   renderRevenueChart(revenues);
   renderRevenueTable(revenues);
   renderEpsChart(financials);
@@ -517,13 +517,46 @@ document.querySelectorAll('.days-btn').forEach(btn => {
     this.classList.add('active');
     const days = this.dataset.days;
     state.priceDays = Number(days);
-    const prices = await fetch(`/api/stocks/${state.currentCode}/prices?days=${days}`)
-      .then(r => r.json()).catch(() => []);
+    const prices = await _fetchPriceSeries(state.currentCode, state.priceDays);
     state.prices = prices;
     renderPriceChart(prices);
-    renderPriceTable(prices);
+    renderPriceTable(_visiblePrices(prices));
   });
 });
+
+/* Price series are fetched with extra warm-up history so the 60-day MA is
+   already valid at the left edge of the chart; state.prices holds the full
+   (warm-up included) series, _visiblePrices() trims it to the selected
+   period for the chart x-axis and the price table. */
+const _MA_WARMUP_DAYS = 100;  // calendar days, covers 60 trading days incl. long holidays
+
+function _fetchPriceSeries(code, days) {
+  const fetchDays = days >= 9999 ? days : days + _MA_WARMUP_DAYS;
+  return fetch(`/api/stocks/${code}/prices?days=${fetchDays}`).then(r => r.json()).catch(() => []);
+}
+
+function _priceCutoffDate() {
+  const d = new Date();
+  d.setDate(d.getDate() - state.priceDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function _visiblePrices(prices) {
+  if (state.priceDays >= 9999) return prices;
+  const cutoff = _priceCutoffDate();
+  return prices.filter(p => p.date >= cutoff);
+}
+
+function _movingAverage(values, period) {
+  let sum = 0, count = 0;
+  const out = [];
+  values.forEach((v, i) => {
+    sum += v ?? 0; count += v != null ? 1 : 0;
+    if (i >= period) { const old = values[i - period]; sum -= old ?? 0; count -= old != null ? 1 : 0; }
+    out.push(i >= period - 1 && count === period ? +(sum / period).toFixed(2) : null);
+  });
+  return out;
+}
 
 /* ── Price chart ── */
 /* ── Chip peak (Phase 1: pure computation, see chip_peak.py) ── */
@@ -639,34 +672,73 @@ function _chipPeakFieldSeries(labels, history, field) {
   });
 }
 
-function renderPriceChart(prices) {
+function renderPriceChart(allPrices) {
   const canvas = document.getElementById('price-chart');
   if (state.priceChart) { state.priceChart.destroy(); state.priceChart = null; }
+  const prices = _visiblePrices(allPrices);
   if (!prices.length) return;
 
   const labels = prices.map(p => p.date);
-  const closes = prices.map(p => p.close);
   const n = prices.length;
+  const offset = allPrices.length - n;  // visible slice is the tail of allPrices
 
   // Determine x-axis tick density based on period length
   const maxTicks = n > 1000 ? 10 : n > 365 ? 12 : n > 90 ? 18 : 30;
 
-  const opts = chartOptions('收盤價 (元)');
+  const opts = chartOptions('股價 (元)');
   opts.scales.x.ticks = { ...opts.scales.x.ticks, maxTicksLimit: maxTicks };
   if (n > 500) {
     opts.plugins.decimation = { enabled: true, algorithm: 'min-max' };
   }
 
-  const datasets = [{
-    label: '收盤價',
-    data:   closes,
-    borderColor:     getCssVar('--primary'),
-    backgroundColor: getCssVar('--primary') + '22',
-    borderWidth:     n > 500 ? 1 : 2,
-    pointRadius:     0,
-    fill:            true,
-    tension:         n > 500 ? 0 : 0.3,
-  }];
+  opts.scales.x.offset = true;          // keep first/last candle fully visible
+  opts.scales.y.beginAtZero = false;
+  // Price and volume share one canvas as two vertically stacked y scales
+  // (same `stack`, stackWeight 4:1), so the volume pane lines up with the
+  // candles on the same x axis. Volume is shown in 張 (daily_prices.volume is 股).
+  // Within a stack Chart.js lays scales out top-to-bottom in reverse definition
+  // order, so yVol must be defined before y to sit in the bottom pane.
+  Object.assign(opts.scales.y, { stack: 'price', stackWeight: 4 });
+  const { x: xScale, y: yScale } = opts.scales;
+  opts.scales = { x: xScale, yVol: {
+    stack: 'price', stackWeight: 1, position: 'left', offset: true, beginAtZero: true,
+    grid: { color: getCssVar('--border') },
+    ticks: { color: getCssVar('--text2'), maxTicksLimit: 3,
+      callback: v => v >= 10000 ? `${+(v / 10000).toFixed(1)}萬` : v.toLocaleString() },
+    title: { display: true, text: '成交量 (張)', color: getCssVar('--text2') },
+  }, y: yScale };
+
+  // Candlesticks drawn as two overlapping floating-bar datasets (wick = [low, high],
+  // body = [open, close]) so no extra financial-chart plugin / time scale is
+  // needed and every existing category-axis overlay below keeps working.
+  // Taiwan convention: red = up, green = down. Higher `order` draws underneath,
+  // so wick < body < MA/overlay lines (order 0).
+  const UP = '#ef4444', DOWN = '#22c55e';
+  const candleColor = prices.map(p => (p.close ?? 0) >= (p.open ?? p.close ?? 0) ? UP : DOWN);
+  const ohlcOk = p => p.open != null && p.high != null && p.low != null && p.close != null;
+  const datasets = [
+    { type: 'bar', label: 'K線', order: 1, grouped: false,
+      data: prices.map(p => ohlcOk(p) ? [p.open, p.close] : null),
+      backgroundColor: candleColor, borderColor: candleColor, borderWidth: 0,
+      minBarLength: 1, barPercentage: 0.8, categoryPercentage: 0.9 },
+    { type: 'bar', label: '_wick', order: 2, grouped: false,
+      data: prices.map(p => ohlcOk(p) ? [p.low, p.high] : null),
+      backgroundColor: candleColor, borderWidth: 0,
+      minBarLength: 1, barThickness: 1 },
+    { type: 'bar', label: '成交量', order: 3, grouped: false, yAxisID: 'yVol',
+      data: prices.map(p => p.volume != null ? Math.round(p.volume / 1000) : null),
+      backgroundColor: candleColor.map(c => c + '99'), borderWidth: 0,
+      barPercentage: 0.8, categoryPercentage: 0.9 },
+  ];
+
+  const closesAll = allPrices.map(p => p.close);
+  [[5, '#f472b6'], [20, '#38bdf8'], [60, '#a3e635']].forEach(([period, color]) => {
+    datasets.push({
+      label: `${period}日線`, data: _movingAverage(closesAll, period).slice(offset),
+      borderColor: color, backgroundColor: color, borderWidth: 1.5,
+      pointRadius: 0, fill: false, tension: 0, spanGaps: true,
+    });
+  });
 
   // Overlay chip-peak reference lines when available — independent of the
   // days-selector's own lookback window (chip peak always uses its own
@@ -778,38 +850,46 @@ function renderPriceChart(prices) {
     );
   }
 
-  if (signalByDate || entryByDate || fgEntryByDate) {
-    opts.plugins.tooltip.callbacks = {
-      label(ctx) {
-        const label = ctx.dataset.label;
-        if (signalByDate && (label === '買點' || label === '賣點')) {
-          const s = signalByDate.get(labels[ctx.dataIndex]);
-          return s ? `${_CHANLUN_SIGNAL_LABELS[s.type]} ${fmt.price(s.price)}` : label;
-        }
-        if (entryByDate && label === '策略進場') {
-          const t = entryByDate.get(labels[ctx.dataIndex]);
-          return t ? `進場 ${fmt.price(t.entry_price)}` : label;
-        }
-        if (exitByDate && label === '策略出場') {
-          const t = exitByDate.get(labels[ctx.dataIndex]);
-          return t
-            ? `出場 ${fmt.price(t.exit_price)}（${_exitReasonLabel(t.exit_reason)}，${t.return_pct > 0 ? '+' : ''}${t.return_pct}%）`
-            : label;
-        }
-        if (fgEntryByDate && label === '組合進場') {
-          const t = fgEntryByDate.get(labels[ctx.dataIndex]);
-          return t ? `進場 ${fmt.price(t.entry_price)}` : label;
-        }
-        if (fgExitByDate && label === '組合出場') {
-          const t = fgExitByDate.get(labels[ctx.dataIndex]);
-          return t
-            ? `出場 ${fmt.price(t.exit_price)}（${_exitReasonLabel(t.exit_reason)}，${t.return_pct > 0 ? '+' : ''}${t.return_pct}%）`
-            : label;
-        }
-        return `${label}: ${ctx.formattedValue}`;
-      },
-    };
-  }
+  opts.plugins.legend.labels.filter = item => item.text !== '_wick';
+  opts.plugins.tooltip.filter = item => item.dataset.label !== '_wick';
+  opts.plugins.tooltip.callbacks = {
+    label(ctx) {
+      const label = ctx.dataset.label;
+      if (label === 'K線') {
+        const p = prices[ctx.dataIndex];
+        return `開 ${fmt.price(p.open)}  高 ${fmt.price(p.high)}  低 ${fmt.price(p.low)}  收 ${fmt.price(p.close)}`;
+      }
+      if (signalByDate && (label === '買點' || label === '賣點')) {
+        const s = signalByDate.get(labels[ctx.dataIndex]);
+        return s ? `${_CHANLUN_SIGNAL_LABELS[s.type]} ${fmt.price(s.price)}` : label;
+      }
+      if (entryByDate && label === '策略進場') {
+        const t = entryByDate.get(labels[ctx.dataIndex]);
+        return t ? `進場 ${fmt.price(t.entry_price)}` : label;
+      }
+      if (exitByDate && label === '策略出場') {
+        const t = exitByDate.get(labels[ctx.dataIndex]);
+        return t
+          ? `出場 ${fmt.price(t.exit_price)}（${_exitReasonLabel(t.exit_reason)}，${t.return_pct > 0 ? '+' : ''}${t.return_pct}%）`
+          : label;
+      }
+      if (fgEntryByDate && label === '組合進場') {
+        const t = fgEntryByDate.get(labels[ctx.dataIndex]);
+        return t ? `進場 ${fmt.price(t.entry_price)}` : label;
+      }
+      if (fgExitByDate && label === '組合出場') {
+        const t = fgExitByDate.get(labels[ctx.dataIndex]);
+        return t
+          ? `出場 ${fmt.price(t.exit_price)}（${_exitReasonLabel(t.exit_reason)}，${t.return_pct > 0 ? '+' : ''}${t.return_pct}%）`
+          : label;
+      }
+      if (label === '成交量') return `成交量: ${ctx.raw.toLocaleString()} 張`;
+      return `${label}: ${ctx.formattedValue}`;
+    },
+  };
+
+  // Datasets without an explicit axis would bind to the first y scale (yVol)
+  datasets.forEach(d => { d.yAxisID ??= 'y'; });
 
   state.priceChart = new Chart(canvas, {
     type: 'line',
@@ -1179,6 +1259,7 @@ document.querySelectorAll('.page-tab').forEach(btn => {
     document.getElementById('watchlist-view').classList.toggle('active', state.activeTab === 'watchlist');
     document.getElementById('ann-view').classList.toggle('active', state.activeTab === 'ann');
     document.getElementById('expert-view').classList.toggle('active', state.activeTab === 'expert');
+    document.getElementById('macro-view').classList.toggle('active', state.activeTab === 'macro');
     document.getElementById('taifex-view').classList.toggle('active', state.activeTab === 'taifex');
     if (state.activeTab === 'star') renderStarTable();
     if (state.activeTab === 'watchlist') renderWatchlistView();
@@ -1445,7 +1526,7 @@ function showListView() {
   const returningCode = state.currentCode;
   document.getElementById('detail-view').classList.remove('active');
   document.getElementById('page-tabs-bar').classList.remove('hidden');
-  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view', expert: 'expert-view', taifex: 'taifex-view' };
+  const viewMap = { star: 'star-view', watchlist: 'watchlist-view', ann: 'ann-view', expert: 'expert-view', macro: 'macro-view', taifex: 'taifex-view' };
   document.getElementById(viewMap[state.activeTab] || 'list-view').classList.add('active');
   state.currentCode = null;
   if (returningCode) requestAnimationFrame(() => _scrollToStockRow(returningCode));
@@ -1847,6 +1928,1151 @@ document.addEventListener('click', function(e) {
   if (!wlSearchInput.contains(e.target) && !wlSearchDropdown.contains(e.target))
     wlSearchDropdown.classList.add('hidden');
 });
+
+/* ── 總體分析：機構級研究備忘錄提示詞產生器 ── */
+const macroSearchInput = document.getElementById('macro-search');
+const macroSearchDropdown = document.getElementById('macro-search-dropdown');
+let _macroMatches = [];
+let _macroSelected = null;
+
+macroSearchInput.addEventListener('input', function() {
+  const q = this.value.trim().toLowerCase();
+  if (!q) { macroSearchDropdown.classList.add('hidden'); _macroMatches = []; return; }
+  _macroMatches = state.allData
+    .filter(s => s.code.startsWith(q) || (s.name && s.name.toLowerCase().includes(q)))
+    .slice(0, 10);
+  if (!_macroMatches.length) { macroSearchDropdown.classList.add('hidden'); return; }
+  macroSearchDropdown.innerHTML = _macroMatches.map(s =>
+    `<div class="wl-search-item" data-code="${s.code}">
+      <span class="wl-si-code">${s.code}</span>
+      <span class="wl-si-name">${s.name}</span>
+      <span class="wl-si-ind">${s.industry || ''}</span>
+    </div>`).join('');
+  macroSearchDropdown.classList.remove('hidden');
+});
+
+macroSearchInput.addEventListener('keydown', function(e) {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const top = _macroMatches[0];
+  if (!top) return;
+  selectMacroStock(top.code);
+});
+
+macroSearchDropdown.addEventListener('click', function(e) {
+  const item = e.target.closest('.wl-search-item');
+  if (!item) return;
+  selectMacroStock(item.dataset.code);
+});
+
+document.addEventListener('click', function(e) {
+  if (!macroSearchInput.contains(e.target) && !macroSearchDropdown.contains(e.target))
+    macroSearchDropdown.classList.add('hidden');
+});
+
+async function selectMacroStock(code) {
+  const s = state.allData.find(d => d.code === String(code));
+  if (!s) { showToast('找不到這檔股票'); return; }
+  _macroSelected = s;
+  macroSearchInput.value = '';
+  macroSearchDropdown.classList.add('hidden');
+  _macroMatches = [];
+
+  const sel = document.getElementById('macro-selected');
+  sel.textContent = `已選擇：${s.code} ${s.name}${s.industry ? `（${s.industry}）` : ''}`;
+  sel.classList.remove('hidden');
+
+  if (s.close != null) document.getElementById('macro-price').value = s.close;
+
+  const extraEl = document.getElementById('macro-extra');
+  extraEl.value = '載入本站資料中…';
+  const [financials, revenues, prices, brokerTrades] = await Promise.all([
+    fetch(`/api/stocks/${code}/financials`).then(r => r.json()).catch(() => []),
+    fetch(`/api/stocks/${code}/revenue`).then(r => r.json()).catch(() => []),
+    fetch(`/api/stocks/${code}/prices?days=182`).then(r => r.json()).catch(() => []),
+    fetch(`/api/stocks/${code}/broker-trades?days=90`).then(r => r.json()).catch(() => []),
+  ]);
+  extraEl.value = _buildMacroExtraText(s, financials, revenues, prices, brokerTrades);
+}
+
+function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades) {
+  const lines = [];
+  lines.push(`【本站資料庫基本面摘要｜資料日期 ${s.price_date || '—'}】`);
+  lines.push('（股價皆為未還原除權息的原始價格；金額單位為新台幣千元；EPS 為單季值，單位元）');
+  lines.push(`收盤價：${s.close ?? '—'}｜漲跌幅：${s.change_pct != null ? s.change_pct + '%' : '—'}`);
+  lines.push(`均線：20MA ${s.ma20 ?? '—'}｜60MA ${s.ma60 ?? '—'}｜120MA ${s.ma120 ?? '—'}｜240MA ${s.ma240 ?? '—'}`);
+  lines.push(`本益比（股價÷近四季EPS合計）：${s.pe_ratio ?? '—'}｜殖利率：${s.dividend_yield != null ? s.dividend_yield + '%' : '—'}`);
+  lines.push(`最新月營收：${s.rev_year && s.rev_month ? `${s.rev_year}/${String(s.rev_month).padStart(2, '0')}` : '—'}，年增率 ${s.revenue_yoy != null ? s.revenue_yoy + '%' : '—'}`);
+  lines.push(`最新單季EPS：${s.eps ?? '—'}（${s.eps_year ?? '—'}Q${s.eps_quarter ?? '—'}）`);
+
+  const q = (financials || []).slice(0, 8);
+  if (q.length) {
+    lines.push('');
+    lines.push('近8季單季財報（年季 | 營收(千元) | 營業利益(千元) | 淨利(千元) | 單季EPS(元)）：');
+    q.forEach(f => lines.push(`${f.year}Q${f.quarter} | ${f.revenue ?? '—'} | ${f.operating_income ?? '—'} | ${f.net_income ?? '—'} | ${f.eps ?? '—'}`));
+  }
+  const r = (revenues || []).slice(0, 12);
+  if (r.length) {
+    lines.push('');
+    lines.push('近12個月月營收年增率：');
+    lines.push(r.map(x => `${x.year}/${String(x.month).padStart(2, '0')} ${x.revenue_yoy != null ? x.revenue_yoy.toFixed(1) + '%' : '—'}`).join('、'));
+  }
+  const p = prices || [];
+  if (p.length) {
+    lines.push('');
+    lines.push(`近半年日線資料（日期 | 開 | 高 | 低 | 收 | 漲跌% | 成交量(張)）共 ${p.length} 筆：`);
+    p.forEach(x => lines.push(`${x.date} | ${x.open ?? '—'} | ${x.high ?? '—'} | ${x.low ?? '—'} | ${x.close ?? '—'} | ${x.change_pct != null ? x.change_pct + '%' : '—'} | ${x.volume != null ? Math.round(x.volume / 1000) : '—'}`));
+  }
+  const bt = brokerTrades || [];
+  if (bt.length) {
+    const dates = [...new Set(bt.map(r => r.date))];
+    const cumMap = {};
+    for (const r of bt) {
+      const c = cumMap[r.broker_id] || (cumMap[r.broker_id] = {name: r.broker_name || r.broker_id, net: 0, activity: 0});
+      c.net += (r.buy_volume || 0) - (r.sell_volume || 0);
+      c.activity += (r.buy_volume || 0) + (r.sell_volume || 0);
+    }
+    const cum = Object.values(cumMap);
+    const topBuy  = [...cum].sort((a, b) => b.net - a.net).slice(0, 10).filter(c => c.net > 0);
+    const topSell = [...cum].sort((a, b) => a.net - b.net).slice(0, 10).filter(c => c.net < 0);
+    const totalActivity = cum.reduce((s, c) => s + c.activity, 0);
+    const top5Pct = totalActivity ? ([...cum].sort((a, b) => b.activity - a.activity).slice(0, 5)
+      .reduce((s, c) => s + c.activity, 0) / totalActivity * 100).toFixed(1) : null;
+    lines.push('');
+    lines.push(`近${dates.length}個交易日主力分點進出（單位：張，${cum.length}家分點參與${top5Pct != null ? `，前5大分點占${top5Pct}%成交量` : ''}）：`);
+    lines.push(`買超前十：${topBuy.length ? topBuy.map(c => `${c.name} +${_brokerLots(c.net).toLocaleString()}`).join('、') : '（無）'}`);
+    lines.push(`賣超前十：${topSell.length ? topSell.map(c => `${c.name} ${_brokerLots(c.net).toLocaleString()}`).join('、') : '（無）'}`);
+  }
+  return lines.join('\n');
+}
+
+// Default units follow the selected market (TW: TWD/lots, US: USD/shares)
+document.getElementById('macro-market').addEventListener('change', function() {
+  const us = this.value === '美股';
+  document.getElementById('macro-cost-unit').value = us ? '美元' : '元';
+  document.getElementById('macro-qty-unit').value = us ? '股' : '張';
+});
+
+function _macroField(id) { return (document.getElementById(id).value || '').trim(); }
+
+function buildMacroPrompt() {
+  const code = _macroSelected ? _macroSelected.code : '';
+  const name = _macroSelected ? _macroSelected.name : '';
+  const searchVal = _macroField('macro-search');
+  const target = code ? `${name}（${code}）` : (searchVal || '（未指定，請先在上方搜尋並選擇股票，或直接輸入美股代號）');
+  const marketSel = document.getElementById('macro-market');
+  const market = marketSel.options[marketSel.selectedIndex].textContent;
+  const price = _macroField('macro-price') || '（未提供）';
+  const costVal = _macroField('macro-cost');
+  const qtyVal = _macroField('macro-qty');
+  const cost = costVal ? `${costVal} ${_macroField('macro-cost-unit')}` : '尚未持有';
+  const qty = qtyVal ? `${qtyVal} ${_macroField('macro-qty-unit')}` : '尚未持有';
+  const horizonSel = document.getElementById('macro-horizon');
+  const horizon = horizonSel.options[horizonSel.selectedIndex].textContent;
+  const maxloss = _macroField('macro-maxloss');
+  const maxlossText = maxloss ? `${maxloss}%` : '（未提供）';
+  const extra = _macroField('macro-extra') || '（無補充資料）';
+  const stockLine = code || searchVal || '（請填入股票代號）';
+
+  return `# 機構級台美股「基本面 × 供需 × 技術 × 籌碼 × 估值 × 風控」全方位研究 Prompt
+
+## 一、角色設定
+
+你是一名具備 20 年以上經驗的頂級投資銀行 Sell-side Research 資深股票研究員，同時具備：
+
+* 台美股基本面研究能力
+* 半導體／硬體／AI／科技產業供需分析能力
+* 財報與現金流分析能力
+* 技術分析與 K 線結構判讀能力
+* 法人／主力／籌碼流向分析能力
+* 估值模型與情境分析能力
+* 機構投資組合風險管理能力
+
+你的研究對象為資產管理公司、基金經理人及專業投資人。
+
+**核心任務：不是預測股價，而是找出「企業價值、產業供需與市場價格」三者之間的差異，並據此建立可驗證的投資與風險管理框架。**
+
+---
+
+# 二、分析標的
+
+* **股票名稱／代號：** ${target}
+* **市場：** ${market}
+* **目前股價：** ${price}
+* **持股成本：** ${cost}
+* **持有數量：** ${qty}
+* **預計投資週期：** ${horizon}
+* **最大可承受虧損：** ${maxlossText}
+* **K線圖：** （本站無法直接附加圖片，如有 K 線圖請自行提供給 AI，或參考下方補充資料的文字描述）
+* **補充資料：**
+${extra}
+
+---
+
+# 三、即時資料與事實查核規則
+
+## 1. 必須進行最新網路搜尋
+
+分析前必須搜尋：
+
+1. 公司最新財報
+2. 最新營收／月營收
+3. 最新法說會簡報
+4. 法說會 Q&A／文字稿
+5. 最新重大訊息
+6. CAPEX／擴產計畫
+7. 公司最新產品與訂單資訊
+8. 所屬產業最新供需狀況
+9. 最新產品報價／ASP／利差
+10. 主要競爭對手最新狀況
+11. 外資／本土券商產業研究
+12. TrendForce、IDC、Gartner、Counterpoint、Digitimes 等專業產業資料（若適用）
+13. 最新市場與產業新聞
+14. 所屬產業的龍頭股（台股與美股／國際龍頭各至少 1～3 家）及其最新財報、營收、法說會展望、股價走勢與估值
+
+**不能只依賴使用者提供的資料。**
+
+「補充資料」來自使用者自建資料庫，可能有落差（例如尚未更新、Q4 由年度數字反推、股本變動造成 EPS 失真）。若與 Tier 1 官方來源（公開資訊觀測站、證交所、櫃買中心、公司財報）不一致，**以官方數字為準**，並在報告中列出差異項目與兩邊數值。
+
+若找不到最新新聞或可靠資料，必須明確寫：
+
+> 【資料不足，無法確認】
+
+不得自行補猜。
+
+---
+
+# 四、資料來源分級
+
+### Tier 1：官方第一手資料
+
+最高權重：
+
+* 公司財報
+* 公司法說會
+* 法說會簡報
+* 法說會 Q&A
+* 公司公告
+* 重大訊息
+* 月營收
+* CAPEX
+* 公司正式新聞稿
+
+### Tier 2：專業第二手資料
+
+* 外資券商
+* 本土券商
+* TrendForce
+* Gartner
+* IDC
+* Counterpoint
+* Digitimes
+* 其他具可信度的產業研究機構
+
+### Tier 3：市場資訊
+
+* 財經媒體
+* 產業新聞
+* 市場訪查
+* 法人公開資訊
+* 社群／論壇
+
+Tier 3 僅可作為輔助，不可單獨作為重大投資結論的核心依據。
+
+---
+
+# 五、第一層：投資摘要評等框
+
+分析開頭先提供：
+
+| 項目          | 評估         |
+| ----------- | ---------- |
+| 股票          |            |
+| 基準日         | YYYY/MM/DD |
+| 股價          |            |
+| 基本面狀態       |            |
+| 產業供需        |            |
+| 技術趨勢        |            |
+| 籌碼結構        |            |
+| 估值          |            |
+| 主要催化劑       |            |
+| 最大風險        |            |
+| 12個月多方情境目標價 |            |
+| 12個月基準情境目標價 |            |
+| 12個月空方情境目標價 |            |
+| 投資策略        |            |
+| 信心程度        | 高／中／低      |
+
+**禁止用「最佳、最強、第一名」等排名式描述。**
+
+---
+
+# 六、第二層：商業模式與基本面
+
+## 1. 商業模式拆解
+
+用白話回答：
+
+> 公司到底靠什麼賺錢？
+
+說明：
+
+* 核心產品
+* 核心客戶
+* 收入來源
+* 成本結構
+* 利潤來源
+* 主要成長引擎
+* 哪些因素會讓 EPS 上升
+* 哪些因素會讓 EPS 下滑
+
+---
+
+## 2. 營收結構
+
+整理：
+
+| 事業／產品線 | 營收占比 | YoY | QoQ | 近3～5年趨勢 | 未來展望 |
+| ------ | ---: | --: | --: | ------- | ---- |
+|        |      |     |     |         |      |
+
+分析：
+
+* 哪個產品線正在成長？
+* 哪個產品線正在衰退？
+* 成長來自價格、數量還是產品組合？
+* 成長是否具持續性？
+
+---
+
+# 七、第三層：獲利能力與財務品質
+
+至少分析近 5 年：
+
+| 指標    | FY-4 | FY-3 | FY-2 | FY-1 | 最新年度 |
+| ----- | ---: | ---: | ---: | ---: | ---: |
+| 營收    |      |      |      |      |      |
+| 毛利率   |      |      |      |      |      |
+| 營業利益率 |      |      |      |      |      |
+| 淨利率   |      |      |      |      |      |
+| EPS   |      |      |      |      |      |
+| ROE   |      |      |      |      |      |
+| ROIC  |      |      |      |      |      |
+
+重點判斷：
+
+1. 毛利率是否上升？
+2. 營益率是否改善？
+3. 是否存在營運槓桿？
+4. ROE 是否由真正獲利改善推動？
+5. EPS 成長是否主要靠業外收益？
+6. 是否存在一次性收益？
+
+---
+
+# 八、第四層：資產負債表健康度
+
+分析：
+
+| 指標      | 最新數據 | 趨勢 | 判讀 |
+| ------- | ---: | -- | -- |
+| 負債權益比   |      |    |    |
+| 流動比率    |      |    |    |
+| 速動比率    |      |    |    |
+| 現金及約當現金 |      |    |    |
+| 總負債     |      |    |    |
+| 現金／總負債  |      |    |    |
+| 淨負債     |      |    |    |
+| 利息保障倍數  |      |    |    |
+
+特別判斷：
+
+* 公司是否具有財務壓力？
+* 是否需要大量借款擴產？
+* 利率上升是否會造成風險？
+* 現金是否足以支應 CAPEX？
+
+---
+
+# 九、第五層：自由現金流與資本配置
+
+分析：
+
+* CFO
+* CAPEX
+* FCF
+* FCF Margin
+* FCF Yield
+* FCF YoY 成長率
+
+公式：
+
+> FCF = 營業現金流 − 資本支出
+
+分析：
+
+1. FCF 是否長期為正？
+2. FCF 是否與淨利同步？
+3. FCF 是否持續成長？
+4. 資本支出是否過度？
+5. 公司如何使用現金？
+
+資本配置依序分析：
+
+> CAPEX → 研發 → 股利 → 庫藏股 → M&A → 降低負債
+
+判斷管理層資本配置是否與股東利益一致。
+
+---
+
+# 十、第六層：競爭優勢評分
+
+對以下項目分別給 1～10 分：
+
+| 競爭優勢  |  分數 | 證據 |
+| ----- | --: | -- |
+| 定價權   | /10 |    |
+| 品牌    | /10 |    |
+| 技術壁壘  | /10 |    |
+| 轉換成本  | /10 |    |
+| 網路效應  | /10 |    |
+| 規模經濟  | /10 |    |
+| 客戶黏著度 | /10 |    |
+| 供應鏈地位 | /10 |    |
+
+**分數必須有具體事實支持，不得憑主觀印象評分。**
+
+## 產業龍頭股對照
+
+必須先聯網搜尋並列出本公司所屬產業（及其上下游關鍵環節）的龍頭股，台股與美股／國際龍頭都要涵蓋：
+
+| 龍頭公司／代號 | 市場 | 產業地位／市占 | 最新營收 YoY | 毛利率 | 預估 P/E | 近3個月股價表現 | 最新法說會展望 |
+| ------- | -- | ------- | -------: | --: | -----: | -------: | ------- |
+| 本公司     |    |         |          |     |        |          |         |
+| 龍頭A     |    |         |          |     |        |          |         |
+| 龍頭B     |    |         |          |     |        |          |         |
+| 龍頭C     |    |         |          |     |        |          |         |
+
+分析：
+
+* 本公司與龍頭的差距在哪裡（規模、技術、客戶、成本）？
+* 龍頭最新的營收／展望／資本支出，對本公司是領先指標還是競爭威脅？
+* 龍頭股價與本公司股價的連動性（是否跟漲不跟跌、落後補漲或領先轉弱）
+* 本公司相對龍頭的估值是折價還是溢價？是否合理？
+
+---
+
+# 十一、第七層：管理層品質
+
+分析：
+
+### 資本配置紀錄
+
+* 過去 5 年 CAPEX
+* 股利
+* 庫藏股
+* M&A
+* 負債管理
+
+### 管理層與股東利益
+
+分析：
+
+* 董事／高階主管持股
+* 內部人交易
+* 股票薪酬
+* 管理層薪酬制度
+* EPS／ROIC／FCF 是否與獎酬掛鉤
+* 是否存在股東稀釋
+
+最後以：
+
+> 管理層與股東利益一致程度：高／中／低
+
+呈現。
+
+---
+
+# 十二、第八層：供需狀態矩陣
+
+針對公司核心產品／產業建立「供需狀態矩陣」。
+
+## 標準 8 欄
+
+| 評估維度         | 現狀分析與量化數據（基準日：YYYY年MM月） |
+| :----------- | :---------------------- |
+| **目前供需**     |                         |
+| **供需緊繃程度**   |                         |
+| **報價／利差趨勢**  |                         |
+| **未來1～2年趨勢** |                         |
+| **轉折預估季度**   |                         |
+| **供需驅動力**    |                         |
+| **瓶頸持續性**    |                         |
+| **數據可信度**    |                         |
+
+### 供需燈號只能使用：
+
+* 🔴 供不應求
+* 🟡 供需平衡
+* 🟢 供過於求
+* ⚪ 緩步復甦
+
+### 報價／利差：
+
+* 強勢走揚
+* 溫和走揚
+* 持平
+* 承壓
+
+### 未來1～2年：
+
+* 維持供不應求
+* 供需逐步平衡
+* 供過於求
+* 緩步復甦
+
+### 供需驅動力：
+
+* 需求暴增
+* 供給瓶頸
+* 兩者兼具
+* 需求放緩
+* 成本推動
+
+### 瓶頸持續性：
+
+* 短期：1～4 季
+* 中期：5～12 季
+* 長期：13 季以上
+
+格式：
+
+> 短期（約 X 個季度）
+
+### 數據可信度：
+
+> 高／中／低
+
+並列出 Tier 1／Tier 2 資料來源。
+
+---
+
+# 十三、第九層：供需與財務交叉驗證
+
+不要只分析「需求很好」，必須確認：
+
+**需求 → 出貨量 → ASP → 營收 → 毛利率 → 營益率 → EPS → FCF**
+
+建立完整傳導鏈。
+
+例如：
+
+> AI需求增加
+> ↓
+> 出貨量增加
+> ↓
+> ASP 上升
+> ↓
+> 毛利率改善
+> ↓
+> 營業利益率提升
+> ↓
+> EPS 成長
+> ↓
+> FCF 增加
+
+若其中任何一環沒有數據支持，明確標示：
+
+> 【資料不足，無法確認】
+
+---
+
+# 十四、第十層：估值快照
+
+至少分析：
+
+* P/E
+* P/S
+* EV/EBITDA
+* P/B
+* FCF Yield
+
+並比較：
+
+### ① 公司自身歷史
+
+* 目前估值
+* 5 年平均
+* 5 年高點
+* 5 年低點
+
+### ② 同業比較
+
+至少選擇 3 家主要競爭者。
+
+| 公司  | P/E | P/S | EV/EBITDA | FCF Yield |
+| --- | --: | --: | --------: | --------: |
+| 本公司 |     |     |           |           |
+| 同業A |     |     |           |           |
+| 同業B |     |     |           |           |
+| 同業C |     |     |           |           |
+
+若預估 P/E > 20 倍，必須額外分析：
+
+* 產業是否處於高成長期
+* 市場是否給予成長溢價
+* 盈餘成長率是否足以支持估值
+* 當前市場是否屬於熱門題材
+* 估值壓縮風險
+
+---
+
+# 十五、第十一層：技術面「交易前八問法」
+
+## 1. 當前市場在做什麼？
+
+判斷：
+
+* 多頭趨勢
+* 空頭趨勢
+* 盤整整理
+* 反彈初期
+* 拉回修正
+* 高檔震盪
+* 低檔打底
+
+分析：
+
+* 大盤
+* 類股
+* 個股
+* 成交量
+* K線
+* 均線
+
+---
+
+## 2. 趨勢起點在哪裡？
+
+找出：
+
+* 起漲點
+* 日期
+* 起漲價
+* 當時成交量
+* 法人籌碼
+* 產業／公司催化劑
+
+計算：
+
+> 起漲至今漲跌幅 =（目前股價／起漲價 − 1）×100%
+
+---
+
+## 3. 現在處於哪個階段？
+
+從以下選擇：
+
+* 初升段
+* 主升段
+* 加速段
+* 高檔震盪
+* 末升段
+* 拉回整理
+* 反彈逃命波
+* 空頭下跌段
+
+---
+
+# 十六、第十二層：多週期技術分析
+
+分別分析：
+
+### 日線
+
+* MA5
+* MA10
+* MA20
+* MA60
+* MA120
+* 成交量
+* RSI
+* MACD
+* KD
+
+### 週線
+
+### 月線
+
+最後判斷：
+
+> 日線 × 週線 × 月線是否一致？
+
+分類：
+
+### A：大多＋小多
+
+趨勢一致
+
+### B：大多＋小空
+
+等待拉回止穩
+
+### C：大空＋小多
+
+反彈風險
+
+### D：大空＋小空
+
+觀望
+
+---
+
+# 十七、第十三層：籌碼面
+
+分析：
+
+* 外資
+* 投信
+* 自營商
+* 三大法人
+* 融資
+* 融券
+* 借券
+* 大戶持股
+* 主力分點
+* 成交量
+* 換手率
+* 內外盤
+* 法人連續買賣超
+
+重點判斷：
+
+> 股價上漲是否得到籌碼支持？
+
+特別注意：
+
+### 「價漲量增＋法人買超」
+
+與
+
+### 「價漲量縮＋法人賣超」
+
+兩者必須區分。
+
+---
+
+# 十八、第十四層：心理偏誤診斷
+
+客觀檢查交易者可能存在：
+
+* FOMO
+* 追高
+* 攤平
+* 凹單
+* 沉沒成本
+* 損失厭惡
+* 過度相信利多
+* 忽略估值
+* 只看短線 K 線
+* 只看基本面忽略市場價格
+
+不得猜測使用者心理，必須使用「可能存在的交易偏誤」表述。
+
+---
+
+# 十九、第十五層：關鍵價位與風險控管
+
+明確計算：
+
+| 價位    | 價格 |
+| ----- | -: |
+| 第一支撐  |    |
+| 第二支撐  |    |
+| 關鍵停損  |    |
+| 第一壓力  |    |
+| 第二壓力  |    |
+| 短線停利區 |    |
+| 波段停利區 |    |
+
+若持有成本已提供，計算：
+
+### 停損損失
+
+> （停損價－成本）／成本 × 100%
+
+### 目標報酬
+
+> （目標價－成本）／成本 × 100%
+
+### 風報比
+
+> 預期獲利 ÷ 預期虧損
+
+---
+
+# 二十、第十六層：12個月多空情境估值
+
+建立三種情境。
+
+## 情境A：多方
+
+列出：
+
+* 營收假設
+* 毛利率
+* EPS
+* 合理 P/E 或 EV/EBITDA
+* 12個月目標價
+
+## 情境B：基準
+
+同樣列出：
+
+* 營收
+* 毛利率
+* EPS
+* 合理估值
+* 12個月目標價
+
+## 情境C：空方
+
+同樣列出：
+
+* 營收
+* 毛利率
+* EPS
+* 合理估值
+* 12個月目標價
+
+表格：
+
+| 情境 | 核心假設 | EPS | 評價倍數 | 12個月目標價 |
+| -- | ---- | --: | ---: | ------: |
+| 多方 |      |     |      |         |
+| 基準 |      |     |      |         |
+| 空方 |      |     |      |         |
+
+**所有目標價必須說明計算依據，不得只給數字。**
+
+---
+
+# 二十一、第十七層：催化劑與風險
+
+## 正向催化劑
+
+列出未來 3～12 個月：
+
+1.
+2.
+3.
+4.
+5.
+
+並標明：
+
+> 事件 → 對營收／毛利／EPS 的影響
+
+## 主要風險
+
+至少分析：
+
+1. 需求下滑
+2. ASP 下跌
+3. 毛利率下降
+4. 競爭加劇
+5. CAPEX 過大
+6. 客戶集中
+7. 庫存增加
+8. 匯率
+9. 地緣政治
+10. 估值壓縮
+
+---
+
+# 二十二、第十八層：最終「投資 × 交易」整合表
+
+| 評估項目      | 結論 |
+| --------- | -- |
+| 商業模式      |    |
+| 基本面       |    |
+| 營收成長      |    |
+| 獲利能力      |    |
+| 資產負債表     |    |
+| FCF       |    |
+| 競爭優勢      |    |
+| 管理層       |    |
+| 產業供需      |    |
+| 報價趨勢      |    |
+| 技術趨勢      |    |
+| 籌碼        |    |
+| 估值        |    |
+| 最大催化劑     |    |
+| 最大風險      |    |
+| 12個月多方目標價 |    |
+| 12個月基準目標價 |    |
+| 12個月空方目標價 |    |
+
+---
+
+# 二十三、第十九層：交易決策表
+
+| 評估項目      | 結論與建議     |
+| --------- | --------- |
+| 現在是否適合買進？ |           |
+| 已持股是否續抱？  |           |
+| 是否適合加碼？   |           |
+| 是否適合減碼？   |           |
+| 是否需要停損？   |           |
+| 適合操作型態    | 短線／波段／中長期 |
+| 最佳進場區間    |           |
+| 最佳停利區間    |           |
+| 必守停損價     |           |
+| 操作風險      | 低／中／高     |
+
+---
+
+# 二十四、第二十層：三大情境交易策略
+
+## 情境一：強勢突破
+
+條件：
+
+* 突破哪個價格？
+* 需要多少成交量？
+* 法人是否同步買超？
+* 突破後第一目標？
+* 第二目標？
+* 假突破如何辨識？
+
+說明：
+
+> 若突破成立，交易計畫如何調整。
+
+---
+
+## 情境二：拉回整理
+
+條件：
+
+* 第一支撐
+* 第二支撐
+* 20MA
+* 60MA
+* 前高／前低
+* 成交量是否縮減
+
+建立：
+
+> 第一批／第二批／第三批
+
+分批進場規則。
+
+---
+
+## 情境三：跌破支撐
+
+明確定義：
+
+* 哪個價格屬於警戒？
+* 哪個價格屬於確認跌破？
+* 減碼比例
+* 停損條件
+* 是否重新評估基本面
+
+**禁止因「公司很好」而取消技術停損。**
+
+---
+
+# 二十五、第二十一層：最終研究結論
+
+最後用「機構研究備忘錄」格式回答：
+
+### 1. 投資核心論點
+
+用 3～5 點說明：
+
+> 為什麼這家公司值得／不值得進一步研究？
+
+### 2. 市場目前可能錯估的地方
+
+分成：
+
+* 市場過度樂觀
+* 市場過度悲觀
+* 尚無法確認
+
+### 3. 最大驗證指標
+
+列出未來最需要追蹤的 3～5 個指標：
+
+例如：
+
+* 月營收
+* 毛利率
+* CAPEX
+* 訂單
+* ASP
+* 庫存
+* 法人持股
+* 產能利用率
+
+### 4. 失效條件
+
+明確列出：
+
+> 哪些事件發生後，目前投資論點必須重新評估？
+
+---
+
+# 二十六、研究紀律
+
+必須遵守：
+
+1. 不得捏造數據。
+2. 不得把新聞推測當成公司事實。
+3. 不得把券商預估當成官方數據。
+4. 所有重要數字標明資料期間。
+5. 所有即時資訊標明日期。
+6. 財務數據優先使用 Tier 1。
+7. 供需數據使用 Tier 1＋Tier 2 交叉驗證。
+8. 若資料不足，直接寫「【資料不足，無法確認】」。
+9. 不得使用模糊詞語掩蓋資料不足。
+10. 技術分析不能取代基本面分析。
+11. 基本面良好不能直接等於股價短線會上漲。
+12. 股價強勢也不能直接等於企業價值合理。
+13. 明確區分「事實、推估、情境」。
+14. 所有目標價都必須提供計算邏輯。
+15. 不使用情緒化、煽動性或保證獲利的語言。
+16. 不得因單一指標直接下結論。
+17. 若不同週期訊號互相矛盾，必須明確揭露。
+18. 最終結論必須同時考慮「企業價值＋產業供需＋市場價格＋風險報酬」。
+
+---
+
+# 二十七、最終輸出順序
+
+請嚴格依照以下順序輸出：
+
+**① 摘要評等框**
+
+↓
+
+**② 商業模式**
+
+↓
+
+**③ 營收結構**
+
+↓
+
+**④ 5年獲利能力**
+
+↓
+
+**⑤ 資產負債表**
+
+↓
+
+**⑥ FCF與資本配置**
+
+↓
+
+**⑦ 競爭優勢與產業龍頭股對照**
+
+↓
+
+**⑧ 管理層**
+
+↓
+
+**⑨ 供需狀態矩陣**
+
+↓
+
+**⑩ 供需 × 財務傳導驗證**
+
+↓
+
+**⑪ 估值快照**
+
+↓
+
+**⑫ 技術面交易前八問**
+
+↓
+
+**⑬ 日／週／月線**
+
+↓
+
+**⑭ 籌碼面**
+
+↓
+
+**⑮ 心理偏誤**
+
+↓
+
+**⑯ 支撐／壓力／停損／停利**
+
+↓
+
+**⑰ 12個月多空情境目標價**
+
+↓
+
+**⑱ 催化劑與風險**
+
+↓
+
+**⑲ 投資 × 交易整合表**
+
+↓
+
+**⑳ 三大交易情境**
+
+↓
+
+**㉑ 最終研究結論**
+
+---
+
+# 最後一句核心原則
+
+**先判斷「公司值多少」，再判斷「產業供需往哪裡走」，最後才判斷「現在的價格是否值得交易」。**
+
+不要因為技術面強勢就忽略估值，也不要因為基本面優秀就忽略股價風險。
+
+股票：${stockLine}
+
+---
+
+## 📤 輸出檔案格式要求
+
+完成以上完整報告後，請將整份報告內容另外整理成一份**可直接下載的獨立 HTML 檔案**（單一檔案、內嵌所有 CSS 樣式、不依賴外部資源），版面需清楚適合列印或另存為 PDF（A4尺寸、清楚的標題階層、表格加框線、重點數字適度加粗）。
+若你的介面支援產生檔案／Canvas／Artifact 等下載功能，請直接以檔案形式輸出該 HTML（或 PDF）供我下載；若不支援檔案下載，請完整印出該 HTML 原始碼（用程式碼區塊包住），我會自行另存為 .html 檔案，並可透過瀏覽器的「列印→另存為 PDF」功能轉存成 PDF。`;
+}
+
+function copyMacroPrompt() {
+  const prompt = buildMacroPrompt();
+  navigator.clipboard.writeText(prompt)
+    .then(() => showToast('已複製完整提示詞'))
+    .catch(() => showToast('複製失敗，請手動複製'));
+}
+
+function openMacroAi(target) {
+  const urls = {
+    gemini: 'https://gemini.google.com',
+    chatgpt: 'https://chat.openai.com',
+    perplexity: 'https://www.perplexity.ai',
+  };
+  const prompt = buildMacroPrompt();
+  navigator.clipboard.writeText(prompt)
+    .then(() => showToast('已複製提示詞，貼到分析頁面即可開始'))
+    .catch(() => showToast('複製失敗，請手動複製'));
+  window.open(urls[target] || urls.gemini, '_blank', 'noopener');
+}
 
 /* ── Help icon popover (tap-to-toggle for touch devices; desktop uses :hover) ── */
 document.addEventListener('click', function(e) {
@@ -2535,7 +3761,10 @@ function _lotsCell(lots) {
   return `<span class="${pctClass(lots)}">${lots > 0 ? '+' : ''}${lots.toLocaleString()}</span>`;
 }
 
+let _institutionalTradeData = [];
+
 function renderInstitutionalTable(rows) {
+  _institutionalTradeData = rows;
   if (state.institutionalDt) { state.institutionalDt.destroy(); state.institutionalDt = null; }
   let cum = 0;
   const dtRows = rows.map(r => {
@@ -2550,10 +3779,83 @@ function renderInstitutionalTable(rows) {
     date, _lotsCell(foreign), _lotsCell(trust), _lotsCell(dealer), _lotsCell(total), _lotsCell(cum),
   ]);
   state.institutionalDt = $('#institutional-table').DataTable({
-    data: rowsHtml, pageLength: 10, order: [],
+    data: rowsHtml, pageLength: 10, order: [], ordering: false,
     language: dtLang(), destroy: true, scrollX: true,
   });
 }
+
+/* ── 三大法人單一項目進出趨勢圖（點擊表格欄位標題觸發） ── */
+const _INST_CHART_FIELDS = {
+  foreign: { label: '外資買賣超', get: r => _lots((r.foreign_buy || 0) - (r.foreign_sell || 0)) },
+  trust:   { label: '投信買賣超', get: r => _lots((r.trust_buy   || 0) - (r.trust_sell   || 0)) },
+  dealer:  { label: '自營商買賣超', get: r => _lots((r.dealer_buy  || 0) - (r.dealer_sell  || 0)) },
+  total:   { label: '三大法人合計買賣超', get: r =>
+    _lots((r.foreign_buy || 0) - (r.foreign_sell || 0)) +
+    _lots((r.trust_buy   || 0) - (r.trust_sell   || 0)) +
+    _lots((r.dealer_buy  || 0) - (r.dealer_sell  || 0)) },
+};
+
+function openInstitutionalDetailChart(field) {
+  if (!_institutionalTradeData.length) return;
+  const rows = [..._institutionalTradeData].sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  const labels = rows.map(r => r.date);
+
+  let title, datasets;
+  if (field === 'cum') {
+    // 累計持股增減本身就是跑動加總，直接畫這條線本身即可，不需要再疊一條「累計的累計」
+    let running = 0;
+    const cumData = rows.map(r => (running +=
+      _INST_CHART_FIELDS.foreign.get(r) + _INST_CHART_FIELDS.trust.get(r) + _INST_CHART_FIELDS.dealer.get(r)));
+    title = '🏛️ 累計持股增減 — 趨勢';
+    datasets = [
+      { type: 'line', label: '累計持股增減(張)', data: cumData, borderColor: getCssVar('--primary'),
+        backgroundColor: getCssVar('--primary') + '22', fill: true, borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y' },
+    ];
+  } else {
+    const cfg = _INST_CHART_FIELDS[field];
+    if (!cfg) return;
+    const net = rows.map(cfg.get);
+    let running = 0;
+    const cumulative = net.map(v => (running += v));
+    const bgColors = net.map(v => v >= 0 ? getCssVar('--pos') + 'bb' : getCssVar('--neg') + 'bb');
+    title = `🏛️ ${cfg.label} — 趨勢`;
+    datasets = [
+      { type: 'bar', label: `單日買賣超(張)`, data: net, backgroundColor: bgColors, yAxisID: 'y' },
+      { type: 'line', label: '累計買賣超(張)', data: cumulative, borderColor: getCssVar('--primary'), borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y2' },
+    ];
+  }
+
+  document.getElementById('institutional-detail-modal-title').textContent = title;
+  document.getElementById('institutional-detail-modal').classList.remove('hidden');
+  if (state.institutionalDetailChart) { state.institutionalDetailChart.destroy(); state.institutionalDetailChart = null; }
+  requestAnimationFrame(() => {
+    state.institutionalDetailChart = new Chart(document.getElementById('institutional-detail-chart-canvas'), {
+      data: { labels, datasets },
+      options: {
+        ...chartOptions('張'),
+        scales: field === 'cum' ? {
+          x: { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), maxRotation: 45, maxTicksLimit: labels.length > 30 ? 12 : labels.length } },
+          y: { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+        } : {
+          x:  { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), maxRotation: 45, maxTicksLimit: labels.length > 30 ? 12 : labels.length } },
+          y:  { position: 'left',  grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+          y2: { position: 'right', grid: { drawOnChartArea: false },        ticks: { color: getCssVar('--primary') } },
+        },
+      },
+    });
+  });
+}
+
+function closeInstitutionalDetailModal() {
+  document.getElementById('institutional-detail-modal').classList.add('hidden');
+  if (state.institutionalDetailChart) { state.institutionalDetailChart.destroy(); state.institutionalDetailChart = null; }
+}
+
+document.getElementById('institutional-table').addEventListener('click', function (e) {
+  const th = e.target.closest('th[data-field]');
+  if (!th) return;
+  openInstitutionalDetailChart(th.dataset.field);
+});
 
 /* ── 券商分點進出（詳情頁按需查詢，不再限制自選股） ── */
 let _brokerTradeData = [];
@@ -2996,7 +4298,9 @@ function _brokerMatrixHtml(dates, brokers) {
     (byBrokerDate[r.broker_id] || (byBrokerDate[r.broker_id] = {}))[r.date] =
       (r.buy_volume || 0) - (r.sell_volume || 0);
   }
-  const head = `<thead><tr><th>日期</th>${brokers.map(b => `<th>${b.broker_name || b.broker_id}</th>`).join('')}</tr></thead>`;
+  const head = `<thead><tr><th>日期</th>${brokers.map(b =>
+    `<th class="broker-th-clickable" data-broker-id="${b.broker_id}" data-broker-name="${b.broker_name || b.broker_id}" title="點擊查看此分點進出趨勢圖">${b.broker_name || b.broker_id}</th>`
+  ).join('')}</tr></thead>`;
   const rows = dates.map(d => {
     const cells = brokers.map(b => _brokerLotsCell(byBrokerDate[b.broker_id]?.[d])).join('');
     return `<tr><td>${d}</td>${cells}</tr>`;
@@ -3036,6 +4340,55 @@ function renderBrokerConcentration(cum) {
   const top5Pct = (top5Activity / totalActivity * 100).toFixed(1);
   el.innerHTML = `<span title="這段期間內，成交量（買超+賣超）最大的前5家券商分點，合計占所有參與分點總成交量的比例。比例越高代表交易集中在少數分點，可能有主力或大戶介入；比例低則接近分散的一般散戶交易。純資訊顯示，目前未併入籌碼峰 POC/VAH/VAL 的計算。">🔍 分點集中度：前5大分點合計占 <strong>${top5Pct}%</strong>（共 ${cum.length} 家分點參與）</span>`;
 }
+
+/* ── 單一分點進出趨勢圖（點擊矩陣表格欄位標題觸發） ── */
+function openBrokerDetailChart(brokerId, brokerName) {
+  const rows = _brokerTradeData
+    .filter(r => r.broker_id === brokerId)
+    .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  if (!rows.length) return;
+
+  document.getElementById('broker-detail-modal-title').textContent = `🏦 ${brokerName} — 買賣超趨勢`;
+  document.getElementById('broker-detail-modal').classList.remove('hidden');
+
+  const labels = rows.map(r => r.date);
+  const net = rows.map(r => _brokerLots((r.buy_volume || 0) - (r.sell_volume || 0)));
+  let running = 0;
+  const cumulative = net.map(v => (running += v));
+  const bgColors = net.map(v => v >= 0 ? getCssVar('--pos') + 'bb' : getCssVar('--neg') + 'bb');
+
+  if (state.brokerDetailChart) { state.brokerDetailChart.destroy(); state.brokerDetailChart = null; }
+  requestAnimationFrame(() => {
+    state.brokerDetailChart = new Chart(document.getElementById('broker-detail-chart-canvas'), {
+      data: {
+        labels,
+        datasets: [
+          { type: 'bar', label: '單日買賣超(張)', data: net, backgroundColor: bgColors, yAxisID: 'y' },
+          { type: 'line', label: '累計買賣超(張)', data: cumulative, borderColor: getCssVar('--primary'), borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y2' },
+        ],
+      },
+      options: {
+        ...chartOptions('張'),
+        scales: {
+          x:  { grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2'), maxRotation: 45, maxTicksLimit: labels.length > 30 ? 12 : labels.length } },
+          y:  { position: 'left',  grid: { color: getCssVar('--border') }, ticks: { color: getCssVar('--text2') } },
+          y2: { position: 'right', grid: { drawOnChartArea: false },        ticks: { color: getCssVar('--primary') } },
+        },
+      },
+    });
+  });
+}
+
+function closeBrokerDetailModal() {
+  document.getElementById('broker-detail-modal').classList.add('hidden');
+  if (state.brokerDetailChart) { state.brokerDetailChart.destroy(); state.brokerDetailChart = null; }
+}
+
+document.getElementById('stock-broker-matrix-wrap').addEventListener('click', function (e) {
+  const th = e.target.closest('th[data-broker-id]');
+  if (!th) return;
+  openBrokerDetailChart(th.dataset.brokerId, th.dataset.brokerName);
+});
 
 async function loadStockExpertScores(code) {
   const card = document.getElementById('stock-expert-card');
@@ -3622,7 +4975,7 @@ function renderTaifexSummary(s) {
   const pc = s.pc_ratio || {};
   const fmt = v => v == null ? '—' : v.toLocaleString();
   const fmtSignedPct = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v}%`;
-  const trend = s.bull_bear_ratio_pct == null ? '' : (s.bull_bear_ratio_pct >= 0 ? '偏多' : '偏空');
+  const trend = s.bull_bear_ratio_pct == null ? '' : _bullBearZoneLabel(s.bull_bear_ratio_pct);
 
   // 兩份獨立 gauge：下面「今日摘要」的詳細版 + 最上方縮小三合一列的版本
   renderTaifexGauge(s.bull_bear_ratio_pct);
@@ -3669,6 +5022,15 @@ const _BULL_BEAR_ZONES = [
   { max: 15, label: '過熱',       color: '#dc2626' },
 ];
 const _BULL_BEAR_MIN = -15;
+
+// Shared by both the gauge label and the "今日摘要" table's 趨勢 column — they
+// used to disagree (table did a naive sign check while the gauge used the
+// zone bands below), which read as a contradiction for values like +5.3%
+// (sign check said 偏多, zone band said 偏空). Both now go through this.
+function _bullBearZoneLabel(pct) {
+  const { index } = _zoneFraction(pct, _BULL_BEAR_ZONES, _BULL_BEAR_MIN);
+  return _BULL_BEAR_ZONES[index].label;
+}
 
 /* 大戶多空比 gauge 有兩份獨立 DOM/canvas（頂部縮小三合一列 + 下面「今日
    摘要」的詳細版），共用同一份繪圖邏輯，只是目標 element id 和

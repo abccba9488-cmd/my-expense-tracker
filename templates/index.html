@@ -132,6 +132,7 @@
       <button class="page-tab" data-tab="watchlist">⭐ 自選股</button>
       <button class="page-tab" data-tab="ann">📰 自結公告</button>
       <button class="page-tab" data-tab="expert">🎯 達人選股</button>
+      <button class="page-tab" data-tab="macro">🌐 總體分析</button>
       <button class="page-tab login-only hidden" data-tab="taifex">📈 期權籌碼</button>
     </div>
   </div>
@@ -366,6 +367,85 @@
             </thead>
             <tbody id="expert-tbody"></tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 總體分析：機構級研究備忘錄提示詞產生器 -->
+  <div id="macro-view" class="view">
+    <div class="container">
+      <div class="card">
+        <div class="card-header">
+          <h3>🌐 總體分析｜機構級研究備忘錄產生器</h3>
+        </div>
+        <div class="stock-ai-body" style="margin-bottom:16px;">選好股票後會自動帶入目前股價與本站基本面資料，填寫持股狀況與投資設定後，點下方按鈕即可把完整提示詞複製起來並開啟 AI 網站，貼上即可分析。</div>
+
+        <div class="form-group">
+          <label>標的名稱／代號</label>
+          <div class="wl-search-wrap">
+            <input type="text" id="macro-search" class="form-input" placeholder="輸入代號或名稱搜尋…" autocomplete="off">
+            <div id="macro-search-dropdown" class="wl-search-dropdown hidden"></div>
+          </div>
+          <div id="macro-selected" class="macro-selected hidden"></div>
+        </div>
+
+        <div class="macro-form-grid">
+          <div class="form-group">
+            <label>市場</label>
+            <select id="macro-market" class="form-input">
+              <option value="台股" selected>台股</option>
+              <option value="美股">美股</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>目前股價</label>
+            <input type="number" step="0.01" id="macro-price" class="form-input" placeholder="例如：1020">
+          </div>
+          <div class="form-group">
+            <label>持股成本</label>
+            <div class="macro-unit-row">
+              <input type="number" step="0.01" min="0" id="macro-cost" class="form-input" placeholder="空白＝尚未持有">
+              <select id="macro-cost-unit" class="form-input">
+                <option value="元" selected>元（新台幣）</option>
+                <option value="美元">美元</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>持有數量</label>
+            <div class="macro-unit-row">
+              <input type="number" step="1" min="0" id="macro-qty" class="form-input" placeholder="空白＝尚未持有">
+              <select id="macro-qty-unit" class="form-input">
+                <option value="張" selected>張</option>
+                <option value="股">股</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>預計投資週期</label>
+            <select id="macro-horizon" class="form-input">
+              <option value="短線（數日~2週）">短線</option>
+              <option value="波段（數週~數月）" selected>波段</option>
+              <option value="中長期（半年以上）">中長期</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>最大可承受虧損（%）</label>
+            <input type="number" step="1" id="macro-maxloss" class="form-input" placeholder="例如：10" value="10">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>補充資料／K 線圖說明（選股後自動帶入本站資料，可自行編輯或補充；本站無法直接附加圖片，如有 K 線圖可用文字描述型態／均線位置）</label>
+          <textarea id="macro-extra" class="form-input stock-note-textarea" placeholder="選擇股票後會自動帶入近期股價、均線、營收與財報資料，也可以自行貼上財報、法人籌碼、券商資料或 K 線重點說明"></textarea>
+        </div>
+
+        <div class="macro-ai-links">
+          <button class="btn btn-sm" onclick="copyMacroPrompt()" style="background:var(--accent);color:#fff;">📋 複製提示詞</button>
+          <button class="btn btn-sm" onclick="openMacroAi('gemini')" style="background:#1a73e8;color:#fff;">✨ Gemini</button>
+          <button class="btn btn-sm" onclick="openMacroAi('chatgpt')" style="background:#10a37f;color:#fff;">🤖 ChatGPT</button>
+          <button class="btn btn-sm" onclick="openMacroAi('perplexity')" style="background:#20808d;color:#fff;">🔍 Perplexity</button>
         </div>
       </div>
     </div>
@@ -608,8 +688,12 @@
         <table id="institutional-table" class="display compact" style="width:100%">
           <thead>
             <tr>
-              <th>日期</th><th>外資買賣超(張)</th><th>投信買賣超(張)</th>
-              <th>自營商買賣超(張)</th><th>三大法人合計(張)</th><th>累計持股增減(張)</th>
+              <th>日期</th>
+              <th class="inst-th-clickable" data-field="foreign" title="點擊查看外資買賣超趨勢圖">外資買賣超(張) 📊</th>
+              <th class="inst-th-clickable" data-field="trust" title="點擊查看投信買賣超趨勢圖">投信買賣超(張) 📊</th>
+              <th class="inst-th-clickable" data-field="dealer" title="點擊查看自營商買賣超趨勢圖">自營商買賣超(張) 📊</th>
+              <th class="inst-th-clickable" data-field="total" title="點擊查看三大法人合計買賣超趨勢圖">三大法人合計(張) 📊</th>
+              <th class="inst-th-clickable" data-field="cum" title="點擊查看累計持股增減趨勢圖">累計持股增減(張) 📊</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -776,7 +860,7 @@
           <p>純技術面訊號，不構成投資建議，務必搭配基本面與其他指標交叉確認</p>
         </div>
         <div class="fund-stats hidden" id="chanlun-stats"></div>
-        <div class="chart-wrap"><canvas id="price-chart"></canvas></div>
+        <div class="chart-wrap price-chart-wrap"><canvas id="price-chart"></canvas></div>
       </div>
 
       <!-- 上一檔/下一檔（中間，方便看完股價圖不用拉回最上方） -->
@@ -1127,6 +1211,32 @@
           <tbody id="flag888-guyu-history-tbody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 三大法人單一項目進出趨勢（點擊三大法人表格欄位標題觸發） -->
+<div id="institutional-detail-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeInstitutionalDetailModal()">
+  <div class="modal-box taifex-chart-modal-box">
+    <div class="modal-header">
+      <span id="institutional-detail-modal-title" style="padding:14px 22px;font-weight:600;"></span>
+      <button class="modal-close" onclick="closeInstitutionalDetailModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="chart-wrap taifex-chart-modal-wrap"><canvas id="institutional-detail-chart-canvas"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- 券商分點單一分點進出趨勢（點擊券商分點矩陣表格欄位標題觸發） -->
+<div id="broker-detail-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeBrokerDetailModal()">
+  <div class="modal-box taifex-chart-modal-box">
+    <div class="modal-header">
+      <span id="broker-detail-modal-title" style="padding:14px 22px;font-weight:600;"></span>
+      <button class="modal-close" onclick="closeBrokerDetailModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="chart-wrap taifex-chart-modal-wrap"><canvas id="broker-detail-chart-canvas"></canvas></div>
     </div>
   </div>
 </div>

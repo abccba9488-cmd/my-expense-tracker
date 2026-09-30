@@ -361,11 +361,15 @@ _SUMMARY_SQL = '''
         SELECT stock_code, MAX(year * 10 + quarter) AS max_yq
         FROM quarterly_financials GROUP BY stock_code
     ),
-    yeps AS (
-        SELECT stock_code, year, SUM(eps) AS year_eps
-        FROM quarterly_financials
-        WHERE eps IS NOT NULL
-        GROUP BY stock_code, year
+    -- Trailing-4-quarter EPS (quarterly_financials.eps is single-quarter,
+    -- Q4 included). Only valid when all 4 consecutive quarters have EPS.
+    ttm AS (
+        SELECT q.stock_code, SUM(q.eps) AS ttm_eps, COUNT(q.eps) AS n
+        FROM quarterly_financials q
+        JOIN lq ON q.stock_code = lq.stock_code
+        WHERE (q.year * 4 + q.quarter) > (lq.max_yq / 10 * 4 + lq.max_yq % 10) - 4
+          AND (q.year * 4 + q.quarter) <= (lq.max_yq / 10 * 4 + lq.max_yq % 10)
+        GROUP BY q.stock_code
     )
     SELECT
         s.code, s.name, s.market, s.industry,
@@ -373,10 +377,8 @@ _SUMMARY_SQL = '''
         mr.revenue, mr.revenue_yoy, mr.year, mr.month,
         qf.eps, qf.year, qf.quarter, qf.revenue,
         CASE
-            WHEN dp.close IS NOT NULL AND qf.quarter = 4 AND ye.year_eps > 0
-                THEN ROUND(dp.close / ye.year_eps, 1)
-            WHEN dp.close IS NOT NULL AND qf.eps > 0 AND qf.quarter BETWEEN 1 AND 3
-                THEN ROUND(dp.close / (qf.eps / qf.quarter * 4.0), 1)
+            WHEN dp.close IS NOT NULL AND ttm.n = 4 AND ttm.ttm_eps > 0
+                THEN ROUND(dp.close / ttm.ttm_eps, 1)
             ELSE NULL
         END AS pe_ratio,
         mr.start_price,
@@ -425,8 +427,7 @@ _SUMMARY_SQL = '''
     LEFT JOIN quarterly_financials qf
         ON qf.stock_code = lq.stock_code
         AND (qf.year * 10 + qf.quarter) = lq.max_yq
-    LEFT JOIN yeps ye
-        ON ye.stock_code = qf.stock_code AND ye.year = qf.year
+    LEFT JOIN ttm ON s.code = ttm.stock_code
     ORDER BY CAST(s.code AS INTEGER)
 '''
 

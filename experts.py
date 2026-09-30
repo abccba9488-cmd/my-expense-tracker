@@ -65,19 +65,28 @@ EXPERT_LABELS = {
     'chanlun_sell': '纏論賣點',
     'chanlun_star': '纏論買點+營收飆股',
     'flag888_guyu': '888標準3+股魚',
+    'wl823_pullback': '自選8/23 拉回5日線',
 }
 
 # 非公開已知選股法（不像 gutai/888/guyu/laoniu 4 套是抄錄自對外公開的達人選股
 # 法），是本站自製的實驗性規則，前端會加註 NEW 徽章。詳見 score_momentum_guard()。
 # chanlun_buy/sell 是 2026-08-22 新增的第二個實驗性項目，見 _score_chanlun()。
-EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star', 'flag888_guyu'}
+# wl823_pullback 是 2026-09-22 新增，見 score_wl823_pullback()。
+EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star', 'flag888_guyu', 'wl823_pullback'}
 
 # 只有管理員能看到的規則（2026-08-30 新增，chanlun_star 是第一個，
-# flag888_guyu 是同一天稍後新增的第二個）——跟 EXPERIMENTAL_EXPERTS（純粹加
-# 「NEW」徽章，前端一樣公開）不同層級，這裡是真正的存取控制：
-# /api/experts（列表）跟 /api/experts/<key>（明細）都要擋，不是只藏前端
-# 分頁，比照 taifex/AI分析等既有的 admin-only 慣例。
-ADMIN_ONLY_EXPERTS = {'chanlun_star', 'flag888_guyu'}
+# flag888_guyu 是同一天稍後新增的第二個，wl823_pullback 是 2026-09-22 新增
+# 的第三個）——跟 EXPERIMENTAL_EXPERTS（純粹加「NEW」徽章，前端一樣公開）
+# 不同層級，這裡是真正的存取控制：/api/experts（列表）跟 /api/experts/<key>
+# （明細）都要擋，不是只藏前端分頁，比照 taifex/AI分析等既有的 admin-only
+# 慣例。
+ADMIN_ONLY_EXPERTS = {'chanlun_star', 'flag888_guyu', 'wl823_pullback'}
+
+# wl823_pullback 資料來源是管理員自己的自選股清單「8/23」（不是全市場），
+# 跟其餘規則性質不同——直接寫死清單擁有者帳號（跟 app.py 的 ADMIN_USERNAME
+# 同一個值），避免 experts.py 為此反過來 import app.py 造成循環引用。
+_WL823_OWNER_USERNAME = 'tom6855'
+_WL823_NAME = '8/23'
 
 
 # ── small math helpers ──────────────────────────────────────────────────────
@@ -224,11 +233,25 @@ def _build_context(db):
             'per': None, 'pbr': None, 'pbr_avg_hist': None, 'dividend_yield': None,
             'revenue': None, 'revenue_yoy': None, 'rev_yoy_recent': [], 'rev3m_avg': None, 'rev12m_avg': None,
             'q': [], 'inst': [], 'hold': [], 'div_by_year': {}, 'div_fill_events': [],
-            'tech': {}, 'chanlun': {}, 'director_holding_pct': None,
+            'tech': {}, 'chanlun': {}, 'director_holding_pct': None, 'in_wl823': False,
         }
         for code, name, market, industry in
         db.query(Stock.code, Stock.name, Stock.market, Stock.industry).all()
     }
+
+    # wl823_pullback 的資料來源範圍——管理員自選股清單「8/23」目前的成員
+    # （見 _WL823_OWNER_USERNAME/_WL823_NAME）。清單不存在或是空的就讓
+    # in_wl823 全部維持預設 False，score_wl823_pullback() 的 require() 會
+    # 讓每一檔股票自然全數不通過，不特別報錯。
+    for r in db.execute(text('''
+        SELECT ws.stock_code FROM watchlist_stocks ws
+        INNER JOIN watchlists w ON w.id = ws.watchlist_id
+        INNER JOIN users u ON u.id = w.user_id
+        WHERE u.username = :uname AND w.name = :wname
+    '''), {'uname': _WL823_OWNER_USERNAME, 'wname': _WL823_NAME}).mappings():
+        c = ctx.get(r['stock_code'])
+        if c:
+            c['in_wl823'] = True
 
     for r in db.execute(text('''
         SELECT dp.stock_code, dp.close, dp.volume
@@ -1002,6 +1025,38 @@ def score_flag888_guyu(ctx):
     return s.result()
 
 
+# ── 自選股「8/23」拉回5日線（本站自製，2026-09-22 新增，admin-only）─────────────
+
+def score_wl823_pullback(ctx):
+    """資料來源限定管理員自選股清單「8/23」（見 _WL823_OWNER_USERNAME/
+    _WL823_NAME、_build_context() 的 in_wl823 標記），**admin-only**（見
+    ADMIN_ONLY_EXPERTS）——跟其餘規則「全市場批次跑」的性質不同，不在這份
+    清單裡的股票 require() 一律不通過。
+
+    選股條件：
+    (1) 多頭排列：SMA5>SMA10>SMA20>SMA60（technical.py `sma_alignment`，跟
+        `_gutai()` 既有的 EMA(3,5,8,13) `ema_alignment` 是同樣做法、只是換
+        成使用者要求的「5日線」對應的一般教科書均線組合）。
+    (2) 股價拉回至5日線（SMA5）正負3%以內——沿用「甜蜜點」ma20/60/120 既有
+        的對稱±3%判定慣例（見 CLAUDE.md `sweetSpotCell()` 說明），用最新一天
+        的快照值，不是回看近幾天的視窗。
+    """
+    s = ScoreCard()
+    s.require('在自選股「8/23」清單內', ctx.get('in_wl823') is True)
+
+    t = ctx.get('tech') or {}
+    s.require('多頭排列（SMA5>SMA10>SMA20>SMA60）', t.get('sma_alignment') == 'bull')
+
+    close, sma5 = ctx.get('close'), t.get('sma5')
+    near_sma5 = (abs(close - sma5) / sma5 <= 0.03) if (close is not None and sma5) else None
+    s.require('股價拉回至5日線正負3%以內', near_sma5)
+
+    if near_sma5:
+        pct = (close - sma5) / sma5 * 100
+        s.award(f'貼近5日線（{pct:+.2f}%）', True, 100, approx=True)
+    return s.result()
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -1017,6 +1072,7 @@ SCORERS = {
     'chanlun_sell': score_chanlun_sell,
     'chanlun_star': score_chanlun_star,
     'flag888_guyu': score_flag888_guyu,
+    'wl823_pullback': score_wl823_pullback,
 }
 
 

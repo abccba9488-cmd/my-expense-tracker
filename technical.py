@@ -120,6 +120,31 @@ def ema_alignment(latest_emas):
     return None
 
 
+def sma_series(values, period):
+    """Plain simple moving average, None until `period` values are in."""
+    out = []
+    window_sum = 0.0
+    for i, v in enumerate(values):
+        window_sum += v
+        if i >= period:
+            window_sum -= values[i - period]
+        out.append(window_sum / period if i >= period - 1 else None)
+    return out
+
+
+def sma_alignment(latest_smas):
+    """latest_smas: dict {5: v, 10: v, 20: v, 60: v}. Returns 'bull'/'bear'/None.
+    Used for 達人選股 wl823_pullback's 多頭排列 check (5/10/20/60日均線)."""
+    vals = [latest_smas.get(p) for p in (5, 10, 20, 60)]
+    if any(v is None for v in vals):
+        return None
+    if vals[0] > vals[1] > vals[2] > vals[3]:
+        return 'bull'
+    if vals[0] < vals[1] < vals[2] < vals[3]:
+        return 'bear'
+    return None
+
+
 def snapshot(rows):
     """rows: daily_prices for one stock, ascending by date, dicts with
     date/open/high/low/close. Returns a dict of the latest indicator values
@@ -132,6 +157,7 @@ def snapshot(rows):
     lows   = [r['low'] for r in rows]
 
     emas = {p: ema_series(closes, p) for p in (3, 5, 8, 13)}
+    smas = {p: sma_series(closes, p) for p in (5, 10, 20, 60)}
     macd_line, signal_line, hist = macd_series(closes)
     rsi_d = rsi_series(closes)
     k_d, d_d = kd_series(highs, lows, closes)
@@ -155,12 +181,16 @@ def snapshot(rows):
 
     latest_close = closes[-1]
     latest_emas = {p: last(emas[p]) for p in (3, 5, 8, 13)}
+    latest_smas = {p: last(smas[p]) for p in (5, 10, 20, 60)}
 
     return {
         'close': latest_close,
         'ema3': latest_emas[3], 'ema5': latest_emas[5],
         'ema8': latest_emas[8], 'ema13': latest_emas[13],
         'ema_alignment': ema_alignment(latest_emas),
+        'sma5': latest_smas[5], 'sma10': latest_smas[10],
+        'sma20': latest_smas[20], 'sma60': latest_smas[60],
+        'sma_alignment': sma_alignment(latest_smas),
         'macd_hist': last(hist),
         'macd_hist_prev': hist[-2] if len(hist) > 1 else None,
         'macd_hist_weekly': last(w_hist),

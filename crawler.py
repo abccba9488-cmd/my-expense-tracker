@@ -1302,17 +1302,17 @@ def analyze_stock_with_ai(code):
         latest_q = quarters[0] if quarters else None
         latest_r = revenues[0] if revenues else None
 
-        # PE — same formula as _SUMMARY_SQL: Q4 uses the year's summed
-        # EPS, Q1-Q3 annualizes the single quarter.
+        # PE — same formula as _SUMMARY_SQL: price / trailing-4-quarter EPS
+        # (eps is single-quarter); requires 4 consecutive quarters with EPS.
         pe = None
-        if latest_q and latest_q.eps is not None:
-            if latest_q.quarter == 4:
-                year_eps = sum(q.eps for q in quarters
-                               if q.year == latest_q.year and q.eps is not None)
-                if year_eps > 0:
-                    pe = round(price.close / year_eps, 1)
-            elif latest_q.eps > 0:
-                pe = round(price.close / (latest_q.eps / latest_q.quarter * 4.0), 1)
+        if latest_q:
+            last_idx = latest_q.year * 4 + latest_q.quarter
+            ttm_q = [q for q in quarters
+                     if last_idx - 4 < q.year * 4 + q.quarter <= last_idx and q.eps is not None]
+            if len(ttm_q) == 4:
+                ttm_eps = sum(q.eps for q in ttm_q)
+                if ttm_eps > 0:
+                    pe = round(price.close / ttm_eps, 1)
 
         # 營收預估股價 — same formula as calcEst() in static/js/app.js
         est_price = None
