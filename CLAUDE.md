@@ -487,7 +487,9 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 - `renderPriceChart()` 仍是 Chart.js `type:'line'` 的 category 軸圖表，K 線用兩個重疊的 floating bar dataset 畫（`_wick`＝`[low, high]` 1px 細條、`K線`＝`[open, close]` 實體，`grouped:false`），**不引入 chartjs-chart-financial 外掛**——那個外掛要 time scale，會打壞既有籌碼峰/纏論/回測進出場這些以 `labels` 日期字串對齊的疊圖。台股慣例紅漲綠跌（跟站內 `--pos` 綠色＝正值的慣例相反，刻意的）。`_wick` 用 legend/tooltip `filter` 藏起來，K線的 tooltip 顯示開高低收。
 - **成交量窗格**（2026-09-30）：同一張 canvas 用兩個 `stack:'price'` 的垂直堆疊 y 軸（`yVol`:`y` = 1:4），量柱單位換成張（`volume/1000`）、顏色跟 K 棒同色半透明。`yVol` 必須定義在 `y` 之前才會排在下方窗格——但這樣沒指定軸的 dataset 會預設綁到第一個 y 軸（`yVol`），所以建圖前統一補 `yAxisID ??= 'y'`，之後新增疊圖不用自己記得指定。圖高由 `.price-chart-wrap`（560px／手機 420px）控制。
-- **均線暖機資料**：`_fetchPriceSeries()` 會多抓 `_MA_WARMUP_DAYS`（100 曆日）讓 60 日線在圖表最左邊就有值；`state.prices` 存的是含暖機的完整序列，`_visiblePrices()` 依 `state.priceDays` 裁回使用者選的區間，圖表 x 軸與下方股價明細表都只吃裁過的資料。「全部」（9999）不額外多抓。
+- **投信成本線**（2026-10-01）：`_trustCostSeries()` 純前端計算，資料來自既有 `/api/stocks/<code>/institutional-trades`（`state.instTrades`，跟股價同步抓、同樣多抓暖機）。每天往回重播近 `_TRUST_COST_WINDOW`（120）個交易日的投信**淨**買賣超，從零持股開始用**移動平均成本法**：淨買超以 (高+低+收)/3 加權進成本、淨賣超只扣持股不動成本、持股歸零即重設，持股不足 1 張回 null（斷線）。**刻意不用「Σ(張數×價)/Σ張數」把賣超也乘賣價扣掉**——那是網路上常見的錯誤公式，投信獲利賣出會把「成本」拉低（例：80 買 100 張、120 賣 50 張會算出 40）。用 `--text` 色虛線，ⓘ 說明在 `index.html` 的 help-popover。另有：①`_renderTrustCostTile()` 在籌碼峰數值列（`#chip-peak-stats`）末端追加「現價距投信成本」方塊（`renderChipPeak()` 先重建該列、`renderPriceChart()` 再追加，所以順序不能反）；②收盤價相對成本線的突破／跌破點（前一日在線下/上、當日收在線上/下），用紅／綠圓點標在成本線上，圓點是其他疊圖沒用過的形狀。
+- **功能群組切換列**（2026-10-01）：Chart.js 內建圖例關掉（`legend.display=false`），改由 `_renderPriceChartGroups()` 在圖表上方動態插入 `#price-chart-groups`（JS 建立，不在 `index.html`），每個功能一顆膠囊按鈕（K線／成交量／均線／投信成本／籌碼峰／纏論／回測進出場），一次顯示/隱藏該功能的所有 dataset；隱藏狀態存 `localStorage`（`price_chart_hidden_groups`），切換股票／天數重繪後保留。**dataset 依 label 對應群組（`_priceChartGroupOf()`）——新增疊圖要記得加進去，否則會落到「其他」群組**。
+- **暖機資料**：`_fetchPriceSeries()`／`_fetchInstTradeSeries()` 會多抓 `_CHART_WARMUP_DAYS`（200 曆日，涵蓋 120 交易日）讓 60 日線與投信成本線在圖表最左邊就有值；`state.prices` 存的是含暖機的完整序列，`_visiblePrices()` 依 `state.priceDays` 裁回使用者選的區間，圖表 x 軸與下方股價明細表都只吃裁過的資料。「全部」（9999）不額外多抓。
 
 ### 個股詳情頁：上一檔 / 下一檔導覽
 

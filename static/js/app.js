@@ -359,8 +359,9 @@ async function loadStockDetail(code) {
   });
 
   // Load data in parallel
-  const [prices, revenues, financials, fundamentals, chipPeak, chanlunRes] = await Promise.all([
+  const [prices, instTrades, revenues, financials, fundamentals, chipPeak, chanlunRes] = await Promise.all([
     _fetchPriceSeries(code, state.priceDays),
+    _fetchInstTradeSeries(code, state.priceDays),
     fetch(`/api/stocks/${code}/revenue`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/financials`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/fundamentals`).then(r => r.json()).catch(() => null),
@@ -373,6 +374,7 @@ async function loadStockDetail(code) {
   state.chanlun = (chanlunRes && chanlunRes.strokes) ? chanlunRes : null;
   renderChanlun(state.chanlun);
   state.prices = prices;
+  state.instTrades = instTrades;
   renderPriceChart(prices);
   renderPriceTable(_visiblePrices(prices));
   renderRevenueChart(revenues);
@@ -517,22 +519,62 @@ document.querySelectorAll('.days-btn').forEach(btn => {
     this.classList.add('active');
     const days = this.dataset.days;
     state.priceDays = Number(days);
-    const prices = await _fetchPriceSeries(state.currentCode, state.priceDays);
+    const [prices, instTrades] = await Promise.all([
+      _fetchPriceSeries(state.currentCode, state.priceDays),
+      _fetchInstTradeSeries(state.currentCode, state.priceDays),
+    ]);
     state.prices = prices;
+    state.instTrades = instTrades;
     renderPriceChart(prices);
     renderPriceTable(_visiblePrices(prices));
   });
 });
 
-/* Price series are fetched with extra warm-up history so the 60-day MA is
-   already valid at the left edge of the chart; state.prices holds the full
-   (warm-up included) series, _visiblePrices() trims it to the selected
-   period for the chart x-axis and the price table. */
-const _MA_WARMUP_DAYS = 100;  // calendar days, covers 60 trading days incl. long holidays
+/* Price / institutional series are fetched with extra warm-up history so the
+   60-day MA and the 120-trading-day trust cost line are already valid at the
+   left edge of the chart; state.prices holds the full (warm-up included)
+   series, _visiblePrices() trims it to the selected period for the chart
+   x-axis and the price table. */
+const _CHART_WARMUP_DAYS = 200;  // calendar days, covers 120 trading days incl. long holidays
+const _TRUST_COST_WINDOW = 120;  // trading days, same lookback as chip peak
+
+function _warmupDays(days) { return days >= 9999 ? days : days + _CHART_WARMUP_DAYS; }
 
 function _fetchPriceSeries(code, days) {
-  const fetchDays = days >= 9999 ? days : days + _MA_WARMUP_DAYS;
-  return fetch(`/api/stocks/${code}/prices?days=${fetchDays}`).then(r => r.json()).catch(() => []);
+  return fetch(`/api/stocks/${code}/prices?days=${_warmupDays(days)}`).then(r => r.json()).catch(() => []);
+}
+
+function _fetchInstTradeSeries(code, days) {
+  return fetch(`/api/stocks/${code}/institutional-trades?days=${_warmupDays(days)}`).then(r => r.json()).catch(() => []);
+}
+
+/* 投信推估成本線：for each day, replay the trailing `window` trading days of
+   投信 net buy/sell from zero holdings using the moving-average cost method —
+   a net buy re-weights the average cost at that day's typical price
+   (H+L+C)/3, a net sell only reduces holdings (average cost unchanged; using
+   the sell price would let profitable selling drag the "cost" down), and
+   holdings falling to zero reset the position (null → line breaks instead
+   of dividing by ~0). It's an estimate from daily net flows, not 投信's real
+   book cost: positions held before the window and intraday fills are unknown. */
+function _trustCostSeries(allPrices, instRows, window = _TRUST_COST_WINDOW) {
+  const netByDate = new Map(instRows.map(r => [r.date, (r.trust_buy || 0) - (r.trust_sell || 0)]));
+  const tp = allPrices.map(p => (p.high != null && p.low != null && p.close != null)
+    ? (p.high + p.low + p.close) / 3 : p.close);
+  return allPrices.map((_, i) => {
+    if (i < window - 1) return null;
+    let hold = 0, cost = 0;
+    for (let j = i - window + 1; j <= i; j++) {
+      const net = netByDate.get(allPrices[j].date) || 0;
+      if (net > 0 && tp[j] != null) {
+        cost = (cost * hold + net * tp[j]) / (hold + net);
+        hold += net;
+      } else if (net < 0) {
+        hold += net;
+        if (hold <= 0) { hold = 0; cost = 0; }
+      }
+    }
+    return hold >= 1000 ? +cost.toFixed(2) : null;  // need at least 1 張 held
+  });
 }
 
 function _priceCutoffDate() {
@@ -585,6 +627,27 @@ function renderChipPeak(chipPeak) {
       <div class="fund-stat-value">${(chipPeak.peak_strength * 100).toFixed(1)}%</div>
     </div>
   `;
+  box.classList.remove('hidden');
+}
+
+/* Appends/updates the 「現價距投信成本」 tile in the chip-peak stats row
+   (renderChipPeak() rebuilds that row first, then renderPriceChart() calls
+   this). Uses the full series' latest value, independent of the days selector. */
+function _renderTrustCostTile(allPrices, trustCostAll) {
+  const box = document.getElementById('chip-peak-stats');
+  box.querySelector('#trust-cost-tile')?.remove();
+  const cost = trustCostAll ? trustCostAll[trustCostAll.length - 1] : null;
+  const close = allPrices.length ? allPrices[allPrices.length - 1].close : null;
+  if (cost == null || close == null) {
+    if (!box.children.length) box.classList.add('hidden');
+    return;
+  }
+  const dev = (close - cost) / cost * 100;
+  box.insertAdjacentHTML('beforeend', `
+    <div class="fund-stat-tile" id="trust-cost-tile" title="（現價 − 投信推估成本）÷ 投信推估成本。投信成本＝近${_TRUST_COST_WINDOW}個交易日投信買賣超以移動平均成本法推估，非投信實際持股成本。">
+      <div class="fund-stat-label">現價距投信成本（${fmt.price(cost)}）</div>
+      <div class="fund-stat-value ${pctClass(dev)}">${fmt.pct(dev)}</div>
+    </div>`);
   box.classList.remove('hidden');
 }
 
@@ -676,7 +739,7 @@ function renderPriceChart(allPrices) {
   const canvas = document.getElementById('price-chart');
   if (state.priceChart) { state.priceChart.destroy(); state.priceChart = null; }
   const prices = _visiblePrices(allPrices);
-  if (!prices.length) return;
+  if (!prices.length) { document.getElementById('price-chart-groups')?.replaceChildren(); return; }
 
   const labels = prices.map(p => p.date);
   const n = prices.length;
@@ -739,6 +802,38 @@ function renderPriceChart(allPrices) {
       pointRadius: 0, fill: false, tension: 0, spanGaps: true,
     });
   });
+
+  let trustCrossByDate = null;
+  const trustCostAll = (state.instTrades && state.instTrades.length)
+    ? _trustCostSeries(allPrices, state.instTrades) : null;
+  _renderTrustCostTile(allPrices, trustCostAll);
+  if (trustCostAll) {
+    const trustCost = trustCostAll.slice(offset);
+    // Close crossing the cost line vs. the previous day (both days need a cost value)
+    trustCrossByDate = new Map();
+    const crossUp = labels.map(() => null), crossDown = labels.map(() => null);
+    for (let i = Math.max(offset, 1); i < allPrices.length; i++) {
+      const c0 = trustCostAll[i - 1], c1 = trustCostAll[i];
+      const p0 = allPrices[i - 1].close, p1 = allPrices[i].close;
+      if (c0 == null || c1 == null || p0 == null || p1 == null) continue;
+      const k = i - offset;
+      if (p0 <= c0 && p1 > c1) { crossUp[k] = c1; trustCrossByDate.set(labels[k], c1); }
+      else if (p0 >= c0 && p1 < c1) { crossDown[k] = c1; trustCrossByDate.set(labels[k], c1); }
+    }
+    datasets.push(
+      { label: '投信成本', data: trustCost,
+        borderColor: getCssVar('--text'), backgroundColor: getCssVar('--text'),
+        borderWidth: 2, borderDash: [8, 3], pointRadius: 0, fill: false, tension: 0, spanGaps: false },
+      // Circles (not used by any other overlay); Taiwan colors: red = up, green = down
+      { label: '突破投信成本', data: crossUp, showLine: false, fill: false,
+        pointStyle: 'circle', pointRadius: 5, backgroundColor: '#ef4444', borderColor: '#ef4444',
+        pointBackgroundColor: '#ef4444', pointBorderColor: '#ffffff', pointBorderWidth: 1 },
+      { label: '跌破投信成本', data: crossDown, showLine: false, fill: false,
+        pointStyle: 'circle', pointRadius: 5, backgroundColor: '#22c55e', borderColor: '#22c55e',
+        pointBackgroundColor: '#22c55e', pointBorderColor: '#ffffff', pointBorderWidth: 1 },
+    );
+    opts.animation = false;  // sparse scatter points get stuck at baseline when animated (see 纏論 note below)
+  }
 
   // Overlay chip-peak reference lines when available — independent of the
   // days-selector's own lookback window (chip peak always uses its own
@@ -883,6 +978,9 @@ function renderPriceChart(allPrices) {
           ? `出場 ${fmt.price(t.exit_price)}（${_exitReasonLabel(t.exit_reason)}，${t.return_pct > 0 ? '+' : ''}${t.return_pct}%）`
           : label;
       }
+      if (trustCrossByDate && (label === '突破投信成本' || label === '跌破投信成本')) {
+        return `${label} ${fmt.price(trustCrossByDate.get(labels[ctx.dataIndex]))}`;
+      }
       if (label === '成交量') return `成交量: ${ctx.raw.toLocaleString()} 張`;
       return `${label}: ${ctx.formattedValue}`;
     },
@@ -891,11 +989,86 @@ function renderPriceChart(allPrices) {
   // Datasets without an explicit axis would bind to the first y scale (yVol)
   datasets.forEach(d => { d.yAxisID ??= 'y'; });
 
+  // Feature groups replace the built-in per-dataset legend (see _PRICE_CHART_GROUPS)
+  const hiddenGroups = _priceChartHiddenGroups();
+  datasets.forEach(d => {
+    d.group = _priceChartGroupOf(d.label);
+    d.hidden = hiddenGroups.has(d.group);
+  });
+  opts.plugins.legend.display = false;
+
   state.priceChart = new Chart(canvas, {
     type: 'line',
     data: { labels, datasets },
     options: opts,
   });
+  _renderPriceChartGroups(canvas, datasets, hiddenGroups);
+}
+
+/* ── Price chart feature groups ──
+   The chart overlays several independent features (K線, 成交量, 均線, 投信成本,
+   籌碼峰, 纏論, 回測進出場); instead of Chart.js's one-legend-item-per-dataset
+   (15+ items), each feature is one toggle chip that shows/hides all of its
+   datasets. Hidden groups persist per viewer in localStorage. Datasets are
+   mapped to groups by label, so a new overlay must be added to
+   _priceChartGroupOf() or it lands in 'other'. */
+const _PRICE_CHART_GROUPS = [
+  { key: 'kline',    name: 'K線',      colors: ['#ef4444', '#22c55e'] },
+  { key: 'volume',   name: '成交量',   colors: ['#ef444499', '#22c55e99'] },
+  { key: 'ma',       name: '均線',     colors: ['#f472b6', '#38bdf8', '#a3e635'] },
+  { key: 'trust',    name: '投信成本', colors: ['--text', '#ef4444', '#22c55e'] },
+  { key: 'chip',     name: '籌碼峰',   colors: ['#f59e0b', '--text2'] },
+  { key: 'chanlun',  name: '纏論',     colors: ['#a78bfa', '#22c55e', '#ef4444'] },
+  { key: 'backtest', name: '回測進出場', colors: ['#38bdf8', '#fb923c', '#facc15', '#f472b6'] },
+  { key: 'other',    name: '其他',     colors: ['--text2'] },
+];
+const _PRICE_CHART_HIDDEN_KEY = 'price_chart_hidden_groups';
+
+function _priceChartGroupOf(label) {
+  if (label === 'K線' || label === '_wick') return 'kline';
+  if (label === '成交量') return 'volume';
+  if (/^\d+日線$/.test(label)) return 'ma';
+  if (label.includes('投信成本')) return 'trust';
+  if (/^(POC|VAH|VAL) /.test(label)) return 'chip';
+  if (['筆', '中樞上緣', '中樞下緣', '買點', '賣點'].includes(label)) return 'chanlun';
+  if (['策略進場', '策略出場', '組合進場', '組合出場'].includes(label)) return 'backtest';
+  return 'other';
+}
+
+function _priceChartHiddenGroups() {
+  try { return new Set(JSON.parse(localStorage.getItem(_PRICE_CHART_HIDDEN_KEY)) || []); }
+  catch (_) { return new Set(); }
+}
+
+function _renderPriceChartGroups(canvas, datasets, hiddenGroups) {
+  const wrap = canvas.parentElement;
+  let bar = document.getElementById('price-chart-groups');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'price-chart-groups';
+    bar.className = 'chart-group-bar';
+    wrap.insertAdjacentElement('beforebegin', bar);
+    bar.addEventListener('click', e => {
+      const btn = e.target.closest('.chart-group-btn');
+      if (!btn || !state.priceChart) return;
+      const key = btn.dataset.group;
+      const hidden = _priceChartHiddenGroups();
+      hidden.has(key) ? hidden.delete(key) : hidden.add(key);
+      try { localStorage.setItem(_PRICE_CHART_HIDDEN_KEY, JSON.stringify([...hidden])); } catch (_) {}
+      const visible = !hidden.has(key);
+      state.priceChart.data.datasets.forEach((d, i) => {
+        if (d.group === key) state.priceChart.setDatasetVisibility(i, visible);
+      });
+      state.priceChart.update();
+      btn.classList.toggle('off', !visible);
+    });
+  }
+  const present = new Set(datasets.map(d => d.group));
+  const color = c => c.startsWith('--') ? getCssVar(c) : c;
+  bar.innerHTML = _PRICE_CHART_GROUPS.filter(g => present.has(g.key)).map(g => `
+    <button type="button" class="chart-group-btn${hiddenGroups.has(g.key) ? ' off' : ''}" data-group="${g.key}">
+      <span class="chart-group-swatch">${g.colors.map(c => `<i style="background:${color(c)}"></i>`).join('')}</span>${g.name}
+    </button>`).join('');
 }
 
 /* ── Price table ── */

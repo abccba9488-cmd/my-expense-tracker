@@ -411,6 +411,15 @@ main { padding-top: 52px; min-height: 100vh; }
   color: var(--text2); padding: 4px 10px; border-radius: 5px; font-size: 12px;
 }
 .days-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.chart-group-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.chart-group-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+}
+.chart-group-btn.off { opacity: .45; text-decoration: line-through; }
+.chart-group-swatch { display: inline-flex; gap: 2px; }
+.chart-group-swatch i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
 /* ── Table (DataTables overrides) ── */
 
