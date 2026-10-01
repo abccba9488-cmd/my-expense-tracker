@@ -2159,16 +2159,43 @@ async function selectMacroStock(code) {
 
   const extraEl = document.getElementById('macro-extra');
   extraEl.value = '載入本站資料中…';
-  const [financials, revenues, prices, brokerTrades] = await Promise.all([
+  // Prices/institutional are fetched with warm-up so the trust cost line
+  // (120 trading days) is valid; only the last ~half year is printed.
+  const [financials, revenues, pricesAll, brokerTrades, instAll] = await Promise.all([
     fetch(`/api/stocks/${code}/financials`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/revenue`).then(r => r.json()).catch(() => []),
-    fetch(`/api/stocks/${code}/prices?days=182`).then(r => r.json()).catch(() => []),
+    fetch(`/api/stocks/${code}/prices?days=${182 + _CHART_WARMUP_DAYS}`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/broker-trades?days=90`).then(r => r.json()).catch(() => []),
+    fetch(`/api/stocks/${code}/institutional-trades?days=${182 + _CHART_WARMUP_DAYS}`).then(r => r.json()).catch(() => []),
   ]);
-  extraEl.value = _buildMacroExtraText(s, financials, revenues, prices, brokerTrades);
+  const cutoff = new Date(Date.now() - 182 * 86400000).toISOString().slice(0, 10);
+  const prices = pricesAll.filter(p => p.date >= cutoff);
+  const inst = instAll.filter(r => r.date >= cutoff);
+  const trustCost = instAll.length ? _trustCostSeries(pricesAll, instAll).at(-1) : null;
+  extraEl.value = _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, inst, trustCost);
 }
 
-function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades) {
+// Net buy/sell in 張 for one investor type ('foreign'/'trust'/'dealer')
+function _instNetLots(r, who) {
+  const b = r[`${who}_buy`], se = r[`${who}_sell`];
+  return b == null && se == null ? null : Math.round(((b || 0) - (se || 0)) / 1000);
+}
+
+// Consecutive days (from the latest row backwards) with the same net sign
+function _instStreak(rows, who) {
+  let n = 0, sign = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const v = _instNetLots(rows[i], who);
+    const sg = v > 0 ? 1 : v < 0 ? -1 : 0;
+    if (!sg) break;
+    if (!sign) sign = sg;
+    if (sg !== sign) break;
+    n++;
+  }
+  return sign ? `連續${sign > 0 ? '買超' : '賣超'} ${n} 日` : '最新一日無買賣超';
+}
+
+function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, inst = [], trustCost = null) {
   const lines = [];
   lines.push(`【本站資料庫基本面摘要｜資料日期 ${s.price_date || '—'}】`);
   lines.push('（股價皆為未還原除權息的原始價格；金額單位為新台幣千元；EPS 為單季值，單位元）');
@@ -2195,6 +2222,21 @@ function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades) {
     lines.push('');
     lines.push(`近半年日線資料（日期 | 開 | 高 | 低 | 收 | 漲跌% | 成交量(張)）共 ${p.length} 筆：`);
     p.forEach(x => lines.push(`${x.date} | ${x.open ?? '—'} | ${x.high ?? '—'} | ${x.low ?? '—'} | ${x.close ?? '—'} | ${x.change_pct != null ? x.change_pct + '%' : '—'} | ${x.volume != null ? Math.round(x.volume / 1000) : '—'}`));
+  }
+  if (inst.length) {
+    const WHO = [['foreign', '外資'], ['trust', '投信'], ['dealer', '自營商']];
+    const sumLast = (who, n) => inst.slice(-n).reduce((a, r) => a + (_instNetLots(r, who) || 0), 0);
+    const sgn = v => (v > 0 ? '+' : '') + v.toLocaleString();
+    lines.push('');
+    lines.push(`三大法人買賣超彙總（單位：張，資料至 ${inst[inst.length - 1].date}）：`);
+    WHO.forEach(([k, name]) => lines.push(
+      `${name}：近5日 ${sgn(sumLast(k, 5))}｜近20日 ${sgn(sumLast(k, 20))}｜近60日 ${sgn(sumLast(k, 60))}｜${_instStreak(inst, k)}`));
+    if (trustCost != null) {
+      const last = prices.length ? prices[prices.length - 1].close : s.close;
+      lines.push(`投信推估成本（近120交易日投信買賣超，移動平均成本法，非實際持股成本）：${trustCost}${last ? `，現價距成本 ${((last - trustCost) / trustCost * 100).toFixed(2)}%` : ''}`);
+    }
+    lines.push(`近半年三大法人逐日買賣超（日期 | 外資 | 投信 | 自營商，單位：張，正＝買超）共 ${inst.length} 筆：`);
+    inst.forEach(r => lines.push(`${r.date} | ${WHO.map(([k]) => { const v = _instNetLots(r, k); return v == null ? '—' : sgn(v); }).join(' | ')}`));
   }
   const bt = brokerTrades || [];
   if (bt.length) {
