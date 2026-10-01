@@ -392,25 +392,12 @@
 
         <div class="macro-form-grid">
           <div class="form-group">
-            <label>市場</label>
-            <select id="macro-market" class="form-input">
-              <option value="台股" selected>台股</option>
-              <option value="美股">美股</option>
-            </select>
-          </div>
-          <div class="form-group">
             <label>目前股價</label>
             <input type="number" step="0.01" id="macro-price" class="form-input" placeholder="例如：1020">
           </div>
           <div class="form-group">
-            <label>持股成本</label>
-            <div class="macro-unit-row">
-              <input type="number" step="0.01" min="0" id="macro-cost" class="form-input" placeholder="空白＝尚未持有">
-              <select id="macro-cost-unit" class="form-input">
-                <option value="元" selected>元（新台幣）</option>
-                <option value="美元">美元</option>
-              </select>
-            </div>
+            <label>持股成本（元）</label>
+            <input type="number" step="0.01" min="0" id="macro-cost" class="form-input" placeholder="空白＝尚未持有">
           </div>
           <div class="form-group">
             <label>持有數量</label>

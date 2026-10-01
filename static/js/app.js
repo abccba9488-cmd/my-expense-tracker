@@ -2261,26 +2261,17 @@ function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, ins
   return lines.join('\n');
 }
 
-// Default units follow the selected market (TW: TWD/lots, US: USD/shares)
-document.getElementById('macro-market').addEventListener('change', function() {
-  const us = this.value === '美股';
-  document.getElementById('macro-cost-unit').value = us ? '美元' : '元';
-  document.getElementById('macro-qty-unit').value = us ? '股' : '張';
-});
-
 function _macroField(id) { return (document.getElementById(id).value || '').trim(); }
 
 function buildMacroPrompt() {
   const code = _macroSelected ? _macroSelected.code : '';
   const name = _macroSelected ? _macroSelected.name : '';
   const searchVal = _macroField('macro-search');
-  const target = code ? `${name}（${code}）` : (searchVal || '（未指定，請先在上方搜尋並選擇股票，或直接輸入美股代號）');
-  const marketSel = document.getElementById('macro-market');
-  const market = marketSel.options[marketSel.selectedIndex].textContent;
+  const target = code ? `${name}（${code}）` : (searchVal || '（未指定，請先在上方搜尋並選擇股票）');
   const price = _macroField('macro-price') || '（未提供）';
   const costVal = _macroField('macro-cost');
   const qtyVal = _macroField('macro-qty');
-  const cost = costVal ? `${costVal} ${_macroField('macro-cost-unit')}` : '尚未持有';
+  const cost = costVal ? `${costVal} 元` : '尚未持有';
   const qty = qtyVal ? `${qtyVal} ${_macroField('macro-qty-unit')}` : '尚未持有';
   const horizonSel = document.getElementById('macro-horizon');
   const horizon = horizonSel.options[horizonSel.selectedIndex].textContent;
@@ -2289,13 +2280,13 @@ function buildMacroPrompt() {
   const extra = _macroField('macro-extra') || '（無補充資料）';
   const stockLine = code || searchVal || '（請填入股票代號）';
 
-  return `# 機構級台美股「基本面 × 供需 × 技術 × 籌碼 × 估值 × 風控」全方位研究 Prompt
+  return `# 機構級台股「基本面 × 供需 × 技術 × 籌碼 × 估值 × 風控」全方位研究 Prompt
 
 ## 一、角色設定
 
 你是一名具備 20 年以上經驗的頂級投資銀行 Sell-side Research 資深股票研究員，同時具備：
 
-* 台美股基本面研究能力
+* 台股基本面研究能力
 * 半導體／硬體／AI／科技產業供需分析能力
 * 財報與現金流分析能力
 * 技術分析與 K 線結構判讀能力
@@ -2312,7 +2303,7 @@ function buildMacroPrompt() {
 # 二、分析標的
 
 * **股票名稱／代號：** ${target}
-* **市場：** ${market}
+* **市場：** 台股
 * **目前股價：** ${price}
 * **持股成本：** ${cost}
 * **持有數量：** ${qty}
@@ -2343,7 +2334,7 @@ ${extra}
 11. 外資／本土券商產業研究
 12. TrendForce、IDC、Gartner、Counterpoint、Digitimes 等專業產業資料（若適用）
 13. 最新市場與產業新聞
-14. 所屬產業的龍頭股（台股與美股／國際龍頭各至少 1～3 家）及其最新財報、營收、法說會展望、股價走勢與估值
+14. 所屬產業的龍頭股（台股與國際龍頭各至少 1～3 家）及其最新財報、營收、法說會展望、股價走勢與估值
 
 **不能只依賴使用者提供的資料。**
 
@@ -2559,7 +2550,7 @@ Tier 3 僅可作為輔助，不可單獨作為重大投資結論的核心依據�
 
 ## 產業龍頭股對照
 
-必須先聯網搜尋並列出本公司所屬產業（及其上下游關鍵環節）的龍頭股，台股與美股／國際龍頭都要涵蓋：
+必須先聯網搜尋並列出本公司所屬產業（及其上下游關鍵環節）的龍頭股，台股與國際龍頭都要涵蓋：
 
 | 龍頭公司／代號 | 市場 | 產業地位／市占 | 最新營收 YoY | 毛利率 | 預估 P/E | 近3個月股價表現 | 最新法說會展望 |
 | ------- | -- | ------- | -------: | --: | -----: | -------: | ------- |
