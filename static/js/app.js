@@ -2168,11 +2168,18 @@ async function selectMacroStock(code) {
     fetch(`/api/stocks/${code}/broker-trades?days=90`).then(r => r.json()).catch(() => []),
     fetch(`/api/stocks/${code}/institutional-trades?days=${182 + _CHART_WARMUP_DAYS}`).then(r => r.json()).catch(() => []),
   ]);
+  const [fundamentals, macroExtra, chipPeak, chanlunRes] = await Promise.all([
+    fetch(`/api/stocks/${code}/fundamentals`).then(r => r.json()).catch(() => null),
+    fetch(`/api/stocks/${code}/macro-extra`).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(`/api/stocks/${code}/chip-peak`).then(r => r.json()).catch(() => null),
+    fetch(`/api/stocks/${code}/chanlun`).then(r => r.json()).catch(() => null),
+  ]);
   const cutoff = new Date(Date.now() - 182 * 86400000).toISOString().slice(0, 10);
   const prices = pricesAll.filter(p => p.date >= cutoff);
   const inst = instAll.filter(r => r.date >= cutoff);
   const trustCost = instAll.length ? _trustCostSeries(pricesAll, instAll).at(-1) : null;
-  extraEl.value = _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, inst, trustCost);
+  extraEl.value = _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, inst, trustCost,
+    { fundamentals, macroExtra, chipPeak, chanlun: chanlunRes });
 }
 
 // Net buy/sell in 張 for one investor type ('foreign'/'trust'/'dealer')
@@ -2195,7 +2202,11 @@ function _instStreak(rows, who) {
   return sign ? `連續${sign > 0 ? '買超' : '賣超'} ${n} 日` : '最新一日無買賣超';
 }
 
-function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, inst = [], trustCost = null) {
+function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, inst = [], trustCost = null, more = {}) {
+  const { fundamentals, macroExtra, chipPeak, chanlun } = more;
+  const n2 = v => v == null ? '—' : Number(v).toFixed(2);
+  const n1 = v => v == null ? '—' : Number(v).toFixed(1);
+  const k = v => v == null ? '—' : Math.round(v).toLocaleString();
   const lines = [];
   lines.push(`【本站資料庫基本面摘要｜資料日期 ${s.price_date || '—'}】`);
   lines.push('（股價皆為未還原除權息的原始價格；金額單位為新台幣千元；EPS 為單季值，單位元）');
@@ -2217,6 +2228,39 @@ function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, ins
     lines.push('近12個月月營收年增率：');
     lines.push(r.map(x => `${x.year}/${String(x.month).padStart(2, '0')} ${x.revenue_yoy != null ? x.revenue_yoy.toFixed(1) + '%' : '—'}`).join('、'));
   }
+  const fq = ((fundamentals && fundamentals.quarterly) || []).slice(0, 8);
+  if (fq.some(q => q.gross_margin != null || q.debt_ratio != null)) {
+    lines.push('');
+    lines.push('近8季財務比率（年季 | 毛利率% | 營益率% | ROE%(年化) | ROA%(年化) | 流動比率% | 速動比率% | 負債比率% | 存貨週轉天數 | 應收帳款週轉天數）：');
+    fq.forEach(q => lines.push(`${q.year}Q${q.quarter} | ${n1(q.gross_margin)} | ${n1(q.operating_margin)} | ${n1(q.roe)} | ${n1(q.roa)} | ${n1(q.current_ratio)} | ${n1(q.quick_ratio)} | ${n1(q.debt_ratio)} | ${n1(q.inventory_turnover_days)} | ${n1(q.ar_turnover_days)}`));
+  }
+  const fe = (macroExtra && macroExtra.financial_extra) || [];
+  if (fe.length) {
+    lines.push('');
+    lines.push('近8季現金流量（千元，單季值；資本支出為負＝流出；自由現金流＝營業現金流＋資本支出）：');
+    lines.push('年季 | 營業現金流 | 資本支出 | 自由現金流 | 利息費用 | 稅前淨利');
+    fe.forEach(r => {
+      const fcf = r.operating_cash_flow != null && r.capex != null ? r.operating_cash_flow + r.capex : null;
+      lines.push(`${r.year}Q${r.quarter} | ${k(r.operating_cash_flow)} | ${k(r.capex)} | ${k(fcf)} | ${k(r.interest_expense)} | ${k(r.pretax_income)}`);
+    });
+    lines.push('近8季資產負債表（千元，季末餘額）：');
+    lines.push('年季 | 總資產 | 總負債 | 股東權益 | 流動資產 | 流動負債 | 存貨 | 應收帳款 | 長期借款 | 股本');
+    fe.forEach(r => lines.push(`${r.year}Q${r.quarter} | ${k(r.total_assets)} | ${k(r.liabilities)} | ${k(r.equity)} | ${k(r.current_assets)} | ${k(r.current_liabilities)} | ${k(r.inventories)} | ${k(r.accounts_receivable)} | ${k(r.long_term_borrowings)} | ${k(r.capital_stock)}`));
+  }
+  const divs = ((fundamentals && fundamentals.dividends) || []).slice(0, 5);
+  const snap = (fundamentals && fundamentals.snapshot) || {};
+  if (divs.length || snap.pbr != null) {
+    lines.push('');
+    lines.push(`估值與股利：股價淨值比 ${n2(snap.pbr)}｜近5年填息機率 ${snap.fill_rate_5y != null ? n1(snap.fill_rate_5y) + '%' : '—'}`);
+    if (divs.length) {
+      lines.push('近5個年度股利（所屬年度 | 現金股利(元) | 股票股利(元) | 合計 | 配發率% | 當年底殖利率%）：');
+      divs.forEach(d => lines.push(`${d.fiscal_year} | ${n2(d.cash_dividend)} | ${n2(d.stock_dividend)} | ${n2(d.total)} | ${n1(d.payout_ratio)} | ${n2(d.dividend_yield)}`));
+    }
+    const fills = (macroExtra && macroExtra.fill_events) || [];
+    if (fills.length) {
+      lines.push(`近5年除權息事件（除息日 除息前收盤價 是否已填息）：${fills.map(f => `${f.ex_date} ${f.before_price ?? '—'} ${f.filled ? '已填息' : '未填息'}`).join('、')}`);
+    }
+  }
   const p = prices || [];
   if (p.length) {
     lines.push('');
@@ -2237,6 +2281,25 @@ function _buildMacroExtraText(s, financials, revenues, prices, brokerTrades, ins
     }
     lines.push(`近半年三大法人逐日買賣超（日期 | 外資 | 投信 | 自營商，單位：張，正＝買超）共 ${inst.length} 筆：`);
     inst.forEach(r => lines.push(`${r.date} | ${WHO.map(([k]) => { const v = _instNetLots(r, k); return v == null ? '—' : sgn(v); }).join(' | ')}`));
+  }
+  const hold = (macroExtra && macroExtra.holding) || [];
+  if (hold.length) {
+    lines.push('');
+    lines.push('股權分散（集保週資料，占集保總股數%｜日期 | 1000張以上大戶 | 400張以上 | 200張以下散戶）：');
+    hold.forEach(h => lines.push(`${h.date} | ${n2(h.pct_1000up)} | ${n2(h.pct_400up)} | ${n2(h.pct_200down)}`));
+  }
+  const dir = (macroExtra && macroExtra.director) || [];
+  if (dir.length) {
+    lines.push(`董監持股比例（民國年月 比例%）：${dir.map(d => `${d.year_month} ${n2(d.holding_pct)}%`).join('、')}`);
+  }
+  if (chipPeak && chipPeak.poc != null) {
+    lines.push('');
+    lines.push(`籌碼峰（近${chipPeak.lookback_days}個交易日成交量經時間衰減＋法人品質加權的價量分布，未還原股價）：POC ${chipPeak.poc}｜價值區間 VAL ${chipPeak.val}～VAH ${chipPeak.vah}｜現價距POC ${(chipPeak.price_to_poc * 100).toFixed(2)}%｜主峰集中度 ${(chipPeak.peak_strength * 100).toFixed(1)}%`);
+  }
+  if (chanlun && chanlun.strokes && chanlun.strokes.length) {
+    const sig = chanlun.latest_signal;
+    const center = chanlun.centers && chanlun.centers[chanlun.centers.length - 1];
+    lines.push(`纏論（近一年日線，近似版、未做線段層級）：最新訊號 ${sig ? `${_CHANLUN_SIGNAL_LABELS[sig.type] || sig.type} ${sig.price}（${sig.date}）` : '無'}｜最近中樞 ${center ? `${center.zd}～${center.zg}（${center.start_date}～${center.end_date}）` : '無'}｜筆數 ${chanlun.strokes.length}`);
   }
   const bt = brokerTrades || [];
   if (bt.length) {

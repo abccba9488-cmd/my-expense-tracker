@@ -786,6 +786,39 @@ def api_financials(code):
         db.close()
 
 
+@app.route('/api/stocks/<code>/macro-extra')
+def api_stock_macro_extra(code):
+    """Raw rows the 總體分析 prompt needs that no other endpoint exposes:
+    financial_extra (balance sheet / cash flow, 千元; cash-flow fields are
+    stored single-quarter after de-cumulation, capex is negative = outflow),
+    股權分散 (weekly), 董監持股 (monthly), 除權息填息 events (5y).
+    Ratios/dividends come from /fundamentals, not duplicated here."""
+    db = SessionLocal()
+    try:
+        def rows(sql, **params):
+            return [dict(r) for r in db.execute(text(sql), {'code': code, **params}).mappings()]
+        since_5y = (datetime.now(_TZ).date() - timedelta(days=5 * 365)).isoformat()
+        return jsonify({
+            'financial_extra': rows('''
+                SELECT year, quarter, gross_profit, pretax_income, operating_cash_flow, capex,
+                       interest_expense, current_assets, current_liabilities, liabilities, equity,
+                       total_assets, inventories, accounts_receivable, long_term_borrowings, capital_stock
+                FROM financial_extra WHERE stock_code = :code
+                ORDER BY year DESC, quarter DESC LIMIT 8'''),
+            'holding': rows('''
+                SELECT date, pct_1000up, pct_400up, pct_200down FROM holding_concentration
+                WHERE stock_code = :code ORDER BY date DESC LIMIT 12'''),
+            'director': rows('''
+                SELECT year_month, holding_pct FROM director_holdings
+                WHERE stock_code = :code ORDER BY year_month DESC LIMIT 6'''),
+            'fill_events': rows('''
+                SELECT ex_date, before_price, filled FROM dividend_fill_events
+                WHERE stock_code = :code AND ex_date >= :since ORDER BY ex_date DESC''', since=since_5y),
+        })
+    finally:
+        db.close()
+
+
 @app.route('/api/stocks/<code>/fundamentals')
 def api_stock_fundamentals(code):
     db = SessionLocal()

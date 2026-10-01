@@ -258,6 +258,7 @@ GET  /api/stocks/<code>/prices     個股歷史股價（?days=90）
 GET  /api/stocks/<code>/revenue    個股月營收
 GET  /api/stocks/<code>/financials 個股季財報
 GET  /api/stocks/<code>/fundamentals  逐季獲利/財務健康比率＋股利歷史＋最新估值快照（`experts.get_stock_fundamentals()`，跟達人選股計分引擎共用同一套比率公式，但保留逐季明細供詳情頁畫趨勢圖，而非計分引擎用的「近N季平均」）
+GET  /api/stocks/<code>/macro-extra  總體分析補充資料專用：financial_extra 近8季現金流/資產負債表原始值、股權分散近12週、董監持股近6個月、近5年填息事件（見「總體分析」章節）
 GET  /api/stocks/<code>/health      持股健康檢查（正常/早期警告/注意/撤退），見「持股健康檢查」章節
 GET  /api/stocks/<code>/ai-analysis  讀取該股快取的 AI 分析結果（任何人可讀，不會觸發新分析）
 GET  /api/stocks/<code>/note        讀取AI分析筆記（所有人可讀），見「個股筆記」章節
@@ -505,7 +506,7 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 分頁本身不打任何後端分析 API，只是把使用者填的表單＋本站既有資料組成一份完整提示詞，複製到剪貼簿並開新分頁到 Gemini/ChatGPT/Perplexity，使用者自行貼上分析——跟既有 `copyStarForAI()`/`copyWlForAI()`/`copyAnnForAI()` 屬於同一種「本站不呼叫付費 AI API、只組提示詞」的模式，只是這次是完整的機構研究備忘錄模板（供需矩陣、多空情境、交易防守邏輯）而非簡短提示。
 
-- **股票搜尋**沿用自選股搜尋框（`#wl-search`）的既有模式：`state.allData` 前端過濾＋下拉選單，Enter 選第一筆。選定股票後（`selectMacroStock()`）自動帶入目前股價（`state.allData` 裡的 `close`），並額外呼叫 `/api/stocks/<code>/financials` + `/api/stocks/<code>/revenue` + `/api/stocks/<code>/prices?days=182` + `/api/stocks/<code>/broker-trades?days=90`（後兩者 2026-09-23 新增）組成「附加資訊」欄位（開頭註明未還原股價／千元／單季EPS，成交量換算成張；提示詞並要求 AI 與官方來源不一致時以官方為準並列出差異；近 8 季財報、近 12 個月營收年增率、近半年日線 OHLC＋漲跌%＋量、近90交易日主力分點買超/賣超前十大＋前5大分點集中度），2026-10-01 再加 `/api/stocks/<code>/institutional-trades`：三大法人近5/20/60日買賣超合計＋連續買/賣超天數＋近半年逐日外資/投信/自營商買賣超（張），以及 `_trustCostSeries()` 算的投信推估成本與現價乖離（股價/法人多抓 `_CHART_WARMUP_DAYS` 暖機，只印近半年），使用者可自行編輯或補充 K 線重點。分點彙整重用 `renderBrokerTrades()`／`_brokerLots()` 同一套「依 broker_id 加總 net/activity、取前N大」邏輯，未曾查詢過分點資料的股票會回傳空陣列、直接略過這段。
+- **股票搜尋**沿用自選股搜尋框（`#wl-search`）的既有模式：`state.allData` 前端過濾＋下拉選單，Enter 選第一筆。選定股票後（`selectMacroStock()`）自動帶入目前股價（`state.allData` 裡的 `close`），並額外呼叫 `/api/stocks/<code>/financials` + `/api/stocks/<code>/revenue` + `/api/stocks/<code>/prices?days=182` + `/api/stocks/<code>/broker-trades?days=90`（後兩者 2026-09-23 新增）組成「附加資訊」欄位（開頭註明未還原股價／千元／單季EPS，成交量換算成張；提示詞並要求 AI 與官方來源不一致時以官方為準並列出差異；近 8 季財報、近 12 個月營收年增率、近半年日線 OHLC＋漲跌%＋量、近90交易日主力分點買超/賣超前十大＋前5大分點集中度），2026-10-01 再加 `/api/stocks/<code>/institutional-trades`：三大法人近5/20/60日買賣超合計＋連續買/賣超天數＋近半年逐日外資/投信/自營商買賣超（張），以及 `_trustCostSeries()` 算的投信推估成本與現價乖離（股價/法人多抓 `_CHART_WARMUP_DAYS` 暖機，只印近半年）；同日再補齊資料庫其餘可用資料：`/api/stocks/<code>/fundamentals`（近8季毛利率/營益率/ROE/ROA/流動/速動/負債比/週轉天數、近5年股利與配發率、PBR、填息機率）、新端點 `/api/stocks/<code>/macro-extra`（`financial_extra` 近8季現金流＋資產負債表原始值〔現金流已去累計為單季、capex 為負值＝流出，FCF＝OCF＋capex〕、股權分散近12週、董監持股近6個月、近5年除權息填息事件）、`/chip-peak`（POC/VAL/VAH/集中度）、`/chanlun`（最新訊號＋最近中樞）。整份補充資料約 1.5 萬字，使用者可自行編輯或補充 K 線重點。分點彙整重用 `renderBrokerTrades()`／`_brokerLots()` 同一套「依 broker_id 加總 net/activity、取前N大」邏輯，未曾查詢過分點資料的股票會回傳空陣列、直接略過這段。
 - `buildMacroPrompt()`（`app.js`）把固定的高盛研究員角色提示詞模板＋使用者填的四個欄位（目前股價／持股狀態／預計投資週期／最大可承受虧損比例；持股成本（元）為數字輸入、持有數量是「數字＋張/股下拉選單」，數字留空＝尚未持有；2026-10-01 起移除美股市場選單與提示詞中所有美股字樣，本站只針對台股（產業龍頭對照仍要求台股＋國際龍頭，國際同業比較是分析需要，不算支援美股））＋上述自動帶入的附加資訊組成完整提示詞，模板內含「產業龍頭股對照」（第六層競爭優勢之後，2026-09-26 新增：要求 AI 聯網搜尋台股＋美股／國際龍頭並比較營收、毛利率、估值、股價連動），結尾固定加一段「輸出檔案格式要求」，要求 AI 額外把報告整理成可下載的獨立 HTML 檔（供列印或另存 PDF）。
 - 三個 AI 連結按鈕（`openMacroAi(target)`）呼叫 `navigator.clipboard.writeText()` 但不 `await` 它、緊接著同步呼叫 `window.open()`——沿用既有 `copyAnnRatingPrompt()` 的既有寫法，讓 `window.open()` 留在使用者點擊的呼叫堆疊內，不要包進 `.then()` 回呼裡。
 
