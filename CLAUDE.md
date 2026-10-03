@@ -48,6 +48,15 @@ C:\Users\user\anaconda3\python.exe -m py_compile app.py crawler.py   # Python �
 
 **改 `templates/*.html` 必須重啟伺服器才生效**（`debug=False`，Jinja 快取模板）；改 `static/js`／`static/css` 不用重啟（mtime 版號自動換網址）。詳見「籌碼峰」章節同名 gotcha。
 
+**Claude Code 內重啟伺服器**一律用 PowerShell 工具（不要用 Bash 跑 `start.bat`／`_server.bat`——`start` 分離出去的子行程會在工具呼叫結束時被回收），且同一個指令內先載入 `FINMIND_TOKEN`（原因見下方「排程」章節踩雷）：
+```powershell
+$pids = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+foreach ($p in $pids) { Stop-Process -Id $p -Force -Confirm:$false }
+$env:FINMIND_TOKEN = [Environment]::GetEnvironmentVariable("FINMIND_TOKEN","User")
+Start-Process -FilePath "C:\Users\user\anaconda3\python.exe" -ArgumentList "app.py" -WorkingDirectory "C:\Users\user\Documents\claude\VSCode\stock-analysis" -WindowStyle Minimized
+```
+重啟前確認沒有正在跑、會呼叫本站 API 的背景工作（例如 `/rate-announcements`）。
+
 **本機開機自動啟動**：`autostart_server.bat` 是 `start.bat` 的背景版——只確保 Flask（含內建 APScheduler 排程）在跑，不會跳出瀏覽器分頁。透過在 Windows「啟動」資料夾（`shell:startup`，使用者層級、不需要系統管理員權限）放一個指向它的捷徑，登入時自動背景啟動；這個捷徑本身不在 git 版控內，換一台機器要重設的話再重建一次即可。原本想用 `schtasks`/`Register-ScheduledTask` 註冊工作排程器，但兩者都需要系統管理員權限，改用啟動資料夾捷徑這個免提權做法。
 
 **`.bat` 檔案裡不要放中文註解**：Windows `cmd.exe` 解析批次檔時對多位元組字元（中文）處理不可靠，中文 `rem` 註解可能被錯誤斷行、導致後面的文字被當成指令執行、噴出「找不到指令」的錯誤（親身踩過一次）。這個專案既有的 `.bat` 檔案本來就沒有中文註解，新增 `.bat` 檔案時延續這個慣例，需要說明就用英文或直接寫在 CLAUDE.md 裡。
@@ -507,7 +516,7 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 分頁本身不打任何後端分析 API，只是把使用者填的表單＋本站既有資料組成一份完整提示詞，複製到剪貼簿並開新分頁到 Gemini/ChatGPT/Perplexity，使用者自行貼上分析——跟既有 `copyStarForAI()`/`copyWlForAI()`/`copyAnnForAI()` 屬於同一種「本站不呼叫付費 AI API、只組提示詞」的模式，只是這次是完整的機構研究備忘錄模板（供需矩陣、多空情境、交易防守邏輯）而非簡短提示。
 
 - **股票搜尋**沿用自選股搜尋框（`#wl-search`）的既有模式：`state.allData` 前端過濾＋下拉選單，Enter 選第一筆。選定股票後（`selectMacroStock()`）自動帶入目前股價（`state.allData` 裡的 `close`），並額外呼叫 `/api/stocks/<code>/financials` + `/api/stocks/<code>/revenue` + `/api/stocks/<code>/prices?days=182` + `/api/stocks/<code>/broker-trades?days=90`（後兩者 2026-09-23 新增）組成「附加資訊」欄位（開頭註明未還原股價／千元／單季EPS，成交量換算成張；提示詞並要求 AI 與官方來源不一致時以官方為準並列出差異；近 8 季財報、近 12 個月營收年增率、近半年日線 OHLC＋漲跌%＋量、近90交易日主力分點買超/賣超前十大＋前5大分點集中度），2026-10-01 再加 `/api/stocks/<code>/institutional-trades`：三大法人近5/20/60日買賣超合計＋連續買/賣超天數＋近半年逐日外資/投信/自營商買賣超（張），以及 `_trustCostSeries()` 算的投信推估成本與現價乖離（股價/法人多抓 `_CHART_WARMUP_DAYS` 暖機，只印近半年）；同日再補齊資料庫其餘可用資料：`/api/stocks/<code>/fundamentals`（近8季毛利率/營益率/ROE/ROA/流動/速動/負債比/週轉天數、近5年股利與配發率、PBR、填息機率）、新端點 `/api/stocks/<code>/macro-extra`（`financial_extra` 近8季現金流＋資產負債表原始值〔現金流已去累計為單季、capex 為負值＝流出，FCF＝OCF＋capex〕、股權分散近12週、董監持股近6個月、近5年除權息填息事件）、`/chip-peak`（POC/VAL/VAH/集中度）、`/chanlun`（最新訊號＋最近中樞）。整份補充資料約 1.5 萬字，使用者可自行編輯或補充 K 線重點。分點彙整重用 `renderBrokerTrades()`／`_brokerLots()` 同一套「依 broker_id 加總 net/activity、取前N大」邏輯，未曾查詢過分點資料的股票會回傳空陣列、直接略過這段。
-- `buildMacroPrompt()`（`app.js`）把固定的高盛研究員角色提示詞模板＋使用者填的四個欄位（目前股價／持股狀態／預計投資週期／最大可承受虧損比例；持股成本（元）為數字輸入、持有數量是「數字＋張/股下拉選單」，數字留空＝尚未持有；2026-10-01 起移除美股市場選單與提示詞中所有美股字樣，本站只針對台股（產業龍頭對照仍要求台股＋國際龍頭，國際同業比較是分析需要，不算支援美股））＋上述自動帶入的附加資訊組成完整提示詞，模板內含「產業龍頭股對照」（第六層競爭優勢之後，2026-09-26 新增：要求 AI 聯網搜尋台股＋美股／國際龍頭並比較營收、毛利率、估值、股價連動），結尾固定加一段「輸出檔案格式要求」，要求 AI 額外把報告整理成可下載的獨立 HTML 檔（供列印或另存 PDF）。
+- `buildMacroPrompt()`（`app.js`）把固定的高盛研究員角色提示詞模板＋使用者填的四個欄位（目前股價／持股狀態／預計投資週期／最大可承受虧損比例；持股成本（元）為數字輸入、持有數量是「數字＋張/股下拉選單」，數字留空＝尚未持有；「已領股利（元）」（2026-10-03 新增，`#macro-dividend`）為持有期間累計已領現金股利總額，提示詞要求 AI 用它算含息報酬與含息成本，留空＝無；2026-10-01 起移除美股市場選單與提示詞中所有美股字樣，本站只針對台股（產業龍頭對照仍要求台股＋國際龍頭，國際同業比較是分析需要，不算支援美股））＋上述自動帶入的附加資訊組成完整提示詞，模板內含「產業龍頭股對照」（第六層競爭優勢之後，2026-09-26 新增：要求 AI 聯網搜尋台股＋美股／國際龍頭並比較營收、毛利率、估值、股價連動），結尾固定加一段「輸出檔案格式要求」，要求 AI 額外把報告整理成可下載的獨立 HTML 檔（供列印或另存 PDF）。
 - 三個 AI 連結按鈕（`openMacroAi(target)`）呼叫 `navigator.clipboard.writeText()` 但不 `await` 它、緊接著同步呼叫 `window.open()`——沿用既有 `copyAnnRatingPrompt()` 的既有寫法，讓 `window.open()` 留在使用者點擊的呼叫堆疊內，不要包進 `.then()` 回呼裡。
 
 ## 自結公告（爬蟲 + 決定性解析 + AI 評級，2026-08-16 評級改為人工免費版）

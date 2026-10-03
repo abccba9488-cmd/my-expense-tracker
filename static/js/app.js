@@ -2336,6 +2336,11 @@ function buildMacroPrompt() {
   const qtyVal = _macroField('macro-qty');
   const cost = costVal ? `${costVal} 元` : '尚未持有';
   const qty = qtyVal ? `${qtyVal} ${_macroField('macro-qty-unit')}` : '尚未持有';
+  // Optional chaining: the field only exists once the server serves the updated index.html
+  const divVal = (document.getElementById('macro-dividend')?.value || '').trim();
+  const dividend = divVal
+    ? `${Number(divVal).toLocaleString()} 元（持有期間累計已領現金股利總額；計算含息報酬率與實際持股成本時請一併納入，含息成本＝（持股成本×持有股數−已領股利）÷持有股數）`
+    : '無／未提供';
   const horizonSel = document.getElementById('macro-horizon');
   const horizon = horizonSel.options[horizonSel.selectedIndex].textContent;
   const maxloss = _macroField('macro-maxloss');
@@ -2370,6 +2375,7 @@ function buildMacroPrompt() {
 * **目前股價：** ${price}
 * **持股成本：** ${cost}
 * **持有數量：** ${qty}
+* **已領股利：** ${dividend}
 * **預計投資週期：** ${horizon}
 * **最大可承受虧損：** ${maxlossText}
 * **K線圖：** （本站無法直接附加圖片，如有 K 線圖請自行提供給 AI，或參考下方補充資料的文字描述）
