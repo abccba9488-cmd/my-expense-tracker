@@ -2334,13 +2334,32 @@ function buildMacroPrompt() {
   const price = _macroField('macro-price') || '（未提供）';
   const costVal = _macroField('macro-cost');
   const qtyVal = _macroField('macro-qty');
-  const cost = costVal ? `${costVal} 元` : '尚未持有';
+  const cost = costVal ? `${costVal} 元／股（平均買進價）` : '尚未持有';
+  // Sanity check: a per-share cost >3x away from the current price is most
+  // likely a typo (misplaced decimal, or total amount entered as per-share)
+  const costRatio = costVal && Number(costVal) > 0 && Number(_macroField('macro-price')) > 0
+    ? Number(_macroField('macro-price')) / Number(costVal) : null;
+  const costCheck = costRatio != null && (costRatio > 3 || costRatio < 1 / 3)
+    ? `
+* **⚠️ 成本檢查：** 持股成本與目前股價相差約 ${costRatio >= 1 ? costRatio.toFixed(1) : (1 / costRatio).toFixed(1)} 倍，可能是輸入錯誤（小數點位置、或把總金額當成每股成本）。請在報告開頭先明確提醒使用者確認成本，並同時列出「依輸入值」與「若成本約等於現價量級」兩種情境的報酬計算，不要只給出依輸入值算出的極端報酬率。`
+    : '';
   const qty = qtyVal ? `${qtyVal} ${_macroField('macro-qty-unit')}` : '尚未持有';
-  // Optional chaining: the field only exists once the server serves the updated index.html
-  const divVal = (document.getElementById('macro-dividend')?.value || '').trim();
-  const dividend = divVal
-    ? `${Number(divVal).toLocaleString()} 元（持有期間累計已領現金股利總額；計算含息報酬率與實際持股成本時請一併納入，含息成本＝（持股成本×持有股數−已領股利）÷持有股數）`
+  // 股息 = cash dividends (元), 股利 = stock dividends received (股). Optional
+  // chaining: the fields only exist once the server serves the updated index.html
+  const cashDivVal = (document.getElementById('macro-cash-dividend')?.value || '').trim();
+  const stockDivVal = (document.getElementById('macro-stock-dividend')?.value || '').trim();
+  const cashDividend = cashDivVal
+    ? `${Number(cashDivVal).toLocaleString()} 元（持有期間累計已領現金股利總額）`
     : '無／未提供';
+  // 股票股利 is quoted in 元/股 at par 10 元: shares received = shares held × 元 ÷ 10
+  // (1.0 元 → 100 股 per 張). Assumes 持有數量 is the pre-distribution holding.
+  const heldShares = qtyVal ? Number(qtyVal) * (_macroField('macro-qty-unit') === '張' ? 1000 : 1) : null;
+  const stockDividend = stockDivVal
+    ? `${stockDivVal} 元／股（面額10元計，每張配 ${Math.round(Number(stockDivVal) * 100)} 股${heldShares ? `；以持有 ${heldShares.toLocaleString()} 股計，約配 ${Math.round(heldShares * Number(stockDivVal) / 10).toLocaleString()} 股` : ''}）`
+    : '無／未提供';
+  const dividendNote = (cashDivVal || stockDivVal)
+    ? '\n* **含權息計算要求：** 請把現金股利與股票股利一併納入，計算含權息報酬率與含權息平均成本（現金股利直接抵減投入成本；股票股利依面額10元換算配股股數＝持股股數×股票股利÷10，增加持股、攤低每股成本）。上方配股股數假設「持有數量」為配股前股數，若實際已含配股請說明並調整；若公司面額非10元請改以實際面額換算。'
+    : '';
   const horizonSel = document.getElementById('macro-horizon');
   const horizon = horizonSel.options[horizonSel.selectedIndex].textContent;
   const maxloss = _macroField('macro-maxloss');
@@ -2373,9 +2392,10 @@ function buildMacroPrompt() {
 * **股票名稱／代號：** ${target}
 * **市場：** 台股
 * **目前股價：** ${price}
-* **持股成本：** ${cost}
+* **持股成本：** ${cost}${costCheck}
 * **持有數量：** ${qty}
-* **已領股利：** ${dividend}
+* **現金股利：** ${cashDividend}
+* **股票股利：** ${stockDividend}${dividendNote}
 * **預計投資週期：** ${horizon}
 * **最大可承受虧損：** ${maxlossText}
 * **K線圖：** （本站無法直接附加圖片，如有 K 線圖請自行提供給 AI，或參考下方補充資料的文字描述）

@@ -396,7 +396,7 @@
             <input type="number" step="0.01" id="macro-price" class="form-input" placeholder="例如：1020">
           </div>
           <div class="form-group">
-            <label>持股成本（元）</label>
+            <label>持股成本（元／股，平均買進價）</label>
             <input type="number" step="0.01" min="0" id="macro-cost" class="form-input" placeholder="空白＝尚未持有">
           </div>
           <div class="form-group">
@@ -410,8 +410,12 @@
             </div>
           </div>
           <div class="form-group">
-            <label>已領股利（元）</label>
-            <input type="number" step="1" min="0" id="macro-dividend" class="form-input" placeholder="持有期間累計已領現金股利總額，空白＝無">
+            <label>現金股利（元，累計已領總額）</label>
+            <input type="number" step="1" min="0" id="macro-cash-dividend" class="form-input" placeholder="持有期間累計已領現金股利總額，空白＝無">
+          </div>
+          <div class="form-group">
+            <label>股票股利（元／股）</label>
+            <input type="number" step="0.01" min="0" id="macro-stock-dividend" class="form-input" placeholder="例如配股1.0元填1，空白＝無">
           </div>
           <div class="form-group">
             <label>預計投資週期</label>
