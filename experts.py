@@ -66,13 +66,15 @@ EXPERT_LABELS = {
     'chanlun_star': '纏論買點+營收飆股',
     'flag888_guyu': '888標準3+股魚',
     'wl823_pullback': '自選8/23 拉回5日線',
+    'accumulation': '主力吸貨',
 }
 
 # 非公開已知選股法（不像 gutai/888/guyu/laoniu 4 套是抄錄自對外公開的達人選股
 # 法），是本站自製的實驗性規則，前端會加註 NEW 徽章。詳見 score_momentum_guard()。
 # chanlun_buy/sell 是 2026-08-22 新增的第二個實驗性項目，見 _score_chanlun()。
 # wl823_pullback 是 2026-09-22 新增，見 score_wl823_pullback()。
-EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star', 'flag888_guyu', 'wl823_pullback'}
+EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star', 'flag888_guyu', 'wl823_pullback',
+                        'accumulation'}
 
 # 只有管理員能看到的規則（2026-08-30 新增，chanlun_star 是第一個，
 # flag888_guyu 是同一天稍後新增的第二個，wl823_pullback 是 2026-09-22 新增
@@ -221,6 +223,38 @@ class ScoreCard:
 
 # ── context builder ──────────────────────────────────────────────────────────
 
+def _price_volume_snapshot(rows):
+    """主力吸貨的量價/均線部分。rows: ascending OHLCV dicts (one stock).
+    up/down-day volume compares days that closed above/below the previous
+    close within the last 20 sessions."""
+    closes = [r['close'] for r in rows]
+    if len(closes) < 61 or any(c is None for c in closes[-61:]):
+        return {}
+    ma20 = sum(closes[-20:]) / 20
+    ma60 = sum(closes[-60:]) / 60
+    win = rows[-21:]   # 20 day-over-day changes
+    up_v, down_v, all_v = [], [], []
+    for prev, cur in zip(win, win[1:]):
+        v = cur.get('volume')
+        if v is None:
+            continue
+        all_v.append(v)
+        if cur['close'] > prev['close']:
+            up_v.append(v)
+        elif cur['close'] < prev['close']:
+            down_v.append(v)
+    recent_down = [cur['volume'] for prev, cur in zip(rows[-6:], rows[-5:])
+                   if cur['close'] < prev['close'] and cur.get('volume') is not None]
+    vol20 = sum(all_v) / len(all_v) if all_v else None
+    return {
+        'close': closes[-1], 'ma20': ma20, 'ma60': ma60,
+        'up_vol': sum(up_v) / len(up_v) if up_v else None,
+        'down_vol': sum(down_v) / len(down_v) if down_v else None,
+        'vol20': vol20,
+        'recent_down_vol': sum(recent_down) / len(recent_down) if recent_down else None,
+    }
+
+
 def _build_context(db):
     """Bulk-fetch every table once and assemble a per-stock context dict.
     Returns {stock_code: ctx}."""
@@ -234,6 +268,7 @@ def _build_context(db):
             'revenue': None, 'revenue_yoy': None, 'rev_yoy_recent': [], 'rev3m_avg': None, 'rev12m_avg': None,
             'q': [], 'inst': [], 'hold': [], 'div_by_year': {}, 'div_fill_events': [],
             'tech': {}, 'chanlun': {}, 'director_holding_pct': None, 'in_wl823': False,
+            'inst20': None, 'hold_weekly': [], 'margin': [], 'pv': {},
         }
         for code, name, market, industry in
         db.query(Stock.code, Stock.name, Stock.market, Stock.industry).all()
@@ -369,6 +404,43 @@ def _build_context(db):
                 'dealer_net': (r['dealer_buy'] or 0) - (r['dealer_sell'] or 0),
             })
 
+    # 主力吸貨 (score_accumulation): 20-trading-day net sums per investor type
+    since_inst20 = (today - timedelta(days=35)).isoformat()
+    inst20_rows = {}
+    for r in db.execute(text('''
+        SELECT stock_code, foreign_buy, foreign_sell, trust_buy, trust_sell,
+               dealer_buy, dealer_sell FROM institutional_trades
+        WHERE date >= :since ORDER BY stock_code, date DESC
+    '''), {'since': since_inst20}).mappings():
+        lst = inst20_rows.setdefault(r['stock_code'], [])
+        if len(lst) < 20:
+            lst.append(r)
+    for code, lst in inst20_rows.items():
+        c = ctx.get(code)
+        if c and len(lst) >= 15:   # tolerate a few missing days, not a half-empty window
+            c['inst20'] = {k: sum((x[f'{k}_buy'] or 0) - (x[f'{k}_sell'] or 0) for x in lst)
+                           for k in ('foreign', 'trust', 'dealer')}
+
+    # 主力吸貨: raw 400張以上 / 100張以下 weekly %, newest first, enough for a 4-week change
+    since_hold_w = (today - timedelta(days=45)).isoformat()
+    for r in db.execute(text('''
+        SELECT stock_code, date, pct_400up, pct_100down FROM holding_concentration
+        WHERE date >= :since ORDER BY stock_code, date DESC
+    '''), {'since': since_hold_w}).mappings():
+        c = ctx.get(r['stock_code'])
+        if c and len(c['hold_weekly']) < 5:
+            c['hold_weekly'].append({'big': r['pct_400up'], 'small': r['pct_100down']})
+
+    # 主力吸貨: margin balance (張), newest first, 21 rows = today vs 20 trading days ago
+    since_margin = (today - timedelta(days=40)).isoformat()
+    for r in db.execute(text('''
+        SELECT stock_code, margin_balance FROM margin_trades
+        WHERE date >= :since ORDER BY stock_code, date DESC
+    '''), {'since': since_margin}).mappings():
+        c = ctx.get(r['stock_code'])
+        if c and len(c['margin']) < 21:
+            c['margin'].append(r['margin_balance'])
+
     since_hold = (today - timedelta(days=45)).isoformat()
     for r in db.execute(text('''
         SELECT stock_code, date, pct_1000up, pct_800up, pct_600up, pct_400up,
@@ -417,11 +489,15 @@ def _build_context(db):
                 c['chanlun'] = chanlun.compute_chanlun(rows)
             except Exception:
                 logger.exception('chanlun.compute_chanlun failed for %s', code)
+            try:
+                c['pv'] = _price_volume_snapshot(rows)
+            except Exception:
+                logger.exception('_price_volume_snapshot failed for %s', code)
 
     since_tech = (today - timedelta(days=760)).isoformat()
     current_code, current_rows = None, []
     price_result = db.execute(text('''
-        SELECT stock_code, date, open, high, low, close FROM daily_prices
+        SELECT stock_code, date, open, high, low, close, volume FROM daily_prices
         WHERE date >= :since ORDER BY stock_code, date ASC
     '''), {'since': since_tech})
     for r in price_result.mappings():
@@ -433,7 +509,8 @@ def _build_context(db):
         d = r['date']
         if isinstance(d, str):
             d = datetime.strptime(d, '%Y-%m-%d').date()
-        current_rows.append({'date': d, 'open': r['open'], 'high': r['high'], 'low': r['low'], 'close': r['close']})
+        current_rows.append({'date': d, 'open': r['open'], 'high': r['high'], 'low': r['low'], 'close': r['close'],
+                             'volume': r['volume']})
     if current_code is not None:
         _flush_tech(current_code, current_rows)
 
@@ -1057,6 +1134,74 @@ def score_wl823_pullback(ctx):
     return s.result()
 
 
+def score_accumulation(ctx):
+    """主力吸貨（2026-10-05 新增，實驗性）：找「股價還沒大漲，但籌碼正在從
+    散戶集中到大戶」的股票。100 分模型改編自使用者提供的 ChatGPT／Gemini
+    討論（原表配分加總其實是 95，這裡把「下跌縮量」由 5 調成 10 湊滿 100），各項：
+
+      大戶(400張以上)持股 4 週增加 20｜散戶(100張以下)持股 4 週下降 10｜
+      融資餘額 20 日下降 10｜外資/投信/自營商 20 日累計買超 10/10/5｜
+      近20日上漲日均量 > 下跌日均量 10｜近5日下跌日量 < 20日均量 10｜
+      收盤 > MA20 5｜MA20 > MA60 5｜收盤距 MA60 < 15%（還沒漲太多）5
+
+    門檻是 backtest_accumulation.py 比較 10 組版本後選的 H 組（見 CLAUDE.md
+    「主力吸貨」章節）：大戶/散戶要變動至少 1 個百分點才給分（原版任何變動
+    都給分，回測超額報酬幾乎為零）；入榜要求 得分率 >= 85%、股價距 MA60
+    < 15%、外資與投信 20 日累計皆買超、近10日均量 > 500 張。缺資料的項目
+    依 ScoreCard 慣例不計入分母（例如不能融資的股票），另要求 max_score
+    至少 70，避免只剩少數幾項有資料就輕易過門檻。
+    """
+    s = ScoreCard()
+    hw, inst20, margin, pv = ctx['hold_weekly'], ctx['inst20'], ctx['margin'], ctx['pv']
+
+    def wk_change(field):
+        if len(hw) < 5 or hw[0][field] is None or hw[4][field] is None:
+            return None
+        return hw[0][field] - hw[4][field]
+
+    big_chg, small_chg = wk_change('big'), wk_change('small')
+    s.award('大戶(400張以上)持股4週增加≥1個百分點' + (f'（{big_chg:+.2f}）' if big_chg is not None else ''),
+            big_chg >= 1.0 if big_chg is not None else None, 20)
+    s.award('散戶(100張以下)持股4週下降≥1個百分點' + (f'（{small_chg:+.2f}）' if small_chg is not None else ''),
+            small_chg <= -1.0 if small_chg is not None else None, 10)
+
+    m_chg = None
+    if len(margin) >= 21 and margin[0] is not None and margin[20]:
+        m_chg = margin[0] - margin[20]
+    s.award('融資餘額20日下降' + (f'（{m_chg:+,}張）' if m_chg is not None else ''),
+            m_chg < 0 if m_chg is not None else None, 10)
+
+    for key, name, pts in (('foreign', '外資', 10), ('trust', '投信', 10), ('dealer', '自營商', 5)):
+        v = inst20[key] if inst20 else None
+        s.award(f'{name}20日累計買超' + (f'（{round(v / 1000):+,}張）' if v is not None else ''),
+                v > 0 if v is not None else None, pts)
+
+    up_v, down_v = pv.get('up_vol'), pv.get('down_vol')
+    s.award('近20日上漲日均量 > 下跌日均量（上漲量增）',
+            up_v > down_v if up_v is not None and down_v is not None else None, 10)
+    vol20, rdv = pv.get('vol20'), pv.get('recent_down_vol')
+    # No down day in the last 5 sessions = no selling pressure at all -> counts as met
+    s.award('近5日下跌日成交量 < 20日均量（下跌縮量）',
+            (rdv < vol20 if rdv is not None else True) if vol20 else None, 10)
+
+    close, ma20, ma60 = pv.get('close'), pv.get('ma20'), pv.get('ma60')
+    s.award('收盤價 > MA20', close > ma20 if close and ma20 else None, 5)
+    s.award('MA20 > MA60', ma20 > ma60 if ma20 and ma60 else None, 5)
+    dist60 = (close / ma60 - 1) * 100 if close and ma60 else None
+    s.award('收盤距MA60 < 15%（尚未漲多）' + (f'（{dist60:+.1f}%）' if dist60 is not None else ''),
+            dist60 < 15 if dist60 is not None else None, 5)
+
+    rate = s.score / s.max_score * 100 if s.max_score else None
+    s.require('近10天平均成交量>500張', ctx['avg_vol_10d'] and ctx['avg_vol_10d'] > 500_000)
+    s.require('可評分項目滿分 >= 70（資料足夠）', s.max_score >= 70)
+    s.require('股價距MA60 < 15%（尚未漲多）', dist60 is not None and dist60 < 15)
+    s.require('外資、投信20日累計皆買超',
+              bool(inst20) and inst20['foreign'] > 0 and inst20['trust'] > 0)
+    s.require('吸貨得分率 >= 85%' + (f'（{rate:.0f}%）' if rate is not None else ''),
+              rate is not None and rate >= 85)
+    return s.result()
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -1073,6 +1218,7 @@ SCORERS = {
     'chanlun_star': score_chanlun_star,
     'flag888_guyu': score_flag888_guyu,
     'wl823_pullback': score_wl823_pullback,
+    'accumulation': score_accumulation,
 }
 
 

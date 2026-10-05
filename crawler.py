@@ -23,7 +23,7 @@ from database import (
     QuarterlyFinancial, CrawlerLog, Announcement, StockAiAnalysis,
     InstitutionalTrade, HoldingConcentration, FinancialExtra,
     DividendPolicy, DividendFillEvent, DirectorHolding,
-    BrokerTrade, WatchlistStock,
+    BrokerTrade, WatchlistStock, MarginTrade,
 )
 import finmind_client
 
@@ -1492,6 +1492,37 @@ def crawl_finmind_institutional(date_str: str):
         db.rollback()
         _log('finmind_institutional', 'failed', f'{date_str}: {e}')
         logger.exception('crawl_finmind_institutional failed for %s', date_str)
+        raise
+    finally:
+        db.close()
+
+
+def crawl_finmind_margin(date_str: str):
+    """融資融券餘額（日資料，bulk：一次呼叫取得當天全市場）。date_str:
+    YYYYMMDD。單位：張。"""
+    iso = f'{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}'
+    _log('finmind_margin', 'running', date_str)
+    db = SessionLocal()
+    try:
+        valid = _finmind_valid_codes(db)
+        rows = finmind_client.fetch('TaiwanStockMarginPurchaseShortSale',
+                                     start_date=iso, end_date=iso)
+        records = [{
+            'stock_code':     r['stock_id'],
+            'date':           _parse_iso_date(r['date']),
+            'margin_balance': r.get('MarginPurchaseTodayBalance'),
+            'margin_limit':   r.get('MarginPurchaseLimit'),
+            'short_balance':  r.get('ShortSaleTodayBalance'),
+        } for r in rows if r['stock_id'] in valid]
+        if records:
+            db.execute(MarginTrade.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log('finmind_margin', 'success', f'{date_str}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('finmind_margin', 'failed', f'{date_str}: {e}')
+        logger.exception('crawl_finmind_margin failed for %s', date_str)
         raise
     finally:
         db.close()

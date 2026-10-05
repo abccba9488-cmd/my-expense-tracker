@@ -4,7 +4,7 @@ Mirrors backfill.py's style: already-populated dates/quarters are skipped
 automatically, safe to Ctrl+C and restart.
 
 Usage:
-    python backfill_finmind.py --institutional --holding --financials --dividend --valuation
+    python backfill_finmind.py --institutional --margin --holding --financials --dividend --valuation
     python backfill_finmind.py --financials --from-year 2013
 
 Requires the FINMIND_TOKEN environment variable to be set.
@@ -54,6 +54,40 @@ def backfill_institutional(from_year: int):
 
     db.close()
     logger.info('Institutional backfill complete: crawled=%d skipped=%d', crawled, skipped)
+
+
+def backfill_margin(from_year: int):
+    """融資融券餘額，bulk 模式一天一次呼叫，跟 backfill_institutional 同樣式。"""
+    from database import SessionLocal
+    import crawler
+
+    db = SessionLocal()
+    today = datetime.now(_TZ).date()
+    d = date(from_year, 1, 1)
+    skipped = crawled = 0
+
+    logger.info('=== Margin trades %d -> %d ===', from_year, today.year)
+    while d <= today:
+        if d.weekday() >= 5:
+            d += timedelta(days=1)
+            continue
+        count = db.execute(text('SELECT COUNT(*) FROM margin_trades WHERE date=:d'), {'d': d}).scalar()
+        if count and count > 100:
+            skipped += 1
+            d += timedelta(days=1)
+            continue
+        date_str = d.strftime('%Y%m%d')
+        try:
+            n = crawler.crawl_finmind_margin(date_str)
+            crawled += 1
+            logger.info('Margin %s: %d records (done=%d skip=%d)', date_str, n, crawled, skipped)
+        except Exception as e:
+            logger.warning('Margin %s failed: %s', date_str, e)
+        time.sleep(0.3)
+        d += timedelta(days=1)
+
+    db.close()
+    logger.info('Margin backfill complete: crawled=%d skipped=%d', crawled, skipped)
 
 
 def backfill_valuation(from_year: int):
@@ -319,6 +353,7 @@ if __name__ == '__main__':
     parser.add_argument('--from-year', type=int, default=2013,
                         help='Start year (default: 2013, matches MOPS IFRS reliability floor)')
     parser.add_argument('--institutional', action='store_true', help='三大法人買賣超')
+    parser.add_argument('--margin',        action='store_true', help='融資融券餘額')
     parser.add_argument('--holding',       action='store_true', help='股權分散表（大戶/散戶持股）')
     parser.add_argument('--financials',    action='store_true', help='資產負債表/現金流量表/毛利')
     parser.add_argument('--dividend',      action='store_true', help='股利政策 + 填息事件')
@@ -328,15 +363,17 @@ if __name__ == '__main__':
     parser.add_argument('--all', action='store_true', help='全部一起跑')
     args = parser.parse_args()
 
-    if not any([args.institutional, args.holding, args.financials, args.dividend,
+    if not any([args.institutional, args.margin, args.holding, args.financials, args.dividend,
                 args.valuation, args.taifex, args.all]):
-        parser.error('Specify at least one of: --institutional --holding --financials '
+        parser.error('Specify at least one of: --institutional --margin --holding --financials '
                      '--dividend --valuation --taifex --all')
 
     logger.info('FinMind backfill start: from_year=%d', args.from_year)
 
     if args.institutional or args.all:
         backfill_institutional(args.from_year)
+    if args.margin or args.all:
+        backfill_margin(args.from_year)
     if args.holding or args.all:
         backfill_holding(args.from_year)
     if args.financials or args.all:

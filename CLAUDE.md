@@ -135,6 +135,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `monthly_revenue` | `(stock_code, year, month)` | revenue 千元；`start_price` = 首次寫入當天收盤價，月份切換時才更新；`turnaround_signal` = 潛在虧轉盈候選旗標，每次爬蟲都重算（見下方說明） |
 | `quarterly_financials` | `(stock_code, year, quarter)` | revenue/income 千元；eps 元/股；**各季獨立值**（Q4 已非累計） |
 | `institutional_trades` | `(stock_code, date)` | 三大法人買賣超（股），FinMind，達人選股用 |
+| `margin_trades` | `(stock_code, date)` | 融資融券餘額（張），FinMind bulk，2016-01 起，主力吸貨規則用，見「主力吸貨」章節 |
 | `holding_concentration` | `(stock_code, date)` | 股權分散表（週資料），FinMind，達人選股用 |
 | `financial_extra` | `(stock_code, year, quarter)` | 資產負債表/現金流量表/毛利項目（千元），FinMind，獨立於 MOPS 來源的 `quarterly_financials` |
 | `dividend_policy` | `(stock_code, event_date)` | 逐筆股利分派事件（非年度加總），FinMind。個股詳情頁「股利政策」區塊有「回補最新資料」按鈕（2026-08-23 新增，任何登入使用者可用）——`crawler.backfill_dividend_policy(code)` 對這一支股票用 `data_id` 查全部歷史（已用真實 API 驗證單一股票、寬日期範圍一次查詢可靠，不像下方兩個 crawler 函式要逐日查詢），修過去 `FINMIND_TOKEN` 未設定期間造成的資料缺口，也能單純確認某股票近期真的沒有新股利事件 |
@@ -442,7 +443,7 @@ python backfill_finmind.py --financials --from-year 2013   # financial_extra 只
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
 | `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
 | `#ann-view` | 自結公告：純表格（不用 DataTables），見下方「自結公告」章節 |
-| `#expert-view` | 達人選股：15 套規則切換分頁（9套公開+6套實驗性，其中 `chanlun_star`/`flag888_guyu`/`wl823_pullback` 3套 admin-only、非管理員看不到這幾個分頁），見下方「達人選股」章節 |
+| `#expert-view` | 達人選股：16 套規則切換分頁（9套公開+7套實驗性（含 2026-10-05 的主力吸貨），其中 `chanlun_star`/`flag888_guyu`/`wl823_pullback` 3套 admin-only、非管理員看不到這幾個分頁），見下方「達人選股」章節 |
 | `#detail-view` | 個股詳情（股價圖、月營收圖、季財報表、達人選股評分卡、上一/下一檔導覽） |
 | `#macro-view` | 總體分析：機構級研究備忘錄提示詞產生器（純前端，不呼叫任何 AI API），見下方「總體分析」章節 |
 | `#taifex-view` | 期權籌碼分析（**需登入，不限管理員**，nav 分頁與整個 view 都掛 `login-only hidden`），見下方「期權籌碼分析」章節 |
@@ -867,6 +868,15 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 | +近5日三大法人合計不為負 | 855筆（濾掉206筆） | 45.1% | +6.53% | -2.00% | 15.4天 |
 
 **結論：這個濾網帶來小幅、方向一致的全面改善**——勝率、平均報酬、中位數報酬三項指標都變好（分別+0.9pp／+0.47pp／+0.48pp），代價是排除了約19%的訊號（206/1061）。改善幅度不算大，但至少方向正確，跟「法人買超時進場品質較好」的直覺一致，值得考慮實際採用；若要更嚴謹驗證，可以比照 `flag888_3+guyu` 的做法用 `--since`/`--until` 切成不重疊的兩段期間交叉驗證，避免單一年度的樣本噪音。`--years-back` 預設1，可調整。
+
+## 主力吸貨（`experts.score_accumulation`，2026-10-05 新增，公開、實驗性）
+
+改編自使用者提供的 ChatGPT／Gemini「大戶偷偷吃貨」討論。達人選股第 16 套規則（`accumulation`，`EXPERIMENTAL_EXPERTS`，非 admin-only），沿用每日 17:00 `compute_expert_scores()`。
+
+- **資料**：`_build_context()` 新增 `inst20`（三大法人近20交易日淨買超合計，窗內至少15天有資料才算）、`hold_weekly`（`pct_400up`/`pct_100down` 近5週，算4週變化）、`margin`（融資餘額近21筆）、`pv`（`_price_volume_snapshot()`：MA20/60、近20日上漲日/下跌日均量、近5日下跌日均量；價格查詢因此多抓 `volume`）。
+- **融資融券**：新表 `margin_trades`（張），`crawler.crawl_finmind_margin()`（FinMind `TaiwanStockMarginPurchaseShortSale`，bulk 一天一次呼叫全市場），排在 `_finmind_job` 第二步；`backfill_finmind.py --margin`。2016-01 起已回補（約 410 萬筆，回補約 75 分鐘、未撞到 FinMind 額度）。
+- **配分**：ChatGPT 原表加總其實是 95，「下跌縮量」由 5 調成 10 湊滿 100。
+- **門檻來自 `backtest_accumulation.py`**（前瞻報酬法：訊號日收盤進場，量測 20/60 交易日報酬 vs 全市場全日無條件平均，同股 20 日內重複訊號只算一次）。2016～2026 全市場 10 組比較：原始版（任何變動都給分）60 日超額只有 +0.32%；選定的 H 組（大戶/散戶變動 ≥1 個百分點才給分＋得分率≥85%＋距MA60<15%硬門檻＋外資投信20日皆買超）60 日超額 +1.26%、勝率 49.2%、約 4,900 次事件（每年約 460）；再加嚴（距MA60<10%、得分率90%）反而變差。上線當天全市場 12 檔入榜（原始版 244 檔）。**勝率仍低於 50%，超額報酬來自右尾，是弱訊號**——對使用者說明時別誇大。
 
 ## 期權籌碼分析（`crawler_taifex.py`/`taifex_analysis.py`，2026-08-20 新增，**需登入可見**）
 

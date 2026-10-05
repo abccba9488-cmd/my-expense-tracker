@@ -186,7 +186,8 @@ def _finmind_job():
     import crawler
     import experts
     today = datetime.now(_TZ).strftime('%Y%m%d')
-    for fn in (crawler.crawl_finmind_institutional, crawler.crawl_finmind_holding,
+    for fn in (crawler.crawl_finmind_institutional, crawler.crawl_finmind_margin,
+               crawler.crawl_finmind_holding,
                crawler.crawl_finmind_valuation, crawler.crawl_finmind_dividend,
                crawler.crawl_finmind_dividend_result):
         try:

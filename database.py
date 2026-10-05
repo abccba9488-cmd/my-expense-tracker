@@ -155,6 +155,23 @@ class InstitutionalTrade(Base):
     dealer_sell  = Column(BigInteger)
 
 
+class MarginTrade(Base):
+    """融資融券餘額（日資料），來源 FinMind TaiwanStockMarginPurchaseShortSale
+    （bulk 模式：一次呼叫回傳當天全市場）。單位：張。主力吸貨規則用「融資
+    餘額 20 日變化」判斷籌碼是否從散戶（融資）手上流出。"""
+    __tablename__ = 'margin_trades'
+    __table_args__ = (
+        UniqueConstraint('stock_code', 'date'),
+        Index('ix_mt_code_date', 'stock_code', 'date'),
+    )
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code      = Column(String(10), nullable=False)
+    date            = Column(Date, nullable=False)
+    margin_balance  = Column(Integer)   # MarginPurchaseTodayBalance
+    margin_limit    = Column(Integer)   # MarginPurchaseLimit
+    short_balance   = Column(Integer)   # ShortSaleTodayBalance
+
+
 class BrokerTrade(Base):
     """券商分點單日買賣超，來源 FinMind TaiwanStockTradingDailyReport（回傳的
     是逐價位明細，同一券商同一天可能有多筆不同成交價的列）——爬蟲端依

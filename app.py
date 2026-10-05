@@ -2175,6 +2175,7 @@ _HEALTH_TASKS = [
     ('quarterly',                '季財報'),
     ('announcements',            '自結公告'),
     ('finmind_institutional',    '三大法人買賣超'),
+    ('finmind_margin',           '融資融券'),
     ('finmind_holding',          '股權分散表'),
     ('finmind_valuation',        'PER/PBR/殖利率'),
     ('finmind_dividend',         '股利政策'),
