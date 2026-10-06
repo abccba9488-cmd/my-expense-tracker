@@ -2003,6 +2003,11 @@ def _wl_rows(db, wl_id):
     return [s.stock_code for s in db.query(WatchlistStock).filter_by(watchlist_id=wl_id).all()]
 
 
+def _wl_added_at(db, wl_id):
+    return {s.stock_code: str(s.added_at) for s in
+            db.query(WatchlistStock).filter_by(watchlist_id=wl_id).all() if s.added_at}
+
+
 @app.route('/api/watchlists')
 def api_watchlists_get():
     if 'user_id' not in session:
@@ -2010,7 +2015,8 @@ def api_watchlists_get():
     db = SessionLocal()
     try:
         wls = db.query(Watchlist).filter_by(user_id=session['user_id']).order_by(Watchlist.id).all()
-        return jsonify([{'id': w.id, 'name': w.name, 'codes': _wl_rows(db, w.id)} for w in wls])
+        return jsonify([{'id': w.id, 'name': w.name, 'codes': _wl_rows(db, w.id),
+                         'added_at': _wl_added_at(db, w.id)} for w in wls])
     finally:
         db.close()
 
@@ -2076,7 +2082,7 @@ def api_wl_add_stock(wl_id):
         if not db.query(Watchlist).filter_by(id=wl_id, user_id=session['user_id']).first():
             return jsonify({'error': 'not found'}), 404
         if not db.query(WatchlistStock).filter_by(watchlist_id=wl_id, stock_code=code).first():
-            db.add(WatchlistStock(watchlist_id=wl_id, stock_code=code))
+            db.add(WatchlistStock(watchlist_id=wl_id, stock_code=code, added_at=datetime.now(_TZ).date()))
             db.commit()
             # First time anyone watchlists this stock → backfill 30 days of
             # broker-branch trades in the background instead of waiting for

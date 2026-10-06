@@ -48,6 +48,23 @@ VARIANTS = {
     'I_H+MA60<10%,90%':              dict(big=1.0, small=-1.0, dist60_req=10, rate=90, inst_req=True),
     'J_大戶+1為硬門檻+H':            dict(big=1.0, small=-1.0, dist60_req=15, rate=85, inst_req=True, big_req=True),
 }
+_H = VARIANTS['H_F+外資投信皆買超']
+
+# 帶量突破 = close > highest close of the previous 20 sessions AND volume >=
+# 1.5x the previous 20-session average volume. Modes:
+#   same     - H passes and breakout on the same day
+#   setup    - H passed within the last SETUP_WINDOW sessions (incl. today), enter on a breakout day
+#   breakout - breakout alone, no chip filter (control group)
+SETUP_WINDOW = 20
+CONTROL = 'Z_每20日定期進場(對照組)'
+STOP, TRAIL = 0.10, 0.10   # same as backtest_expert_signals.py / backtest_chanlun_chippeak.py
+BREAKOUT_VARIANTS = {
+    'K_H且當天帶量突破':            'same',
+    'L_H後20日內等帶量突破進場':    'setup',
+    'M_只看帶量突破(對照組)':       'breakout',
+    'N1_H且當天沒帶量突破':         'same_no',
+    'N2_H且近20日都沒帶量突破':     'recent_no',
+}
 
 
 def score(f, v):
@@ -82,6 +99,13 @@ def score(f, v):
     if v.get('big_req') and not (f['big'] is not None and f['big'] >= v['big']):
         return False
     return pts / mx * 100 >= v['rate']
+
+
+def _is_breakout(close, vol, i):
+    if i < 21 or vol[i] is None:
+        return False
+    prev_v = [x for x in vol[i - 20:i] if x is not None]
+    return bool(prev_v) and close[i] > max(close[i - 20:i]) and vol[i] >= 1.5 * mean(prev_v)
 
 
 def run_stock(con, code, since):
@@ -162,45 +186,100 @@ def run_stock(con, code, since):
             'down_dry': ((mean(rd) < vol20) if rd else True) if vol20 else None,
             'close': close[i], 'ma20': ma20, 'ma60': ma60, 'dist60': (close[i] / ma60 - 1) * 100,
             'avg_vol10': mean(v10) if v10 else 0,
+            'breakout': _is_breakout(close, vol, i),
         }))
 
     def fwd(i, h):
         return (close[i + h] / close[i] - 1) * 100 if i + h < n and close[i] else None
 
-    base = {h: [r for i, _ in feats if (r := fwd(i, h)) is not None] for h in HORIZONS}
-    events = {}
-    for name, v in VARIANTS.items():
-        last = -10**9
-        ev = []
+    # One boolean hit series per rule, shared by both exit modes
+    h_pass = {i: score(f, _H) for i, f in feats}
+    hits = {name: [(i, score(f, v)) for i, f in feats] for name, v in VARIANTS.items()}
+    for name, mode in BREAKOUT_VARIANTS.items():
+        last_setup, last_break, seq = -10**9, -10**9, []
         for i, f in feats:
-            if score(f, v):
+            if h_pass[i]:
+                last_setup = i
+            if f['breakout']:
+                last_break = i
+            if mode == 'same':
+                hit = h_pass[i] and f['breakout']
+            elif mode == 'setup':
+                hit = f['breakout'] and i - last_setup < SETUP_WINDOW
+            elif mode == 'same_no':
+                hit = h_pass[i] and not f['breakout']
+            elif mode == 'recent_no':
+                hit = h_pass[i] and i - last_break >= SETUP_WINDOW
+            else:
+                hit = f['breakout'] and f['avg_vol10'] > 500_000
+            seq.append((i, hit))
+        hits[name] = seq
+    # Control group: enter every 20th session regardless of signal (liquid stocks only)
+    hits[CONTROL] = [(i, i % 20 == 0 and f['avg_vol10'] > 500_000) for i, f in feats]
+
+    base = {h: [r for i, _ in feats if (r := fwd(i, h)) is not None] for h in HORIZONS}
+    events, trades = {}, {}
+    for name, seq in hits.items():
+        # fixed horizon: dedupe repeated signals within COOLDOWN sessions
+        last, ev = -10**9, []
+        for i, hit in seq:
+            if hit:
                 if i - last > COOLDOWN:
                     ev.append({h: fwd(i, h) for h in HORIZONS} | {'date': dates[i]})
                 last = i
         events[name] = ev
-    return base, events
+        # trailing: same exit as backtest_expert_signals.py — close <= entry*(1-STOP)
+        # (fixed stop) or close <= peak*(1-TRAIL) (trailing take-profit), no cap,
+        # no pyramiding (signals ignored while holding)
+        tr, free_from = [], 0
+        for i, hit in seq:
+            if not hit or i < free_from:
+                continue
+            entry = peak = close[i]
+            exit_i, reason = None, None
+            for j in range(i + 1, n):
+                peak = max(peak, close[j])
+                if close[j] <= entry * (1 - STOP):
+                    exit_i, reason = j, 'stop'
+                    break
+                if close[j] <= peak * (1 - TRAIL):
+                    exit_i, reason = j, 'trail'
+                    break
+            end = exit_i if exit_i is not None else n - 1
+            tr.append({'ret': (close[end] / entry - 1) * 100, 'days': end - i,
+                       'open': exit_i is None, 'reason': reason, 'date': dates[i]})
+            free_from = end + 1
+        trades[name] = tr
+    return base, events, trades
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--from', dest='since', default='2016-01-01')
     ap.add_argument('--limit', type=int, default=None)
+    ap.add_argument('--stop', type=float, default=0.10, help='fixed stop-loss fraction (default 0.10)')
+    ap.add_argument('--trail', type=float, default=0.10, help='trailing take-profit fraction (default 0.10)')
     args = ap.parse_args()
+    global STOP, TRAIL
+    STOP, TRAIL = args.stop, args.trail
 
     con = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)
     codes = [r[0] for r in con.execute('SELECT code FROM stocks ORDER BY code')]
     if args.limit:
         codes = codes[:args.limit]
     base = {h: [] for h in HORIZONS}
-    events = {k: [] for k in VARIANTS}
+    names = list(VARIANTS) + list(BREAKOUT_VARIANTS) + [CONTROL]
+    events = {k: [] for k in names}
+    trades = {k: [] for k in names}
     for k, code in enumerate(codes, 1):
         r = run_stock(con, code, args.since)
         if r:
-            b, e = r
+            b, e, t = r
             for h in HORIZONS:
                 base[h].extend(b[h])
-            for name in VARIANTS:
+            for name in names:
                 events[name].extend(e[name])
+                trades[name].extend(t[name])
         if k % 200 == 0:
             logger.info('%d / %d stocks', k, len(codes))
 
@@ -223,7 +302,24 @@ def main():
                 line += f"{m:>+9.2f}%{row[h]['excess']:>+9.2f}%{row[h]['win']:>8.1f}%"
         out['variants'][name] = row
         print(line)
-    with open('backtest_accumulation_result.json', 'w', encoding='utf-8') as fh:
+    print(f"\n停損{STOP:.0%}／移動停利（最高點回檔{TRAIL:.0%}）出場，不加碼：")
+    print(f"{'規則':<30}{'交易數':>8}{'平均報酬':>10}{'中位數':>9}{'勝率':>8}{'平均持有日':>10}{'停損比例':>9}{'持有中':>7}")
+    out['trailing'] = {}
+    for name, tr in trades.items():
+        if not tr:
+            continue
+        rets = [t['ret'] for t in tr]
+        closed = [t for t in tr if not t['open']]
+        row = {'n': len(tr), 'mean': mean(rets), 'median': median(rets),
+               'win': sum(x > 0 for x in rets) / len(rets) * 100,
+               'days': mean(t['days'] for t in tr),
+               'stop_pct': sum(t['reason'] == 'stop' for t in closed) / len(closed) * 100 if closed else None,
+               'open': sum(t['open'] for t in tr)}
+        out['trailing'][name] = row
+        print(f"{name:<30}{row['n']:>8}{row['mean']:>+9.2f}%{row['median']:>+8.2f}%{row['win']:>7.1f}%"
+              f"{row['days']:>10.0f}{(row['stop_pct'] or 0):>8.1f}%{row['open']:>7}")
+    suffix = '' if (STOP, TRAIL) == (0.10, 0.10) else f'_stop{STOP:g}_trail{TRAIL:g}'
+    with open(f'backtest_accumulation_result{suffix}.json', 'w', encoding='utf-8') as fh:
         json.dump(out, fh, ensure_ascii=False, indent=2)
 
 

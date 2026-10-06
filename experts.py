@@ -246,12 +246,24 @@ def _price_volume_snapshot(rows):
     recent_down = [cur['volume'] for prev, cur in zip(rows[-6:], rows[-5:])
                    if cur['close'] < prev['close'] and cur.get('volume') is not None]
     vol20 = sum(all_v) / len(all_v) if all_v else None
+
+    # 帶量突破 within the last 20 sessions: close > highest close of the
+    # previous 20 sessions AND volume >= 1.5x their average volume (same
+    # definition as backtest_accumulation.py _is_breakout)
+    def is_breakout(i):
+        v = rows[i].get('volume')
+        prev = [r.get('volume') for r in rows[i - 20:i] if r.get('volume') is not None]
+        return (v is not None and bool(prev) and closes[i] > max(closes[i - 20:i])
+                and v >= 1.5 * sum(prev) / len(prev))
+    n = len(rows)
+    recent_breakout = any(is_breakout(i) for i in range(n - 20, n))
     return {
         'close': closes[-1], 'ma20': ma20, 'ma60': ma60,
         'up_vol': sum(up_v) / len(up_v) if up_v else None,
         'down_vol': sum(down_v) / len(down_v) if down_v else None,
         'vol20': vol20,
         'recent_down_vol': sum(recent_down) / len(recent_down) if recent_down else None,
+        'recent_breakout': recent_breakout,
     }
 
 
@@ -1144,10 +1156,12 @@ def score_accumulation(ctx):
       近20日上漲日均量 > 下跌日均量 10｜近5日下跌日量 < 20日均量 10｜
       收盤 > MA20 5｜MA20 > MA60 5｜收盤距 MA60 < 15%（還沒漲太多）5
 
-    門檻是 backtest_accumulation.py 比較 10 組版本後選的 H 組（見 CLAUDE.md
-    「主力吸貨」章節）：大戶/散戶要變動至少 1 個百分點才給分（原版任何變動
+    門檻是 backtest_accumulation.py 比較多組版本後選的 N2 組（H 組＋近20日
+    無帶量突破，見 CLAUDE.md「主力吸貨」章節）：大戶/散戶要變動至少 1 個百分點才給分（原版任何變動
     都給分，回測超額報酬幾乎為零）；入榜要求 得分率 >= 85%、股價距 MA60
-    < 15%、外資與投信 20 日累計皆買超、近10日均量 > 500 張。缺資料的項目
+    < 15%、外資與投信 20 日累計皆買超、近10日均量 > 500 張、近20日沒有
+    帶量突破（收盤創前20日新高且量 >= 前20日均量1.5倍；回測顯示已突破的
+    績效反而較差）。缺資料的項目
     依 ScoreCard 慣例不計入分母（例如不能融資的股票），另要求 max_score
     至少 70，避免只剩少數幾項有資料就輕易過門檻。
     """
@@ -1199,6 +1213,7 @@ def score_accumulation(ctx):
               bool(inst20) and inst20['foreign'] > 0 and inst20['trust'] > 0)
     s.require('吸貨得分率 >= 85%' + (f'（{rate:.0f}%）' if rate is not None else ''),
               rate is not None and rate >= 85)
+    s.require('近20日未出現帶量突破（尚未發動）', pv.get('recent_breakout') is False)
     return s.result()
 
 

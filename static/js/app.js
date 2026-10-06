@@ -1937,11 +1937,17 @@ function healthBadgeCell(health) {
   return `<span style="${fill}background:${bg};color:${fg}" title="技術面異常${health.tech_score}項／基本面異常${health.fund_score}項">${health.tier_label}</span>`;
 }
 
+const _WL_EPS20_NAME = '自結eps<20';
+
 async function renderWlTable() {
   if (_starChanlunMap === null) _loadStarChanlunMap();
   const wl = wlActive();
   if (!wl) return;
   document.getElementById('wl-count').textContent = `${wl.codes.length} 支`;
+  // 「自結eps<20」is auto-filled by /rate-announcements, so its date column shows
+  // when each stock entered the list instead of the price date
+  const showAdded = wl.name === _WL_EPS20_NAME;
+  const addedAt = wl.added_at || {};
 
   const healthList = await Promise.all(wl.codes.map(code =>
     fetch(`/api/stocks/${code}/health`).then(r => r.json()).catch(() => null)
@@ -1980,7 +1986,7 @@ async function renderWlTable() {
       s.revenue_yoy != null ? `<span class="${pctClass(s.revenue_yoy)}">${fmt.pct(s.revenue_yoy)}</span>` : '—',
       s.eps != null ? `<span class="${pctClass(s.eps)}">${fmt.eps(s.eps)}</span>` : '—',
       s.pe_ratio != null ? Number(s.pe_ratio).toFixed(1) + 'x' : '—',
-      s.price_date || '—',
+      showAdded ? (addedAt[code] || '—') : (s.price_date || '—'),
       _starChanlunCell(code),
       sweetSpotCell(s),
       turnaroundCell(s),
@@ -1990,6 +1996,7 @@ async function renderWlTable() {
 
   if (wlDt) {
     wlDt.clear().rows.add(rows).draw();
+    $(wlDt.column(15).header()).text(showAdded ? '入榜日期' : '資料日期');
   } else {
     wlDt = $('#wl-table').DataTable({
       data: rows, pageLength: 25, order: [], language: dtLang(), destroy: true, scrollX: true,
@@ -2003,6 +2010,7 @@ async function renderWlTable() {
         { targets: 19, className: 'dt-left', width: '76px' },
       ],
     });
+    $(wlDt.column(15).header()).text(showAdded ? '入榜日期' : '資料日期');
     $('#wl-table tbody').on('click', '.wl-remove-btn', function(e) {
       e.stopImmediatePropagation();
       wlRemoveStock(this.dataset.rmCode);

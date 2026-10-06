@@ -356,6 +356,7 @@ class WatchlistStock(Base):
     id           = Column(Integer, primary_key=True, autoincrement=True)
     watchlist_id = Column(Integer, nullable=False)
     stock_code   = Column(String(10), nullable=False)
+    added_at     = Column(Date)   # 加入清單日期；2026-10-06 前加入的列為 NULL（自結eps<20 由公告回推，見 init_db）
 
 
 class Message(Base):
@@ -1028,6 +1029,38 @@ def init_db():
         if not done:
             conn.execute(text('DELETE FROM announcements'))
             conn.execute(text("INSERT INTO schema_migrations(name) VALUES('clear_old_announcements')"))
+            conn.commit()
+
+    # watchlist_stocks.added_at（2026-10-06）：新欄位 + 一次性回推「自結eps<20」
+    # 清單既有股票的入榜日期。這份清單由 /rate-announcements 依「自結公告預估
+    # 本益比介於0~20」自動加入（規則 2026-09-07 開始），所以入榜日期＝該股
+    # 2026-09-07 之後第一筆符合條件的公告日；若沒有（清單建立時就預先放入
+    # 的股票），退而取最近一筆符合條件的公告日；都沒有則維持 NULL。
+    with engine.connect() as conn:
+        try:
+            conn.execute(text('ALTER TABLE watchlist_stocks ADD COLUMN added_at DATE'))
+            conn.commit()
+        except Exception:
+            pass
+    with engine.connect() as conn:
+        done = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name='backfill_wl_eps20_added_at'"
+        )).scalar()
+        if not done:
+            conn.execute(text('''
+                UPDATE watchlist_stocks
+                SET added_at = COALESCE(
+                    (SELECT MIN(a.announce_date) FROM announcements a
+                     WHERE a.stock_code = watchlist_stocks.stock_code
+                       AND a.estimated_pe > 0 AND a.estimated_pe < 20
+                       AND a.announce_date >= '2026-09-07'),
+                    (SELECT MAX(a.announce_date) FROM announcements a
+                     WHERE a.stock_code = watchlist_stocks.stock_code
+                       AND a.estimated_pe > 0 AND a.estimated_pe < 20))
+                WHERE added_at IS NULL
+                  AND watchlist_id IN (SELECT id FROM watchlists WHERE name = '自結eps<20')
+            '''))
+            conn.execute(text("INSERT INTO schema_migrations(name) VALUES('backfill_wl_eps20_added_at')"))
             conn.commit()
 
     # Repair broker_trades rows corrupted by FinMind's own intermittent
