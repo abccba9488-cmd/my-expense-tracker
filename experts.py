@@ -67,6 +67,7 @@ EXPERT_LABELS = {
     'flag888_guyu': '888標準3+股魚',
     'wl823_pullback': '自選8/23 拉回5日線',
     'accumulation': '主力吸貨',
+    'trust_buy':    '投信買點',
 }
 
 # 非公開已知選股法（不像 gutai/888/guyu/laoniu 4 套是抄錄自對外公開的達人選股
@@ -74,7 +75,7 @@ EXPERT_LABELS = {
 # chanlun_buy/sell 是 2026-08-22 新增的第二個實驗性項目，見 _score_chanlun()。
 # wl823_pullback 是 2026-09-22 新增，見 score_wl823_pullback()。
 EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star', 'flag888_guyu', 'wl823_pullback',
-                        'accumulation'}
+                        'accumulation', 'trust_buy'}
 
 # 只有管理員能看到的規則（2026-08-30 新增，chanlun_star 是第一個，
 # flag888_guyu 是同一天稍後新增的第二個，wl823_pullback 是 2026-09-22 新增
@@ -267,6 +268,46 @@ def _price_volume_snapshot(rows):
     }
 
 
+_TRUST_COST_WIN = 60
+
+
+def _trust_cost_snapshot(rows, trust_by_date):
+    """投信買點：投信成本線 = 近60個交易日投信「買超日」以買超股數加權的
+    均價（均價用 (H+L+C)/3 近似）。rows: ascending OHLCV dicts (one stock);
+    trust_by_date: {date: 投信淨買賣超(股)}. Same definition as
+    backtest_trust.py (E1); sessions with no institutional row count as 0."""
+    n = len(rows)
+    if n < _TRUST_COST_WIN + 20 or any(r['close'] is None for r in rows[-(_TRUST_COST_WIN + 20):]):
+        return {}
+    tnet = [trust_by_date.get(r['date']) for r in rows]
+    if sum(t is not None for t in tnet[-65:]) < 55:   # tolerate a few missing days
+        return {}
+    typ = [((r['high'] or r['close']) + (r['low'] or r['close']) + r['close']) / 3 for r in rows]
+
+    def cost_at(i):
+        w = sp = 0
+        for j in range(i - _TRUST_COST_WIN + 1, i + 1):
+            t = tnet[j]
+            if t and t > 0:
+                w += t
+                sp += t * typ[j]
+        return sp / w if w else None
+
+    gaps = []
+    for i in range(n - 20, n):
+        c = cost_at(i)
+        if c:
+            gaps.append((rows[i]['close'] / c - 1) * 100)
+    cost = cost_at(n - 1)
+    return {
+        'cost': cost,
+        'gap': (rows[-1]['close'] / cost - 1) * 100 if cost else None,
+        'max_gap20': max(gaps) if gaps else None,
+        'net60': sum(t or 0 for t in tnet[-_TRUST_COST_WIN:]),
+        'net5': sum(t or 0 for t in tnet[-5:]),
+    }
+
+
 def _build_context(db):
     """Bulk-fetch every table once and assemble a per-stock context dict.
     Returns {stock_code: ctx}."""
@@ -280,7 +321,7 @@ def _build_context(db):
             'revenue': None, 'revenue_yoy': None, 'rev_yoy_recent': [], 'rev3m_avg': None, 'rev12m_avg': None,
             'q': [], 'inst': [], 'hold': [], 'div_by_year': {}, 'div_fill_events': [],
             'tech': {}, 'chanlun': {}, 'director_holding_pct': None, 'in_wl823': False,
-            'inst20': None, 'hold_weekly': [], 'margin': [], 'pv': {},
+            'inst20': None, 'hold_weekly': [], 'margin': [], 'pv': {}, 'trust_cost': {},
         }
         for code, name, market, industry in
         db.query(Stock.code, Stock.name, Stock.market, Stock.industry).all()
@@ -433,6 +474,18 @@ def _build_context(db):
             c['inst20'] = {k: sum((x[f'{k}_buy'] or 0) - (x[f'{k}_sell'] or 0) for x in lst)
                            for k in ('foreign', 'trust', 'dealer')}
 
+    # 投信買點: daily 投信 net by date, enough sessions for the 60-day cost
+    # line evaluated over the last 20 sessions. Consumed in _flush_tech below.
+    since_trust = (today - timedelta(days=150)).isoformat()
+    trust_daily = {}
+    for r in db.execute(text('''
+        SELECT stock_code, date, trust_buy, trust_sell FROM institutional_trades WHERE date >= :since
+    '''), {'since': since_trust}).mappings():
+        d = r['date']
+        if isinstance(d, str):
+            d = datetime.strptime(d, '%Y-%m-%d').date()
+        trust_daily.setdefault(r['stock_code'], {})[d] = (r['trust_buy'] or 0) - (r['trust_sell'] or 0)
+
     # 主力吸貨: raw 400張以上 / 100張以下 weekly %, newest first, enough for a 4-week change
     since_hold_w = (today - timedelta(days=45)).isoformat()
     for r in db.execute(text('''
@@ -505,6 +558,10 @@ def _build_context(db):
                 c['pv'] = _price_volume_snapshot(rows)
             except Exception:
                 logger.exception('_price_volume_snapshot failed for %s', code)
+            try:
+                c['trust_cost'] = _trust_cost_snapshot(rows, trust_daily.get(code, {}))
+            except Exception:
+                logger.exception('_trust_cost_snapshot failed for %s', code)
 
     since_tech = (today - timedelta(days=760)).isoformat()
     current_code, current_rows = None, []
@@ -1217,6 +1274,35 @@ def score_accumulation(ctx):
     return s.result()
 
 
+def score_trust_buy(ctx):
+    """投信買點（2026-10-06 新增，實驗性）：股價拉回投信成本線附近（成本線
+    當支撐）。投信成本線定義見 _trust_cost_snapshot()。
+
+    使用者原本想要「投信認養初期（之前沒買、近5日開始連買）」跟「股價由下往上
+    突破投信成本線」兩種，backtest_trust.py 2016～2026 全市場回測兩種都沒贏過
+    「流動股每20日定期進場」對照組；唯一勝出的是這個拉回版（E1）：60日平均
+    +5.18% vs 對照組 +3.43%，但切成 2016-2020／2021-2026 兩段，前段跟對照組
+    差不多、優勢只在後段——弱訊號，使用者同意只上線這一版。
+
+    入榜：投信近60日仍淨買超、近5日沒有淨賣超、近20日內收盤曾高於成本線
+    10% 以上、現在收盤落在成本線上方 0～3%、近10日均量 > 500 張。
+    """
+    s = ScoreCard()
+    tc = ctx['trust_cost']
+    cost, gap, max_gap, net60, net5 = (tc.get(k) for k in ('cost', 'gap', 'max_gap20', 'net60', 'net5'))
+    s.require('近10天平均成交量>500張', ctx['avg_vol_10d'] and ctx['avg_vol_10d'] > 500_000)
+    s.require('投信近60日累計買超' + (f'（{round(net60 / 1000):+,}張）' if net60 is not None else ''),
+              net60 is not None and net60 > 0)
+    s.require('投信近5日未淨賣超' + (f'（{round(net5 / 1000):+,}張）' if net5 is not None else ''),
+              net5 is not None and net5 >= 0)
+    s.require('近20日收盤曾高於投信成本線10%以上' + (f'（最高{max_gap:+.1f}%）' if max_gap is not None else ''),
+              max_gap is not None and max_gap >= 10)
+    s.require('收盤拉回投信成本線上方0～3%' + (f'（{gap:+.1f}%，成本線{cost:.2f}）' if gap is not None else ''),
+              gap is not None and 0 <= gap <= 3)
+    s.award('拉回投信成本線', gap is not None and 0 <= gap <= 3 if gap is not None else None, 100, approx=True)
+    return s.result()
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -1234,6 +1320,7 @@ SCORERS = {
     'flag888_guyu': score_flag888_guyu,
     'wl823_pullback': score_wl823_pullback,
     'accumulation': score_accumulation,
+    'trust_buy': score_trust_buy,
 }
 
 

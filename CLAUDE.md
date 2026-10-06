@@ -80,7 +80,7 @@ finmind_client.py  FinMind API 薄封裝（crawler.py 的 crawl_finmind_* 函式
 technical.py    純 Python 技術指標（EMA/MACD/RSI/KD），達人選股股泰規則用
 chip_peak.py    純 Python 籌碼峰計算（POC/VAH/VAL，時間衰減＋法人品質加權），見「籌碼峰」章節
 chanlun.py      純 Python 纏論計算（K線合併/分型/筆/中樞/背馳/買賣點），見「纏論」章節
-experts.py      達人選股計分引擎（9 套公開規則 + 4 套實驗規則，其中1套admin-only），見「達人選股」章節
+experts.py      達人選股計分引擎（`SCORERS` 共 17 套：9 套公開規則 + 8 套實驗規則，其中 3 套 admin-only），見「達人選股」章節
 crawler_taifex.py    台指期貨/選擇權籌碼爬蟲（FinMind），見「期權籌碼分析」章節
 taifex_analysis.py   期權籌碼衍生計算（PC Ratio/支撐壓力/大戶多空比），見「期權籌碼分析」章節
 crawler_fear_greed.py  CNN Fear & Greed Index 爬蟲（唯一非台股/非FinMind資料源），見「期權籌碼分析」章節
@@ -582,6 +582,8 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 - **API**：`GET`（所有人）／`PUT`（僅管理員）`/api/stocks/<code>/note`，`PUT` 的 body 是 `{content: "..."}`。
 - **前端**：`#stock-note-card`（`.card.hidden`，不再是 `.admin-only`，緊接在 AI 個股分析卡片下方），標題「📝 AI分析筆記」。`loadStockDetail()` 一律呼叫 `loadStockNote(code)`（不分身分）；管理員看到可編輯的 `<textarea class="form-input stock-note-textarea">` + 「儲存筆記」按鈕（按鈕仍是 `.admin-only`），一般使用者看到唯讀的 `#stock-note-display`——`_formatNoteForDisplay()` 把內容裡每個中文句號「。」後面自動插入 `<br>` 換行，因為貼上來的原始文字常常整段沒有斷句，純文字塊很難讀；admin 編輯用的 textarea 不做這個轉換，存檔內容維持原樣。`saveStockNote()` 呼叫 `PUT`，按鈕 disable 防止重複送出。
 
+## 達人選股（`experts.py`）
+
 編碼 4 位台股達人（股泰多方/空方、888/巔峰標準1–4、股魚、股海老牛）公開的選股/評分邏輯，加上 1 套來源未附具名作者的「好公司7大財務指標」checklist，對本站 DB + FinMind 補充資料即時計分，`expert_key`：`gutai_bull`/`gutai_bear`/`flag888_1`–`flag888_4`/`guyu`/`laoniu`/`haogongsi`（以上9套皆非實驗性），中文標籤見 `experts.py` 的 `EXPERT_LABELS`。另有3套本站自製的實驗性規則（`EXPERIMENTAL_EXPERTS`，前端加掛 NEW 徽章）：`momentum_guard`（動能防雷）、`chanlun_buy`/`chanlun_sell`（纏論買/賣點，見下方「纏論買點／纏論賣點併入達人選股」）。
 
 **`haogongsi`（好公司7指標，2026-07-23 新增）**：來源是 project owner 提供的截圖表格（未附書名/作者），7 項指標——實質盈餘、實質ROE、資盈率、獲利含金量、配息率、利潤率（毛利率＋實質盈餘利益率）、董監持股比率。本站 schema 沒有「非經常性利益」「折舊攤銷」欄位：實質盈餘一律用稅後淨利近似（不扣非經常性利益），資盈率＝資本支出÷稅後淨利、獲利含金量＝營運現金流÷稅後淨利（分母都少加回折舊攤銷，`approx: true`）。原表格「近8年趨勢平穩或成長／穩定向上」是軟性描述、非量化數字門檻，改成 `award()` 用「近2年均 vs 前2年均」比較近似；只有表格明確寫出的數字門檻（實質ROE近5年均>10%、資盈率近2年均<=70%、獲利含金量近2年均>=70%、配息率近5年均>=40%、毛利率近2年均>=20%、實質盈餘利益率近2年均>=6%、董監持股>=10%）才做成 `require()`。配息率沿用 flag888_2/guyu 既有的「現金股利(單股)÷EPS」算法，跟「現金股利總額÷歸屬母公司淨利總額」數學等價。
@@ -606,7 +608,7 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 - `ScoreCard`：`require(label, cond)` 是選股門檻（`passed` = 全部 `require` 皆真；輸入為 `None` 一律視為不通過，不放行無法驗證的股票）；`award(label, cond, points)` 是配分項，`cond=None` 時整項跳過不計入 `max_score`（資料不足不扣分，也不算分）；`award_count(label, achieved, max_occurrences, unit_points)` 是「每命中一次 +N 分，封頂 M 次」的漸進計分（如「近5日外資買超次數」）。
 - `_build_context(db)`：一次 bulk 查完全部表，組成 `{stock_code: ctx}`。**技術指標快照是逐股流式計算**（`daily_prices` 查詢本身已 `ORDER BY stock_code, date`，累積到換股票就 flush 該股的 `technical.snapshot()` 後捨棄），而不是先把全市場~2 年 OHLC 全部塞進記憶體再統一算——後者在 Zeabur 容器上會直接 OOM（~1,982 檔 × ~500 筆同時在記憶體是實測會爆的規模）。**`per`/`pbr`/`dividend_yield` 刻意不跟 `close`/`volume` 綁同一個「最新一天」查詢**，而是另外抓「最近一筆這三欄實際有值」的資料列：`crawl_finmind_valuation` 排在股價爬蟲之後跑，且容許落後 1–3 天回補（見下方爬蟲章節），若跟 `close` 一樣強制要求同一天，只要當天估值資料還沒進來，888標準1（淨值比）/888標準3（殖利率）會瞬間全數判定不通過（曾經在這個確切原因下發生過 0/1982、1/1982 的假性全滅，已修復）。
-- `compute_expert_scores()`：對每檔股票跑全部 15 套規則（`SCORERS` 字典驅動），寫入 `expert_scores`（`INSERT OR REPLACE`，跟 `stock_ai_analysis` 同樣的「只存最新一筆快照，不留歷史」模式，**唯二例外是 `entered_at`/`transition`**）。單一規則對單一股票算分丟例外時只記 log 跳過，不影響其他規則/股票。
+- `compute_expert_scores()`：對每檔股票跑 `SCORERS` 裡的全部規則（字典驅動，目前 17 套），寫入 `expert_scores`（`INSERT OR REPLACE`，跟 `stock_ai_analysis` 同樣的「只存最新一筆快照，不留歷史」模式，**唯二例外是 `entered_at`/`transition`**）。單一規則對單一股票算分丟例外時只記 log 跳過，不影響其他規則/股票。
 - **`entered_at`/`transition`（僅股泰多方/空方訊號有意義）**：每次執行都先讀出覆寫前的舊列（`old_rows`），`passed` 狀態沒變就延續舊的 `entered_at`（入榜日期）；狀態改變（或該列第一次寫入/剛加欄位的 bootstrap）才把 `entered_at` 更新成當天。`transition` 只在 `gutai_bull`/`gutai_bear` 這對互斥規則、且是「真正的狀態翻轉」時才計算：進榜當下若「舊快照」發現該股正好在對面那個訊號上榜，記錄 `空轉多`/`多轉空`；bootstrap（欄位剛加入，`old.entered_at is None`）或非翻轉的正常首次進榜一律是 `None`，不會亂猜。
 
 ### API / 排程
@@ -615,9 +617,9 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 
 ### 前端
 
-- **`#expert-view`**（列表）：`#expert-tabs` 8 個規則切換鈕（`loadExperts()`/`renderExpertTabs()`），下方純表格 13 欄：排名/代號/名稱/產業/營收月份/起始股價/收盤價/價差%/漲跌幅%/評分/預估倍數/資料日期/甜蜜點。**`gutai_bull`/`gutai_bear` 這兩個分頁額外多兩欄**（入榜日期/轉換，來自 `expert_scores.entered_at`/`transition`）：`renderExpertTable()` 用 `_isGutaiKey(_expertKey)` 判斷，動態 toggle 這兩個 `<th>`（`#expert-th-entered`/`#expert-th-transition`，預設 `.hidden`）並在列資料多帶兩個 `<td>`，其他 6 套規則不顯示。「預估倍數」欄（2026-07-22 從「評分明細」按鈕改版）沿用 `#star-view`（營收飆股清單）既有的 `calcEst(s)` 公式即時算：`(revenue / qf_revenue) × eps × 240`，再除以 `close`，跟 `#star-view`/主表格用同一套邏輯與顯示格式（`x.xx` + `x` 字尾），純前端算、不需要後端額外欄位。原本點按鈕開 `#expert-modal` 彈窗看評分明細長條圖的機制已整個移除（`openExpertModal`/`closeExpertModal`/`renderModalExpertChart` 連同 HTML 一併刪除，不留死代碼）——同樣的評分明細長條圖在詳情頁的「達人選股評分」卡（`#stock-expert-card`，`renderStockExpertChart()`）仍看得到，資訊沒有真的消失，只是列表頁不再重複提供彈窗入口。
+- **`#expert-view`**（列表）：`#expert-tabs` 規則切換鈕（依 `/api/experts` 回傳動態產生）（`loadExperts()`/`renderExpertTabs()`），下方純表格 13 欄：排名/代號/名稱/產業/營收月份/起始股價/收盤價/價差%/漲跌幅%/評分/預估倍數/資料日期/甜蜜點。**`gutai_bull`/`gutai_bear` 這兩個分頁額外多兩欄**（入榜日期/轉換，來自 `expert_scores.entered_at`/`transition`）：`renderExpertTable()` 用 `_isGutaiKey(_expertKey)` 判斷，動態 toggle 這兩個 `<th>`（`#expert-th-entered`/`#expert-th-transition`，預設 `.hidden`）並在列資料多帶兩個 `<td>`，其他 6 套規則不顯示。「預估倍數」欄（2026-07-22 從「評分明細」按鈕改版）沿用 `#star-view`（營收飆股清單）既有的 `calcEst(s)` 公式即時算：`(revenue / qf_revenue) × eps × 240`，再除以 `close`，跟 `#star-view`/主表格用同一套邏輯與顯示格式（`x.xx` + `x` 字尾），純前端算、不需要後端額外欄位。原本點按鈕開 `#expert-modal` 彈窗看評分明細長條圖的機制已整個移除（`openExpertModal`/`closeExpertModal`/`renderModalExpertChart` 連同 HTML 一併刪除，不留死代碼）——同樣的評分明細長條圖在詳情頁的「達人選股評分」卡（`#stock-expert-card`，`renderStockExpertChart()`）仍看得到，資訊沒有真的消失，只是列表頁不再重複提供彈窗入口。
 - **`#detail-view` 達人選股評分卡**（`#stock-expert-card`）：`loadStockExpertScores(code)` 抓 `/api/stocks/<code>/expert-scores`，`#stock-expert-tabs` 列出該股所有已算出分數的規則，`renderStockExpertDetail()` 一樣先畫「總分 X/Y 分」大字標頭，再選股標準清單，再呼叫 `renderStockExpertChart()`。**圖表繪製邏輯抽成共用的 `_renderExpertChart(scoreItems, canvasId, wrapId, chartKey)`**，`renderStockExpertChart`/`renderModalExpertChart` 只是帶入各自的 canvas/state key 呼叫它——確保列表 modal 跟詳情頁兩處的視覺化永遠同步；`state.stockExpertChart`/`state.modalExpertChart` 各自持有 Chart.js 實例，切換分頁/關閉彈窗時 `.destroy()` 再建新的，避免 canvas 重用衝突。
-- **重要 gotcha：`_stockExpertKey`（目前選中的達人分頁）刻意跨股票延續，不是每次都重置**——`loadStockExpertScores()` 只有在 `_stockExpertKey` 對新股票不存在（`!scored.some(s => s.expert_key === _stockExpertKey)`，理論上不會發生，因為每檔股票都算好全部 15 套規則）時才 fallback 到「第一個通過的規則」。曾經每次都重置成「這檔股票自己第一個通過的規則」，導致用上一檔/下一檔導覽瀏覽時，選中的達人分頁會隨機跳來跳去（每檔股票通過的規則不同）。另外，從 `#expert-view` 列表點股票進入詳情頁時，`renderExpertTable()` 的點擊事件必須在呼叫 `loadStockDetail()` 之前手動把 `_stockExpertKey` 設成該列表目前的 `_expertKey`，否則會沿用使用者上次在別處瀏覽時殘留的分頁，而不是使用者點擊當下所在的那個達人榜單。
+- **重要 gotcha：`_stockExpertKey`（目前選中的達人分頁）刻意跨股票延續，不是每次都重置**——`loadStockExpertScores()` 只有在 `_stockExpertKey` 對新股票不存在（`!scored.some(s => s.expert_key === _stockExpertKey)`，理論上不會發生，因為每檔股票都算好 `SCORERS` 全部規則）時才 fallback 到「第一個通過的規則」。曾經每次都重置成「這檔股票自己第一個通過的規則」，導致用上一檔/下一檔導覽瀏覽時，選中的達人分頁會隨機跳來跳去（每檔股票通過的規則不同）。另外，從 `#expert-view` 列表點股票進入詳情頁時，`renderExpertTable()` 的點擊事件必須在呼叫 `loadStockDetail()` 之前手動把 `_stockExpertKey` 設成該列表目前的 `_expertKey`，否則會沿用使用者上次在別處瀏覽時殘留的分頁，而不是使用者點擊當下所在的那個達人榜單。
 - **總分一定要清楚顯示**：詳情頁的評分卡（`#stock-expert-card`，唯一還會畫評分明細長條圖的地方，見上方「列表彈窗已移除」說明），`.stock-expert-total`（大字、`--primary` 顏色數字）都放在選股標準清單「之前」，不是只靠分頁按鈕上的小字 `(X/Y)` 讓使用者自己找。
 - **`#expert-table` 表格排序**（2026-07-13 新增，2026-07-22 補上「預估倍數」欄可排序）：跟自結公告表格（`#ann-table`）同一套純前端排序機制（`class="ann-sortable" data-sort="<field>"` + `.ann-sort-arrow`，兩個表格都是 `class="ann-table"` 所以共用同一份 CSS），但獨立實作一份 `_EXPERT_SORT_GETTERS`/`sortExpertTable()`/`_applyExpertSort()`，**沒有**跟 `sortAnnTable()` 共用程式碼——刻意保持兩份獨立，因為欄位取值邏輯不同：達人選股表格排序用到的價格類欄位（起始股價/收盤價/價差%/漲跌幅%/預估倍數/資料日期/甜蜜點）並不在 `_expertData` 本身上，而是要透過 `_expertP(code)`（`state.allData.find(...)`）另外查表算，`_ANN_SORT_GETTERS` 沒有這個需求。**排序偏好跨切換達人分頁（`_expertKey`）延續**：`loadExpertDetail()` fetch 到新規則的資料後，若 `_expertSortField` 已設定就呼叫 `_applyExpertSort()` 套用同一個排序，不會因為換分頁就悄悄變回 API 預設順序、卻讓表頭箭頭誤導使用者以為還在排序中。「排名」（純序號）一欄不可排序，理由同自結公告表格的主旨/AI分析/自選股欄。
 
@@ -884,6 +886,16 @@ jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `
 - **2026-10-06 補充回測（`backtest_accumulation.py` 同時輸出兩種結算；`--stop/--trail` 調停損停利，非預設值時結果檔加後綴）**：
   - **停損＋移動停利出場（10%/15%/20%）下，H 組每筆平均 +0.93%/+1.53%/+2.00%，全部輸給對照組「流動股每20日定期進場」+1.30%/+2.31%/+3.92%**，停利越寬差距越大。固定持有的超額報酬則對流動股對照組也成立（對照組60日超額 −0.18%），所以優勢是籌碼訊號本身、但屬「慢慢發酵」型，被停損停利洗掉。網站說明因此定位為「中長期觀察名單，不適合短線」。
   - **帶量突破**（收盤創前20日新高＋量 ≥ 前20日均量1.5倍）：當天同時成立（K）或吸貨後20日內等突破進場（L）都沒改善；只看突破（M）無優勢。**反而「H 且近20日都沒帶量突破」（N2）是所有版本最好**：60日超額 +1.83%、勝率 51.4%、約1,080次事件（每年約100）。**同日使用者同意改用 N2**：`_price_volume_snapshot()` 新增 `recent_breakout`（近20個交易日內任一天符合帶量突破，定義與 `backtest_accumulation._is_breakout` 相同），`score_accumulation()` 多一個 `require('近20日未出現帶量突破')`；當天入榜由 12 檔降為 5 檔。
+
+## 投信買點（`experts.score_trust_buy`，2026-10-06 新增，公開、實驗性）
+
+達人選股第 17 套規則（`trust_buy`，`EXPERIMENTAL_EXPERTS`，非 admin-only），沿用每日 17:00 `compute_expert_scores()`。
+
+- **定義**：投信成本線＝近60交易日投信「買超日」以買超股數加權的均價（均價用 (H+L+C)/3 近似）。入榜＝投信60日淨買超＞0、近5日淨額≥0、近20日收盤曾高於成本線≥10%、今天收盤在成本線上方0～3%、10日均量>500張。
+- **資料**：`_build_context()` 載入近150天投信每日淨額 `trust_daily`，在 `_flush_tech()` 用同一份 OHLC 呼叫 `_trust_cost_snapshot()` → `ctx['trust_cost']`（不多打 daily_prices 查詢）。
+- **回測 `backtest_trust.py`**（前瞻報酬法同 `backtest_accumulation.py`，`--from/--until` 可切期間）：使用者原本要「投信認養初期」（A 系列：前60日買超≤3天、近5日≥3天）＋「由下往上突破成本線」（B 系列），**兩者都沒贏過「流動股每20日定期進場」對照組**（B 每段都更差；A7 順勢版全期小贏、但 2021-2026 輸）；投信買超佔成交量比例門檻越高越差。唯一勝出的是**拉回成本線 E1**：全期60日平均 +5.18% vs 對照組 +3.43%（4,156 事件、勝率50.4%），但 **2016-2020 跟對照組持平（3.96% vs 4.00%），優勢只在 2021-2026（4.92% vs 4.04%）**；停損/移動停利出場不優於對照組。使用者選擇只上線 E1。上線當天（2026-10-06）入榜 3 檔。
+- 跟回測核對過：`experts` 入榜名單與 `backtest_trust._pullback` 對最後一天的判定一致。
+- **前端說明**：`#expert-view` 表格上方 `#expert-trust-note`（比照 `#expert-chanlun-note`，`renderExpertTable()` 只在 `_expertKey === 'trust_buy'` 時顯示）；另有說明頁 `<h4>🏦 投信買點</h4>` 段落。說明文字刻意寫「出榜不等於賣出訊號」——沒回測過以成本線當停損。
 
 ## 期權籌碼分析（`crawler_taifex.py`/`taifex_analysis.py`，2026-08-20 新增，**需登入可見**）
 

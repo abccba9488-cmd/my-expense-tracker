@@ -3954,6 +3954,7 @@ function renderExpertTable() {
   document.getElementById('expert-th-yield').classList.toggle('hidden', isGutai);
   document.getElementById('expert-th-score-label').textContent = isChanlun ? '訊號類型' : '評分';
   document.getElementById('expert-chanlun-note').classList.toggle('hidden', !isChanlun);
+  document.getElementById('expert-trust-note').classList.toggle('hidden', _expertKey !== 'trust_buy');
   const colspan = 15;
 
   if (!_expertData.length) {
