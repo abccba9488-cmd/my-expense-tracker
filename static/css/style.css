@@ -922,3 +922,17 @@ table.dataTable tbody td {
   .toolbar { flex-direction: column; align-items: flex-start; }
   .filter-group { flex-wrap: nowrap; overflow-x: auto; }
 }
+
+/* ── TAIEX overview card ── */
+.taiex-card { padding: 12px 16px; }
+.taiex-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; cursor: pointer; user-select: none; }
+.taiex-label { font-size: 13px; color: var(--text2); }
+.taiex-close { font-size: 20px; font-weight: 700; }
+.taiex-chg   { font-size: 14px; font-weight: 600; }
+.taiex-meta  { font-size: 12px; color: var(--text2); }
+.taiex-signal { font-size: 12px; font-weight: 600; }
+.taiex-caret { margin-left: auto; color: var(--text2); transition: transform .2s; }
+.taiex-card.collapsed .taiex-caret { transform: rotate(-90deg); }
+.taiex-chart-wrap { position: relative; height: 300px; margin-top: 10px; }
+@media (max-width: 768px) { .taiex-chart-wrap { height: 240px; } }
+.taiex-card.collapsed .taiex-chart-wrap { display: none; }

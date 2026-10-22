@@ -21,7 +21,7 @@
 
 | 視圖 | 說明 |
 |------|------|
-| `#list-view` | 完整股票列表（DataTables，預設代號升冪） |
+| `#list-view` | 完整股票列表（DataTables，預設代號升冪）；頂端 `#taiex-card` 加權指數資訊條＋近180天 K 線＋纏論疊圖（`loadTaiex()`/`renderTaiexChart()`，`GET /api/market/index` + `/api/market/index/chanlun`；K 線畫法、纏論筆/中樞/買賣點疊圖都照抄 `renderPriceChart()`，重用 `_chanlun*Series()`；圖例只有「K線」「纏論」兩項，點擊整組切換；點標題列收合，狀態存 `localStorage` `taiex_collapsed`；整張卡片用台股紅漲綠跌，跟 K 線一致、不走全站 `pctClass`） |
 | `#star-view` | 營收飆股：`_ratio >= 1.5` **且** `revenue_yoy >= 20%`，依預估倍數降冪 |
 | `#watchlist-view` | 自選股清單（需登入）；未登入顯示 `#wl-auth-prompt` |
 | `#ann-view` | 自結公告：純表格（不用 DataTables），見下方「自結公告」章節 |

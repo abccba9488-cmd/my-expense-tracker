@@ -140,6 +140,17 @@
   <!-- 股票列表 -->
   <div id="list-view" class="view active">
     <div class="container">
+      <div class="card taiex-card hidden" id="taiex-card">
+        <div class="taiex-head" id="taiex-toggle" title="展開/收合走勢圖">
+          <span class="taiex-label">加權指數</span>
+          <span class="taiex-close" id="taiex-close"></span>
+          <span class="taiex-chg" id="taiex-chg"></span>
+          <span class="taiex-meta" id="taiex-meta"></span>
+          <span class="taiex-signal" id="taiex-signal" title="依「筆＋中樞＋MACD背馳」推導的近似買賣點（近250個交易日），跳過線段層級，跟個股詳情頁纏論同一套演算法。"></span>
+          <span class="taiex-caret" id="taiex-caret">▾</span>
+        </div>
+        <div class="taiex-chart-wrap" id="taiex-chart-wrap"><canvas id="taiex-chart"></canvas></div>
+      </div>
       <div class="toolbar">
         <div class="filter-group">
           <button class="filter-btn active" data-market="all">全部</button>

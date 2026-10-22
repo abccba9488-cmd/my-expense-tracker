@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 變數 | 必要性 | 用途 |
 |------|--------|------|
 | `FINMIND_TOKEN` | 達人選股/三大法人/期權籌碼等 FinMind 相關功能必要 | 沒設定會靜默失敗，踩雷細節見下方排程章節「`FINMIND_TOKEN` 沒設定是一個容易忽略的靜默失敗陷阱」 |
-| `OPENROUTER_API_KEY` | 「AI 個股分析」功能才需要 | 見下方「AI 個股分析」章節，未設定則該功能無法使用（其餘功能不受影響） |
+| `OPENROUTER_API_KEY` | 「AI 個股分析」功能才需要 | 見 `docs/announcements-ai.md`「AI 個股分析」，未設定則該功能無法使用（其餘功能不受影響） |
 | `OPENROUTER_MODEL` | 選用，預設 `perplexity/sonar` | 同上，覆寫 AI 個股分析用的模型 |
 
 ## 啟動與停止
@@ -59,6 +59,8 @@ C:\Users\user\anaconda3\python.exe -m py_compile app.py crawler.py   # Python �
 ```
 其餘驗證是實際跑本機伺服器／爬蟲／回測腳本看結果。
 
+**Windows 主控台中文亂碼**：直接用 python 印出 DB 內的中文（股票名稱等）會變成 `���s` 之類的亂碼（主控台 cp950）。一次性腳本／`-c` 指令加 `-X utf8`（或設 `PYTHONIOENCODING=utf-8`）再看輸出。
+
 **改 `templates/*.html` 必須重啟伺服器才生效**（`debug=False`，Jinja 快取模板）；改 `static/js`／`static/css` 不用重啟（mtime 版號自動換網址）。詳見「籌碼峰」章節同名 gotcha。
 
 **Claude Code 內重啟伺服器**一律用 PowerShell 工具（不要用 Bash 跑 `start.bat`／`_server.bat`——`start` 分離出去的子行程會在工具呼叫結束時被回收），且同一個指令內先載入 `FINMIND_TOKEN`（原因見下方「排程」章節踩雷）：
@@ -69,6 +71,8 @@ $env:FINMIND_TOKEN = [Environment]::GetEnvironmentVariable("FINMIND_TOKEN","User
 Start-Process -FilePath "C:\Users\user\anaconda3\python.exe" -ArgumentList "app.py" -WorkingDirectory "C:\Users\user\Documents\claude\VSCode\stock-analysis" -WindowStyle Minimized
 ```
 重啟前確認沒有正在跑、會呼叫本站 API 的背景工作（例如 `/rate-announcements`）。
+
+**改了 `experts.py`／`chanlun.py` 等計分邏輯，一定要重啟伺服器**：在跑的 Flask 行程還是舊程式碼，`POST /api/crawler/run/expert_scores` 會用舊邏輯重算，而且每天 17:00 排程也會用舊邏輯把結果蓋回去。想不經伺服器直接重算（約 2 分鐘）：`C:\Users\user\anaconda3\python.exe -c "import experts; experts.compute_expert_scores()"`。
 
 **本機開機自動啟動**：`autostart_server.bat` 是 `start.bat` 的背景版——只確保 Flask（含內建 APScheduler 排程）在跑，不會跳出瀏覽器分頁。透過在 Windows「啟動」資料夾（`shell:startup`，使用者層級、不需要系統管理員權限）放一個指向它的捷徑，登入時自動背景啟動；這個捷徑本身不在 git 版控內，換一台機器要重設的話再重建一次即可。原本想用 `schtasks`/`Register-ScheduledTask` 註冊工作排程器，但兩者都需要系統管理員權限，改用啟動資料夾捷徑這個免提權做法。
 
@@ -93,7 +97,7 @@ finmind_client.py  FinMind API 薄封裝（crawler.py 的 crawl_finmind_* 函式
 technical.py    純 Python 技術指標（EMA/MACD/RSI/KD），達人選股股泰規則用
 chip_peak.py    純 Python 籌碼峰計算（POC/VAH/VAL，時間衰減＋法人品質加權），見「籌碼峰」章節
 chanlun.py      純 Python 纏論計算（K線合併/分型/筆/中樞/背馳/買賣點），見「纏論」章節
-experts.py      達人選股計分引擎（`SCORERS` 共 17 套：9 套公開規則 + 8 套實驗規則，其中 3 套 admin-only），見「達人選股」章節
+experts.py      達人選股計分引擎（`SCORERS` 共 18 套：9 套公開規則 + 9 套實驗規則，其中 4 套 admin-only），見「達人選股」章節
 crawler_taifex.py    台指期貨/選擇權籌碼爬蟲（FinMind），見「期權籌碼分析」章節
 taifex_analysis.py   期權籌碼衍生計算（PC Ratio/支撐壓力/大戶多空比），見「期權籌碼分析」章節
 crawler_fear_greed.py  CNN Fear & Greed Index 爬蟲（唯一非台股/非FinMind資料源），見「期權籌碼分析」章節
@@ -154,17 +158,17 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `dividend_policy` | `(stock_code, event_date)` | 逐筆股利分派事件（非年度加總），FinMind。個股詳情頁「股利政策」區塊有「回補最新資料」按鈕（2026-08-23 新增，任何登入使用者可用）——`crawler.backfill_dividend_policy(code)` 對這一支股票用 `data_id` 查全部歷史（已用真實 API 驗證單一股票、寬日期範圍一次查詢可靠，不像下方兩個 crawler 函式要逐日查詢），修過去 `FINMIND_TOKEN` 未設定期間造成的資料缺口，也能單純確認某股票近期真的沒有新股利事件 |
 | `dividend_fill_events` | `(stock_code, ex_date)` | 除權息事件 + 填息判斷，FinMind |
 | `director_holdings` | `(stock_code, year_month)` | 董監持股比例，TWSE/TPEX OpenAPI（非 FinMind） |
-| `broker_trades` | `(stock_code, date, broker_id)` | 券商分點單日買賣超（股），FinMind `TaiwanStockTradingDailyReport`，見下方「券商分點進出」章節 |
-| `expert_scores` | `(stock_code, expert_key)` | 達人選股每套規則最新一次計分快取；`entered_at`/`transition` 是唯二跨執行延續（不覆寫）的欄位，見下方「達人選股」章節 |
+| `broker_trades` | `(stock_code, date, broker_id)` | 券商分點單日買賣超（股），FinMind `TaiwanStockTradingDailyReport`，見 `docs/chips.md`「券商分點進出」 |
+| `expert_scores` | `(stock_code, expert_key)` | 達人選股每套規則最新一次計分快取；`entered_at`/`transition` 是唯二跨執行延續（不覆寫）的欄位，見 `docs/experts.md`「達人選股」 |
 | `users` | `id` | 會員帳號，`password_hash` 用 werkzeug |
 | `watchlists` | `id` | 屬於某 `user_id`，可多個 |
 | `watchlist_stocks` | `(watchlist_id, stock_code)` | 自選股關聯表 |
 | `messages` | `id` | 全站留言板；`user_id`/`username`/`content`/`created_at` |
 | `crawler_logs` | `id` | status: running \| success \| failed |
-| `announcements` | `id` | UniqueConstraint(`stock_code`, `seq_no`)；自結公告爬蟲結果，見下方「自結公告」章節 |
-| `stock_ai_analysis` | `stock_code` | 單檔股票最新一次 AI 估值分析快取，見下方「AI 個股分析」章節 |
-| `stock_notes` | `stock_code` | AI分析筆記（自由文字，不綁定任何 AI 呼叫）——所有使用者可讀，僅管理員可寫，見下方「個股筆記」章節 |
-| `taifex_futures_daily` | `(contract_date, date)` | 台指期貨(TX)每日行情，只存日盤，FinMind，見下方「期權籌碼分析」章節 |
+| `announcements` | `id` | UniqueConstraint(`stock_code`, `seq_no`)；自結公告爬蟲結果，見 `docs/announcements-ai.md`「自結公告」 |
+| `stock_ai_analysis` | `stock_code` | 單檔股票最新一次 AI 估值分析快取，見 `docs/announcements-ai.md`「AI 個股分析」 |
+| `stock_notes` | `stock_code` | AI分析筆記（自由文字，不綁定任何 AI 呼叫）——所有使用者可讀，僅管理員可寫，見 `docs/announcements-ai.md`「個股筆記」 |
+| `taifex_futures_daily` | `(contract_date, date)` | 台指期貨(TX)每日行情，只存日盤，FinMind，見 `docs/taifex.md`「期權籌碼分析」 |
 | `taifex_option_daily` | `(contract_date, date, strike_price, call_put)` | 台指選擇權(TXO)每日行情，逐履約價，資料量大（180天約41萬列） |
 | `taifex_futures_institutional` | `(date, institutional_investors)` | 三大法人期貨(TX)買賣，含成交淨口數與未平倉餘額兩組欄位——後者才是「淨部位」對應的量級，見章節內的踩雷記錄 |
 | `taifex_option_institutional` | `(date, call_put, institutional_investors)` | 三大法人選擇權(TXO)買賣，含契約金額 |
@@ -173,6 +177,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `taifex_option_large_traders` | `(date, call_put, contract_type)` | 十大交易人選擇權(TXO)未沖銷部位，無契約金額欄位 |
 | `taifex_option_vix` | `date` | 臺指選擇權波動率指數(TW VIX)，每天只存收盤那一筆（原始為盤中逐筆），FinMind 只回溯到2026-03-02 |
 | `cnn_fear_greed_index` | `date` | CNN Fear & Greed Index，來源非官方API（非FinMind），美股行事曆日期，見「期權籌碼分析」章節 |
+| `market_index` | `date` | TAIEX 加權指數每日開高低收＋成交量值（TWSE `exchangeReport/FMTQIK` 收盤/漲跌/量值 ＋ `indicesReport/MI_5MINS_HIST` 開高低，都是一次一整月、按日期合併），股票總覽頂端 K 線＋纏論圖用（`GET /api/market/index`、`/api/market/index/chanlun`）；`change_pct` 由爬蟲推算 |
 | `schema_migrations` | `name` | 記錄已執行的 migration，防止重複執行 |
 
 `monthly_revenue` / `quarterly_financials` 皆有 `updated_at`（`onupdate=datetime.now`），爬蟲在資料**實際變動**時才手動更新此欄位（用於 `/api/updates/today` 判斷「今日更新」清單）。
@@ -227,7 +232,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 - UA 池含 Chrome 136、Firefox 138、Safari 17、Edge 136 共 9 組，定期輪替
 - `_jitter(base)`：`time.sleep(base × random(0.7, 1.6))`，消除固定間隔特徵
 - 每 80 次請求清除一次 session cookie
-- **`Accept-Encoding` 不可加 `br`**：Zeabur 容器未安裝 `brotli`，若伺服器回傳 Brotli 壓縮內容會導致 `resp.json()` 解析失敗，整批資料變成 0 筆但 task 仍顯示 success。只用 `gzip, deflate`
+- **`Accept-Encoding` 不可加 `br`**：執行環境不保證有裝 `brotli`（當初是在 Zeabur 容器踩到），若伺服器回傳 Brotli 壓縮內容會導致 `resp.json()` 解析失敗，整批資料變成 0 筆但 task 仍顯示 success。只用 `gzip, deflate`
 - TWSE/TPEX JSON 解析失敗或 `stat != 'OK'` 時會記錄 `logger.warning`（含狀態碼與回應大小），方便從 Zeabur Runtime Logs 排查
 
 月營收爬蟲在新增記錄時，會查 `daily_prices` 最新收盤價寫入 `start_price`；更新既有記錄時不修改 `start_price`。`turnaround_signal`（虧轉盈候選旗標）則相反，新增與更新都會重算覆寫，見上方「_SUMMARY_SQL 欄位索引」說明。
@@ -241,6 +246,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 股票清單 | 每週日 01:00 |
 | 每日股價 | 週一〜五 14:00 與 15:00（各跑一次，避免單次失敗漏抓） |
 | 每日股價（watchdog） | 週一〜五 14:00–17:00 每 30 分鐘檢查一次，若當天還沒有成功的 `daily_price` log 就補爬一次（`_daily_price_watchdog`，啟動時也會立即跑一次） |
+| 加權指數（2026-10-21 新增） | 週一〜五 14:40、15:40，啟動時也跑一次；表內少於 250 筆（纏論分析窗）或有缺開高低的列時自動回補 15 個月（`_market_index_job`） |
 | 月營收 | 每天 23:00（爬上個月；部分公司公布較晚，每天重抓直到有資料） |
 | 月營收（watchdog，2026-08-05 新增） | 每天 23:00–06:00 每 30 分鐘檢查一次，若今天還沒有成功的 `monthly_revenue` log、且沒有一個「40 分鐘內剛啟動」的 `running` log 就補跑（`_monthly_revenue_watchdog`，啟動時也會立即跑一次），見下方「卡住 'running' 永遠不結束」說明 |
 | 自結公告 | 週一〜五 05:00（非尖峰，爬前一交易日的 MOPS 重大公告） |
@@ -269,7 +275,9 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 **本機 `app.run()` 沒開 `threaded=True` 曾經導致「網站看起來當機」（2026-08-05 修復）**：Werkzeug 開發伺服器預設單執行緒，同一時間只能處理一個 HTTP 請求。若背景同時有 `quarterly`（逐檔迴圈）+ `finmind_data`（5個 FinMind 任務 + `compute_expert_scores()` 這種吃 CPU 的純 Python 全市場計分）在跑，會把僅有的請求處理能力整個佔滿，使用者端首頁／`/api/market/summary` 會直接卡到逾時，看起來像伺服器當機，但其實 process 沒死、資料也沒事，只是排隊排不到。已在 `app.py` 的 `app.run(...)` 加上 `threaded=True` 解決；雲端 gunicorn（`--workers 1 --threads 4`）本來就沒有這個問題，只有本機直接執行才會踩到。
 
-手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `broker_trades` / `director_holdings` / `expert_scores` / `taifex_data`（等同依序呼叫 `_taifex_job()` + `_taifex_institutional_job()`）。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
+手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `broker_trades` / `director_holdings` / `expert_scores` / `taifex_data`（等同依序呼叫 `_taifex_job()` + `_taifex_institutional_job()`）/ `market_index`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
+
+**新增一個爬蟲任務要同步的地方**：①`crawler.py`（或 `crawler_*.py`）的 `_log('<task>', ...)` task 名稱 → ②`app.py` `_HEALTH_TASKS`（同名，後台健康面板才看得到） → ③`app.py` `POST /api/crawler/run/<task>` 加分支 → ④`scheduler.py` job + `start()` 註冊 → ⑤本檔排程表與上方手動觸發 task 清單。新資料表另外要在 `database.py` 加 model（`init_db()` 的 `create_all` 會自動建表，之後加欄位才需要 ALTER migration）。
 
 ## 前端重要 gotcha（其餘前端細節見 `docs/frontend.md`）
 

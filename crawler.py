@@ -23,7 +23,7 @@ from database import (
     QuarterlyFinancial, CrawlerLog, Announcement, StockAiAnalysis,
     InstitutionalTrade, HoldingConcentration, FinancialExtra,
     DividendPolicy, DividendFillEvent, DirectorHolding,
-    BrokerTrade, WatchlistStock, MarginTrade,
+    BrokerTrade, WatchlistStock, MarginTrade, MarketIndex,
 )
 import finmind_client
 
@@ -551,6 +551,82 @@ def crawl_daily_prices(date_str: str):
         db.rollback()
         _log('daily_price', 'failed', f'{date_str}: {e}')
         logger.exception('crawl_daily_prices failed for %s', date_str)
+        raise
+    finally:
+        db.close()
+
+
+
+# ── market index (TAIEX) ──────────────────────────────────────────────────────
+
+_FMTQIK_URL = 'https://www.twse.com.tw/exchangeReport/FMTQIK?response=json&date={}'
+_TAIEX_OHLC_URL = 'https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={}'
+
+
+def _roc_date(s):
+    ry, rm, rd = (int(x) for x in s.split('/'))
+    return date(ry + 1911, rm, rd)
+
+
+def _twse_month_rows(url_tpl, ym):
+    resp = _get(url_tpl.format(ym), headers={'Accept': 'application/json'})
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get('stat') != 'OK':
+        logger.warning('%s %s: stat=%s', url_tpl.split('?')[0].rsplit('/', 1)[-1], ym, data.get('stat'))
+        return []
+    return data.get('data', [])
+
+
+def crawl_market_index(months: int = 1):
+    """TAIEX daily OHLC + turnover for the current month and the previous
+    `months-1` months. Two TWSE endpoints, each a whole month per call, merged
+    by date: FMTQIK (close/change/turnover) and MI_5MINS_HIST (OHLC).
+    Idempotent via INSERT OR REPLACE on the unique date; pass months>1 to backfill."""
+    task = 'market_index'
+    _log(task, 'running', f'months={months}')
+    db = SessionLocal()
+    try:
+        today = datetime.now(_TZ).date()
+        records = []
+        for i in range(months - 1, -1, -1):
+            y, m = today.year, today.month - i
+            while m <= 0:
+                m += 12
+                y -= 1
+            ym = f'{y}{m:02d}01'
+            by_date = {}
+            for row in _twse_month_rows(_FMTQIK_URL, ym):
+                # 日期(ROC y/m/d), 成交股數, 成交金額, 成交筆數, 加權指數, 漲跌點數
+                close, change = _parse_num(row[4]), _parse_num(row[5])
+                prev = close - change if close is not None and change is not None else None
+                by_date[_roc_date(row[0])] = {
+                    'open': None, 'high': None, 'low': None,
+                    'close':        close,
+                    'change':       change,
+                    'change_pct':   round(change / prev * 100, 2) if prev else None,
+                    'trade_value':  int(_parse_num(row[2]) or 0) or None,
+                    'volume':       int(_parse_num(row[1]) or 0) or None,
+                    'transactions': int(_parse_num(row[3]) or 0) or None,
+                }
+            _jitter(0.5)
+            for row in _twse_month_rows(_TAIEX_OHLC_URL, ym):
+                # 日期, 開盤指數, 最高指數, 最低指數, 收盤指數
+                rec = by_date.get(_roc_date(row[0]))
+                if rec:
+                    rec['open'], rec['high'], rec['low'] = (_parse_num(v) for v in row[1:4])
+            records.extend({'date': d, **r} for d, r in by_date.items())
+            if i:
+                _jitter(1.0)
+        if records:
+            db.execute(MarketIndex.__table__.insert().prefix_with('OR REPLACE'), records)
+            db.commit()
+        _log(task, 'success', f'months={months}: {len(records)} records')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log(task, 'failed', f'months={months}: {e}')
+        logger.exception('crawl_market_index failed')
         raise
     finally:
         db.close()

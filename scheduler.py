@@ -44,6 +44,25 @@ def _daily_price_watchdog():
             logger.error('Watchdog crawl failed: %s', e)
 
 
+
+def _market_index_job():
+    """TAIEX daily OHLC (TWSE FMTQIK + MI_5MINS_HIST). Also runs once on
+    startup: if history is shorter than the 250-day chanlun window or still
+    missing OHLC, backfill 15 months (~300 trading days);
+    otherwise just refresh the current month."""
+    import crawler
+    from database import SessionLocal, MarketIndex
+    db = SessionLocal()
+    try:
+        n = db.query(MarketIndex).count()
+        no_ohlc = db.query(MarketIndex).filter(MarketIndex.open.is_(None)).count()
+    finally:
+        db.close()
+    try:
+        crawler.crawl_market_index(15 if n < 250 or no_ohlc else 1)
+    except Exception as e:
+        logger.error('Market index job failed: %s', e)
+
 def _stock_list_job():
     import crawler
     try:
@@ -311,6 +330,12 @@ def start():
     # Watchdog: every 30 min, fires immediately on startup
     _scheduler.add_job(_daily_price_watchdog, 'interval', minutes=30,
                        next_run_time=datetime.now(_TZ))
+
+    # TAIEX (overview chart): FMTQIK posts after the close; two tries, plus
+    # one on startup that backfills history on a fresh DB
+    _scheduler.add_job(_market_index_job, CronTrigger(day_of_week='mon-fri', hour=14, minute=40))
+    _scheduler.add_job(_market_index_job, CronTrigger(day_of_week='mon-fri', hour=15, minute=40))
+    _scheduler.add_job(_market_index_job, 'date', run_date=datetime.now(_TZ))
 
     # Monthly revenue: every day at 23:00 (some companies publish late, keep retrying)
     _scheduler.add_job(_monthly_revenue_job, CronTrigger(hour=23, minute=0))

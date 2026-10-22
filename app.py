@@ -31,7 +31,7 @@ from database import (
     VisitLog, init_db,
     TaifexFuturesDaily, TaifexOptionDaily, TaifexFuturesInstitutional,
     TaifexOptionInstitutional, TaifexFuturesLargeTraders, TaifexOptionLargeTraders,
-    TaifexFuturesInstitutionalMini, TaifexOptionVix, CnnFearGreedIndex,
+    TaifexFuturesInstitutionalMini, TaifexOptionVix, CnnFearGreedIndex, MarketIndex,
 )
 
 logging.basicConfig(
@@ -1344,6 +1344,48 @@ def api_taifex_vix_history():
         db.close()
 
 
+
+@app.route('/api/market/index')
+def api_market_index():
+    """TAIEX daily OHLC for the overview K-line chart, last N calendar days
+    (default 180). Public, same as /api/market/summary."""
+    db = SessionLocal()
+    try:
+        days = int(request.args.get('days', 180))
+        cutoff = datetime.now(_TZ).date() - timedelta(days=days)
+        rows = (
+            db.query(MarketIndex)
+            .filter(MarketIndex.date >= cutoff)
+            .order_by(MarketIndex.date)
+            .all()
+        )
+        return jsonify([{
+            'date': str(r.date), 'open': r.open, 'high': r.high, 'low': r.low,
+            'close': r.close, 'change': r.change,
+            'change_pct': r.change_pct, 'trade_value': r.trade_value,
+        } for r in rows])
+    finally:
+        db.close()
+
+
+@app.route('/api/market/index/chanlun')
+def api_market_index_chanlun():
+    """纏論 on TAIEX, same algorithm/output as /api/stocks/<code>/chanlun
+    (own 250-day window, independent of the chart's visible range)."""
+    db = SessionLocal()
+    try:
+        lookback = int(request.args.get('lookback', 250))
+        rows = (
+            db.query(MarketIndex)
+            .filter(MarketIndex.high.isnot(None))
+            .order_by(MarketIndex.date)
+            .all()
+        )
+        row_dicts = [{'date': r.date, 'high': r.high, 'low': r.low, 'close': r.close} for r in rows]
+        return jsonify(chanlun.compute_chanlun(row_dicts, lookback=lookback))
+    finally:
+        db.close()
+
 @app.route('/api/taifex/fear-greed-history')
 def api_taifex_fear_greed_history():
     """CNN Fear & Greed Index 歷史趨勢，近N天（預設90），附帶同日期期貨
@@ -1860,6 +1902,9 @@ def api_run_crawler(task):
     elif task == 'taifex_data':
         _run_bg(sched._taifex_all_job)
 
+    elif task == 'market_index':
+        _run_bg(sched._market_index_job)
+
     elif task == 'director_holdings':
         _run_bg(crawler.crawl_director_holdings)
 
@@ -2177,6 +2222,7 @@ def api_admin_delete_user(user_id):
 _HEALTH_TASKS = [
     ('stock_list',              '股票清單'),
     ('daily_price',              '每日股價'),
+    ('market_index',             '加權指數'),
     ('monthly_revenue',          '月營收'),
     ('quarterly',                '季財報'),
     ('announcements',            '自結公告'),

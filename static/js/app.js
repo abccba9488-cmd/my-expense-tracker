@@ -39,6 +39,7 @@ document.getElementById('theme-btn').addEventListener('click', () => {
   localStorage.setItem('theme', next);
   document.getElementById('theme-btn').textContent = next === 'dark' ? '☀' : '🌙';
   redrawCharts();
+  if (state.taiexChart) renderTaiexChart();
 });
 
 /* ── Helpers ── */
@@ -174,6 +175,139 @@ async function loadMarketSummary() {
     if (!state.allData.length) showToast('載入股票清單失敗');
   }
 }
+
+/* ── TAIEX overview card ── */
+const _TAIEX_COLLAPSED_KEY = 'taiex_collapsed';
+
+// Same candle colors as the stock detail K-line (Taiwan convention: red = up)
+const _TAIEX_UP = '#ef4444', _TAIEX_DOWN = '#22c55e';
+
+async function loadTaiex() {
+  try {
+    const [idx, cl] = await Promise.all([
+      fetch('/api/market/index?days=180').then(r => r.json()),
+      fetch('/api/market/index/chanlun').then(r => r.json()).catch(() => null),
+    ]);
+    state.taiexData = idx;
+    state.taiexChanlun = (cl && cl.strokes) ? cl : null;
+  } catch (_) { return; }
+  if (!state.taiexData.length) return;
+  const card = document.getElementById('taiex-card');
+  const last = state.taiexData[state.taiexData.length - 1];
+  const arrow = last.change > 0 ? '▲' : last.change < 0 ? '▼' : '';
+  document.getElementById('taiex-close').textContent = Number(last.close).toLocaleString(undefined, { minimumFractionDigits: 2 });
+  const chg = document.getElementById('taiex-chg');
+  chg.style.color = last.change > 0 ? _TAIEX_UP : last.change < 0 ? _TAIEX_DOWN : '';
+  chg.textContent = `${arrow} ${Math.abs(last.change).toFixed(2)} (${fmt.pct(last.change_pct)})`;
+  const tv = last.trade_value ? `成交 ${Math.round(last.trade_value / 1e8).toLocaleString()} 億　` : '';
+  document.getElementById('taiex-meta').textContent = tv + last.date;
+  const sig = document.getElementById('taiex-signal');
+  const ls = state.taiexChanlun && state.taiexChanlun.latest_signal;
+  sig.textContent = state.taiexChanlun
+    ? `纏論：${ls ? `${_CHANLUN_SIGNAL_LABELS[ls.type]} ${fmt.price(ls.price)}（${ls.date}）` : '近期無訊號'}`
+    : '';
+  sig.style.color = ls ? (ls.type.endsWith('b') ? _TAIEX_DOWN : _TAIEX_UP) : '';
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(_TAIEX_COLLAPSED_KEY) === '1'; } catch (_) {}
+  card.classList.toggle('collapsed', collapsed);
+  card.classList.remove('hidden');
+  if (!collapsed) renderTaiexChart();
+}
+
+// K-line drawn the same way as renderPriceChart() (two floating-bar datasets on a
+// category axis) so the 纏論 overlay helpers line up by date label. Legend shows
+// one item per feature group (K線 / 纏論); clicking it toggles the whole group.
+function renderTaiexChart() {
+  if (state.taiexChart) { state.taiexChart.destroy(); state.taiexChart = null; }
+  const data = state.taiexData || [];
+  if (!data.length) return;
+  const labels = data.map(r => r.date);
+  const color = data.map(p => (p.close ?? 0) >= (p.open ?? p.close ?? 0) ? _TAIEX_UP : _TAIEX_DOWN);
+  const ohlcOk = p => p.open != null && p.high != null && p.low != null && p.close != null;
+  const datasets = [
+    { type: 'bar', label: 'K線', group: 'K線', order: 1, grouped: false,
+      data: data.map(p => ohlcOk(p) ? [p.open, p.close] : null),
+      backgroundColor: color, borderColor: color, borderWidth: 0,
+      minBarLength: 1, barPercentage: 0.8, categoryPercentage: 0.9 },
+    { type: 'bar', label: '_wick', group: 'K線', order: 2, grouped: false,
+      data: data.map(p => ohlcOk(p) ? [p.low, p.high] : null),
+      backgroundColor: color, borderWidth: 0, minBarLength: 1, barThickness: 1 },
+  ];
+
+  const cl = state.taiexChanlun;
+  let signalByDate = null;
+  if (cl && cl.strokes.length) {
+    const strokePoints = [{ date: cl.strokes[0].start_date, price: cl.strokes[0].start_price },
+      ...cl.strokes.map(s => ({ date: s.end_date, price: s.end_price }))];
+    signalByDate = new Map(cl.signals.map(s => [s.date, s]));
+    datasets.push(
+      { label: '筆', group: '纏論', data: _chanlunPointSeries(labels, strokePoints),
+        borderColor: '#a78bfa', borderWidth: 1.5, pointRadius: 0, fill: false,
+        tension: 0, spanGaps: true },
+      { label: '中樞上緣', group: '纏論', data: _chanlunCenterSeries(labels, cl.centers, 'zg'),
+        borderColor: 'transparent', pointRadius: 0, stepped: true, spanGaps: false,
+        fill: '+1', backgroundColor: getCssVar('--text2') + '22' },
+      { label: '中樞下緣', group: '纏論', data: _chanlunCenterSeries(labels, cl.centers, 'zd'),
+        borderColor: 'transparent', pointRadius: 0, stepped: true, spanGaps: false, fill: false },
+      { label: '買點', group: '纏論', data: _chanlunSignalSeries(labels, cl.signals, true),
+        showLine: false, fill: false, pointStyle: 'triangle', rotation: 0, pointRadius: 6,
+        pointBackgroundColor: '#22c55e', borderColor: '#22c55e' },
+      { label: '賣點', group: '纏論', data: _chanlunSignalSeries(labels, cl.signals, false),
+        showLine: false, fill: false, pointStyle: 'triangle', rotation: 180, pointRadius: 6,
+        pointBackgroundColor: '#ef4444', borderColor: '#ef4444' },
+    );
+  }
+
+  const opts = chartOptions();
+  opts.animation = false;  // sparse signal points stick at the baseline when animated (see renderPriceChart)
+  opts.scales.x.offset = true;
+  opts.scales.x.ticks = { ...opts.scales.x.ticks, maxTicksLimit: 8, maxRotation: 0,
+    callback(v) { return this.getLabelForValue(v).slice(5); } };
+  opts.scales.y.beginAtZero = false;
+  const isGroupHead = d => d.label === 'K線' || d.label === '筆';
+  opts.plugins.legend.labels.filter = item => isGroupHead(datasets[item.datasetIndex]);
+  opts.plugins.legend.labels.generateLabels = chart =>
+    Chart.defaults.plugins.legend.labels.generateLabels(chart).map(item => {
+      const d = datasets[item.datasetIndex];
+      return { ...item, text: d.group, fillStyle: d.label === 'K線' ? _TAIEX_UP : '#a78bfa',
+               strokeStyle: 'transparent' };
+    });
+  opts.plugins.legend.onClick = (e, item, legend) => {
+    const chart = legend.chart;
+    const group = datasets[item.datasetIndex].group;
+    const show = !chart.isDatasetVisible(item.datasetIndex);
+    chart.data.datasets.forEach((d, i) => { if (d.group === group) chart.setDatasetVisibility(i, show); });
+    chart.update();
+  };
+  opts.plugins.tooltip.filter = item => item.dataset.label !== '_wick';
+  opts.plugins.tooltip.callbacks = {
+    label(ctx) {
+      const label = ctx.dataset.label;
+      if (label === 'K線') {
+        const p = data[ctx.dataIndex];
+        return `開 ${fmt.price(p.open)}  高 ${fmt.price(p.high)}  低 ${fmt.price(p.low)}  收 ${fmt.price(p.close)}`;
+      }
+      if (signalByDate && (label === '買點' || label === '賣點')) {
+        const s = signalByDate.get(labels[ctx.dataIndex]);
+        return s ? `${_CHANLUN_SIGNAL_LABELS[s.type]} ${fmt.price(s.price)}` : label;
+      }
+      return `${label}: ${ctx.formattedValue}`;
+    },
+  };
+
+  state.taiexChart = new Chart(document.getElementById('taiex-chart'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: opts,
+  });
+}
+
+document.getElementById('taiex-toggle').addEventListener('click', () => {
+  const card = document.getElementById('taiex-card');
+  const collapsed = card.classList.toggle('collapsed');
+  try { localStorage.setItem(_TAIEX_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) {}
+  if (!collapsed) renderTaiexChart();
+});
 
 function populateIndustryFilter() {
   const sel = document.getElementById('industry-filter');
@@ -6016,6 +6150,7 @@ initInstallButton();
 initNotifications();
 initAboutDot();
 loadMarketSummary();
+loadTaiex();
 initAuth();
 setInterval(loadStats, 60000);
 initNotifyPoller();

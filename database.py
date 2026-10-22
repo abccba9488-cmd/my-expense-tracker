@@ -672,6 +672,31 @@ class CnnFearGreedIndex(Base):
     rating = Column(String(20))
 
 
+class MarketIndex(Base):
+    """TWSE 發行量加權股價指數（TAIEX）每日收盤，來源 TWSE
+    `exchangeReport/FMTQIK`（每月市場成交資訊：收盤/漲跌點/成交量值）＋
+    `indicesReport/MI_5MINS_HIST`（每月指數開高低收），兩支都一次回傳整月
+    逐日資料、爬蟲按日期合併。股票總覽頁頂端的大盤 K 線＋纏論圖用。
+    `change_pct` 是爬蟲用 change / (close - change) 推算的，TWSE 本身不提供。
+    trade_value 單位元、volume 單位股（含零股/盤後/鉅額，見 TWSE 原始 notes）。"""
+    __tablename__ = 'market_index'
+    __table_args__ = (
+        UniqueConstraint('date'),
+        Index('ix_mi_date', 'date'),
+    )
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    date         = Column(Date, nullable=False)
+    open         = Column(Float)
+    high         = Column(Float)
+    low          = Column(Float)
+    close        = Column(Float)
+    change       = Column(Float)
+    change_pct   = Column(Float)
+    trade_value  = Column(BigInteger)
+    volume       = Column(BigInteger)
+    transactions = Column(BigInteger)
+
+
 def _migrate_q4_to_individual(conn):
     """Convert Q4 annual cumulative data to individual Q4 by subtracting Q1+Q2+Q3."""
     for field in ('eps', 'revenue', 'operating_income', 'net_income'):
@@ -960,6 +985,16 @@ def init_db():
         for col, coltype in (('ai_rating', 'VARCHAR(30)'), ('ai_analysis', 'TEXT')):
             try:
                 conn.execute(text(f'ALTER TABLE announcements ADD COLUMN {col} {coltype}'))
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
+    # Migration: add OHLC to market_index (first shipped close-only, K-line
+    # chart added a day later; the scheduler backfills the NULL history)
+    with engine.connect() as conn:
+        for col in ('open', 'high', 'low'):
+            try:
+                conn.execute(text(f'ALTER TABLE market_index ADD COLUMN {col} REAL'))
                 conn.commit()
             except Exception:
                 pass  # Column already exists
