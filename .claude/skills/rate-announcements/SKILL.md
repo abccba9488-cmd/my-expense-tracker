@@ -32,11 +32,21 @@ description: 把「自結公告」頁面裡尚未評級的公告，逐筆用 Cha
 
 **Step 1 — 取得提示詞**：主站分頁上用 `javascript_tool` 直接呼叫頁面既有的 `copyAnnRatingPrompt`/`_annData` 邏輯取得這筆的完整提示詞文字（不用真的點 📋 觸發它的複製到剪貼簿+開分頁副作用，直接讀 `_annData[idx]` 組出的內容即可，跟按鈕組出來的是同一份）。
 
+**跨分頁傳遞提示詞的雷（2026-10-07 實測）**：主站分頁組好的提示詞要「讀出來」再寫進 ChatGPT 分頁，但 `javascript_tool` 回傳內容若含公告表格常見的 `=====` 分隔線、`&gt;` 等字元，會被瀏覽器工具整段擋下（`[BLOCKED: Cookie/query string data]`），長內容也會被截斷（約 1,000~1,500 字）。穩定作法：
+- 主站分頁讀資料時把 `=`/`&`/`;` 換成替代字元（例如 `⁼`/`⅋`/`⁏`）再回傳，並分段讀（例如先讀到「6.完整財務資訊」之前，再讀後段）。
+- 在 ChatGPT 分頁把提示詞模板（`copyAnnRatingPrompt()` 的固定文字，含 `@@KNOWN@@` 等佔位符）存進 `localStorage`，每筆只填入數字欄位與公告內容，`=` 線用 `'='.repeat(n)` 還原。
+- **送出前一定要比對雜湊**：主站分頁對 `copyAnnRatingPrompt` 組出的原文算簡單 hash（`h=(h*31+codePoint)|0`）＋長度，ChatGPT 分頁重建後算同一個 hash，一致才送出。實測曾抓到「自結損益公告:」後面少一個「無」這種一字之差。
+- 開新對話用點擊 `[data-testid="create-new-chat-button"]`（SPA 切換，`window` 上的輔助函式不會消失），不要 `navigate` 重新載入。
+
+**更簡單的替代作法（2026-10-17 實測可行）**：不從主站分頁讀提示詞，改用 Bash `curl http://127.0.0.1:5000/api/announcements/today` 取得資料，把該筆的 `monthly_eps`/`prior_year_eps`/`eps_yoy`/`turnaround`/`estimated_annual_eps`/`estimated_pe`/`name`/`stock_code`/`subject`/`content` 直接寫進 ChatGPT 分頁的 `javascript_tool` 程式碼（**輸入**方向不會被擋，只有輸出會），在 ChatGPT 分頁用一份照抄 `copyAnnRatingPrompt()` 的 `__build(a)` 組提示詞——數字格式自然跟前端一致（JS 的 `13.0` 印成 `13`），不需要雜湊比對。
+
+**ChatGPT 介面現況（2026-10-17）**：輸入框是 `.ProseMirror[contenteditable="true"]`，但 SPA 切換對話後頁面會殘留**多個隱藏的** ProseMirror（舊草稿還在裡面），一定要挑 `offsetParent !== null` 的那個，先 `selectAll`+`delete` 清空再 `insertText`，送出前檢查內容只含這一筆股票名、且「你是一位專業」只出現一次；送出鍵是 `button[aria-label="傳送"]`（同樣挑可見的）；開新對話點側欄文字為「新對話」的元素（`create-new-chat-button` testid 已不存在）。`[data-message-author-role]` 也不存在了，讀回覆改用 `document.body.innerText` 取最後一個「ChatGPT 說：」到「ChatGPT 可能會出錯」之間（`get_page_text` 會混入前幾個對話殘留的隱藏 DOM，別被誤導以為訊息被串在一起；用 `body.innerText` 數「你說：」次數確認）。
+
 **Step 2 — 開 ChatGPT 分頁並貼上**：用 `tabs_create_mcp` 開新分頁到 `https://chatgpt.com`。**剪貼簿貼上在這個瀏覽器自動化環境裡實測不可靠**（貼上內容經常是錯誤/舊內容），改用穩定作法：`javascript_tool` 對輸入框先 focus，再 `document.execCommand('insertText', false, promptText)` 直接寫入文字，然後送出（Enter 或點送出鍵）。**送出鍵有時第一次點擊不會真的送出**，送出後檢查網址是否從首頁變成帶對話ID的網址，沒變就重試一次或改用 `el.click()`。
 
-**Step 3 — 等待回覆**：分段 `wait`（例如先等 10 秒），用截圖或 `get_page_text` 確認送出鍵/停止鍵狀態是否還在變化，必要時再多等幾輪，最多等到約 90 秒。逾時仍無回覆、或出現額度/錯誤訊息，記錄這筆失敗（略過評級與筆記），跳到下一筆。
+**Step 3 — 等待回覆**：分段 `wait`（例如先等 10 秒），用截圖或 `get_page_text` 確認送出鍵/停止鍵狀態是否還在變化，必要時再多等幾輪，最多等到約 90 秒。逾時仍無回覆、或出現額度/錯誤訊息，記錄這筆失敗（略過評級與筆記），跳到下一筆。**注意**：ChatGPT 分頁在背景時（焦點在主站分頁）`setTimeout` 會被節流、回覆內容也不會完整渲染——`javascript_tool` 裡不要放長時間 `await setTimeout`（會撞 45 秒 CDP 逾時），等待改用 `computer` 的 `wait`；讀回覆前先對 ChatGPT 分頁 `screenshot` 一次讓它變成前景，否則讀到的只有來源標籤（「Yahoo奇摩股市 +1」之類）。`stop-button` 是否存在也不可靠，以截圖看到結論段落、或文字長度連續兩次不變為準。
 
-**Step 4 — 讀取回覆並判斷評級**：`javascript_tool` 讀出 ChatGPT 最後一則回覆訊息的 `innerText` 全文（不用點 ChatGPT 自己的複製按鈕，同樣是剪貼簿不可靠的緣故）。判斷屬於 🔴強烈買進／🟠建議買進／🟡一般觀望／🟢需要小心 四選一。若回覆含糊、對不到明確選項，記錄失敗，跳過評級與筆記，繼續下一筆。
+**Step 4 — 讀取回覆並判斷評級**：`javascript_tool` 讀出 ChatGPT 最後一則回覆訊息（`[data-message-author-role="assistant"]`，不要用「最長的 `.markdown`」，會抓到來源面板）的 `innerText` 全文（不用點 ChatGPT 自己的複製按鈕，同樣是剪貼簿不可靠的緣故）。判斷屬於 🔴強烈買進／🟠建議買進／🟡一般觀望／🟢需要小心 四選一。若回覆含糊、對不到明確選項，記錄失敗，跳過評級與筆記，繼續下一筆。
 
 **Step 5 — 關閉分頁、切回主站**：`tabs_close_mcp` 關掉 ChatGPT 分頁，切回主站分頁。
 
