@@ -93,6 +93,7 @@ def _build_strokes(merged, fractals, min_gap=4):
             'start_idx': a['idx'], 'end_idx': b['idx'],
             'start_price': a['price'], 'end_price': b['price'],
             'start_date': str(merged[a['idx']]['date']), 'end_date': str(merged[b['idx']]['date']),
+            'end_orig_idx': merged[b['idx']]['orig_idx'],
             'direction': 'up' if b['type'] == 'top' else 'down',
         })
     return strokes, points

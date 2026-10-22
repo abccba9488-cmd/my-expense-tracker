@@ -64,6 +64,7 @@ EXPERT_LABELS = {
     'chanlun_buy':  '纏論買點',
     'chanlun_sell': '纏論賣點',
     'chanlun_star': '纏論買點+營收飆股',
+    'chanlun_down_stroke': '纏論向下筆完成',
     'flag888_guyu': '888標準3+股魚',
     'wl823_pullback': '自選8/23 拉回5日線',
     'accumulation': '主力吸貨',
@@ -75,7 +76,7 @@ EXPERT_LABELS = {
 # chanlun_buy/sell 是 2026-08-22 新增的第二個實驗性項目，見 _score_chanlun()。
 # wl823_pullback 是 2026-09-22 新增，見 score_wl823_pullback()。
 EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star', 'flag888_guyu', 'wl823_pullback',
-                        'accumulation', 'trust_buy'}
+                        'accumulation', 'trust_buy', 'chanlun_down_stroke'}
 
 # 只有管理員能看到的規則（2026-08-30 新增，chanlun_star 是第一個，
 # flag888_guyu 是同一天稍後新增的第二個，wl823_pullback 是 2026-09-22 新增
@@ -83,7 +84,7 @@ EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlu
 # 不同層級，這裡是真正的存取控制：/api/experts（列表）跟 /api/experts/<key>
 # （明細）都要擋，不是只藏前端分頁，比照 taifex/AI分析等既有的 admin-only
 # 慣例。
-ADMIN_ONLY_EXPERTS = {'chanlun_star', 'flag888_guyu', 'wl823_pullback'}
+ADMIN_ONLY_EXPERTS = {'chanlun_star', 'flag888_guyu', 'wl823_pullback', 'chanlun_down_stroke'}
 
 # wl823_pullback 資料來源是管理員自己的自選股清單「8/23」（不是全市場），
 # 跟其餘規則性質不同——直接寫死清單擁有者帳號（跟 app.py 的 ADMIN_USERNAME
@@ -1303,6 +1304,30 @@ def score_trust_buy(ctx):
     return s.result()
 
 
+_DOWN_STROKE_MAX_BARS = 3  # 頂分型距今最多幾個交易日（K棒數）
+
+
+def score_chanlun_down_stroke(ctx):
+    """纏論「由高點向下的筆」近期完成（2026-10-16 新增，**admin-only**）：
+    最後一筆是向下筆（頂分型→底分型，間隔>=4根合併K線），且終點底分型
+    K棒距最新K棒 1～_DOWN_STROKE_MAX_BARS 個交易日——也就是向下筆剛完成。
+    底分型若後續被更低的底取代，終點日期會往後移（每天全量重算，同
+    chanlun_buy/sell 的抖動特性）。"""
+    s = ScoreCard()
+    cl = ctx.get('chanlun') or {}
+    strokes = cl.get('strokes') or []
+    last = strokes[-1] if strokes else None
+    bars = None
+    if last and last['direction'] == 'down' and last.get('end_orig_idx') is not None:
+        bars = cl['raw_count'] - 1 - last['end_orig_idx']
+    ok = bars is not None and 1 <= bars <= _DOWN_STROKE_MAX_BARS
+    s.require(f'近{_DOWN_STROKE_MAX_BARS}個交易日內完成一筆向下筆', ok)
+    if ok:
+        s.award(f'{last["start_price"]}（{last["start_date"]}）→ {last["end_price"]}（{last["end_date"]}，{bars}天前完成）',
+                True, 100, approx=True)
+    return s.result()
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -1317,6 +1342,7 @@ SCORERS = {
     'chanlun_buy': score_chanlun_buy,
     'chanlun_sell': score_chanlun_sell,
     'chanlun_star': score_chanlun_star,
+    'chanlun_down_stroke': score_chanlun_down_stroke,
     'flag888_guyu': score_flag888_guyu,
     'wl823_pullback': score_wl823_pullback,
     'accumulation': score_accumulation,
