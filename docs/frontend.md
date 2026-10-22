@@ -76,6 +76,8 @@
 - **功能群組切換列**（2026-10-01）：Chart.js 內建圖例關掉（`legend.display=false`），改由 `_renderPriceChartGroups()` 在圖表上方動態插入 `#price-chart-groups`（JS 建立，不在 `index.html`），每個功能一顆膠囊按鈕（K線／成交量／均線／投信成本／籌碼峰／纏論／回測進出場），一次顯示/隱藏該功能的所有 dataset；隱藏狀態存 `localStorage`（`price_chart_hidden_groups`），切換股票／天數重繪後保留。**dataset 依 label 對應群組（`_priceChartGroupOf()`）——新增疊圖要記得加進去，否則會落到「其他」群組**。
 - **暖機資料**：`_fetchPriceSeries()`／`_fetchInstTradeSeries()` 會多抓 `_CHART_WARMUP_DAYS`（200 曆日，涵蓋 120 交易日）讓 60 日線與投信成本線在圖表最左邊就有值；`state.prices` 存的是含暖機的完整序列，`_visiblePrices()` 依 `state.priceDays` 裁回使用者選的區間，圖表 x 軸與下方股價明細表都只吃裁過的資料。「全部」（9999）不額外多抓。
 
+**股價走勢卡片置頂（2026-10-15）**：使用者要求股價圖放在詳情頁最上方，`index.html` 把整張「股價走勢」卡片連同 `.detail-nav-bar-mid` 移到 `detail-header` 之後、AI 個股分析卡片之前；回測卡片說明文字的「下方股價走勢圖」同步改成「上方」。
+
 ### 個股詳情頁：上一檔 / 下一檔導覽
 
 `.detail-nav-btns`（`.nav-prev-btn`/`.nav-next-btn`）在詳情頁沿用「使用者是從哪個列表點進來的」那份清單與目前排序/篩選，而不是固定用代號順序：呼叫進入前的表格用 `setDetailNavContext(codes, currentCode)` 記下 `state.detailNavList`/`state.detailNavIndex`；DataTables 表格用 `_dtOrderedCodes(dt, codeColIndex)`（`dt.rows({order:'applied', search:'applied'}).data()`）取出「目前排序+篩選後」的完整代號順序，不只是當前頁面那幾筆。`goToAdjacentStock(delta)` 直接呼叫 `loadStockDetail(list[newIdx])` 切換，按鈕在清單頭尾自動 disable。
