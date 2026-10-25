@@ -44,6 +44,11 @@
 
 **`chanlun_down_stroke`（纏論向下筆完成，2026-10-16 新增，實驗性且 admin-only）**：使用者要「三天內完成由高點向下畫的筆」（一開始做成「頂分型剛確認、向下筆正在畫」，使用者澄清要的是**完成**的向下筆，同日改）。`score_chanlun_down_stroke()`：`compute_chanlun()` 最後一筆是向下筆（頂分型→底分型），且終點底分型K棒距最新K棒 1～3 個交易日（`_DOWN_STROKE_MAX_BARS`）。為了算交易日數，`_build_strokes()` 的每一筆新增 `end_orig_idx`（終點合併K線對應的原始K棒索引），`raw_count-1-end_orig_idx` 就是距今K棒數；合併K線的日期是「最後被併入的那根」，有包含關係時天數會比真正的低點K棒少算。底分型若之後被更低的底取代，終點會往後移（同 chanlun_buy/sell 的抖動特性）。
 
+**`etf_down_stroke_hold`（ETF成份股 向下筆第4天守低，2026-10-25 新增，實驗性且 admin-only）**：使用者先要一次性篩選「買的最多的前5大ETF成份股裡，纏論左上往右下畫完成的筆、第4天還沒跌破筆最低價」，確認結果後要求做成每天自動挑股、只有自己看得到。
+- **成份股範圍**：`crawler.crawl_etf_holdings()`（`_finmind_job()` 裡、`compute_expert_scores()` 之前跑）→ `etf_holdings` 表。「買的最多」定義為**集保受益人數**（OpenData `getOD.ashx?id=1-5` 股權分散表，持股分級17＝合計人數，證券代號欄位右側補空白要 strip；ETF 代號用 `^00(?!0)\d{2,4}[A-Z]?$` 判斷，排除 `000xxx` 非ETF代號）。成份股抓 MoneyDJ `Basic0007a` 持股明細（月底全持股表 `id=Repeater1`，只有名稱沒有代號，用 `stocks.name` 對回；**回應沒帶 charset，`requests` 會猜成 ISO-8859-1，一定要手動 `resp.encoding='utf-8'`**，不然中文名稱全亂碼、0 筆對得上）。DB 裡另有一張 `tdcc_holders` 表數字一樣，但不是 repo 內任何程式寫的（日期不規則），刻意不依賴它。
+- **判斷**（`_down_stroke_hold_snapshot()` 在 `_flush_tech()` 裡跟纏論一起算）：最後一筆是向下筆；找出真正印出筆最低價的那根原始K棒（從 `end_orig_idx` 往回找 `low==end_price`，因為合併K線日期是最後被併入的那根）；低點當天＝第1天，最新K棒要剛好是第4天（`_DOWN_STROKE_HOLD_DAY`）；第2～4天盤中最低 `>=` 筆低點（等於不算跌破）。第4天被跌破時，因最新K棒還不能確認新底分型，筆終點仍停在舊低點，所以會被正確排除。
+- 「第4天」的算法是跟使用者確認語意後選的：若改成「低點之後第4根」，2026-10-22 那天前5大ETF成份股是 0 檔。上線當天驗證：全市場重算結果（15檔）跟一次性腳本手算結果逐檔一致。
+
 **重要 gotcha：Chart.js 進場動畫會讓稀疏散點 dataset 的所有點位塌陷到 y 軸 baseline（2026-08-22 除錯半天才定位）**——買/賣點 dataset（`showLine:false`，大多數索引是 `null`，只有訊號那幾個日期有值）建立時，Chart.js 的預設進場動畫會讓這些點卡在動畫起始位置（baseline），完全不會過渡到實際數值對應的高度，不管資料/dataset 順序/canvas 是否重用怎麼調都一樣。**排查過程**：一開始誤判是 `chartOptions()` 的 `interaction.mode:'index'` 造成的（改成 `'nearest'` 沒用）、也懷疑過 Filler plugin／canvas 重用／dataset object 被 Chart.js 內部快取污染（用 `{...d}` 淺拷貝丟進全新 canvas 意外「修好」了，一度誤導方向）——最後用真實資料+真實 `chartOptions()` 逐一拔掉 `opts` 的欄位二分排查，鎖定就是 `animation` 本身：只要 `animation:false`，稀疏散點 dataset 就會正確定位；`animation` 預設開啟（或設成 `{}`）就會壞，跟 `interaction`/`fill`/dataset 順序都無關。修法：`renderPriceChart()` 偵測到有纏論資料時，直接在該次渲染的 `opts.animation = false`（這張圖表本來就是資料變動就整個重繪，進場動畫沒有實質意義，不影響其他圖表）。**未來任何要在這個專案的 Chart.js 圖表上疊加 `showLine:false` 的稀疏散點 dataset，都要記得順便關閉 animation**，不然會踩到同一個坑。
 
 ## 力道K線（`force_kline.py`/`backtest_force_kline.py`，2026-08-24 新增，**Phase A：只有計算+回測，尚未接前端，計畫是 admin-only**）

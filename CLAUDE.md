@@ -70,7 +70,7 @@ foreach ($p in $pids) { Stop-Process -Id $p -Force -Confirm:$false }
 $env:FINMIND_TOKEN = [Environment]::GetEnvironmentVariable("FINMIND_TOKEN","User")
 Start-Process -FilePath "C:\Users\user\anaconda3\python.exe" -ArgumentList "app.py" -WorkingDirectory "C:\Users\user\Documents\claude\VSCode\stock-analysis" -WindowStyle Minimized
 ```
-重啟前確認沒有正在跑、會呼叫本站 API 的背景工作（例如 `/rate-announcements`）。
+重啟前確認沒有正在跑、會呼叫本站 API 的背景工作（例如 `/rate-announcements`）。**重啟後再跑一次 `Get-NetTCPConnection -LocalPort 5000 -State Listen` 確認 PID 是新的**——2026-10-25 實測上面那段 `Stop-Process` 沒把舊行程殺掉（無錯誤訊息），新行程照樣啟動但 5000 port 仍由舊行程服務，API 回的是舊程式碼的結果；再對舊 PID 單獨 `Stop-Process -ErrorAction Stop` 才生效。
 
 **改了 `experts.py`／`chanlun.py` 等計分邏輯，一定要重啟伺服器**：在跑的 Flask 行程還是舊程式碼，`POST /api/crawler/run/expert_scores` 會用舊邏輯重算，而且每天 17:00 排程也會用舊邏輯把結果蓋回去。想不經伺服器直接重算（約 2 分鐘）：`C:\Users\user\anaconda3\python.exe -c "import experts; experts.compute_expert_scores()"`。
 
@@ -97,7 +97,7 @@ finmind_client.py  FinMind API 薄封裝（crawler.py 的 crawl_finmind_* 函式
 technical.py    純 Python 技術指標（EMA/MACD/RSI/KD），達人選股股泰規則用
 chip_peak.py    純 Python 籌碼峰計算（POC/VAH/VAL，時間衰減＋法人品質加權），見「籌碼峰」章節
 chanlun.py      純 Python 纏論計算（K線合併/分型/筆/中樞/背馳/買賣點），見「纏論」章節
-experts.py      達人選股計分引擎（`SCORERS` 共 18 套：9 套公開規則 + 9 套實驗規則，其中 4 套 admin-only），見「達人選股」章節
+experts.py      達人選股計分引擎（`SCORERS` 共 19 套：9 套公開規則 + 10 套實驗規則，其中 5 套 admin-only），見「達人選股」章節
 crawler_taifex.py    台指期貨/選擇權籌碼爬蟲（FinMind），見「期權籌碼分析」章節
 taifex_analysis.py   期權籌碼衍生計算（PC Ratio/支撐壓力/大戶多空比），見「期權籌碼分析」章節
 crawler_fear_greed.py  CNN Fear & Greed Index 爬蟲（唯一非台股/非FinMind資料源），見「期權籌碼分析」章節
@@ -158,6 +158,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | `dividend_policy` | `(stock_code, event_date)` | 逐筆股利分派事件（非年度加總），FinMind。個股詳情頁「股利政策」區塊有「回補最新資料」按鈕（2026-08-23 新增，任何登入使用者可用）——`crawler.backfill_dividend_policy(code)` 對這一支股票用 `data_id` 查全部歷史（已用真實 API 驗證單一股票、寬日期範圍一次查詢可靠，不像下方兩個 crawler 函式要逐日查詢），修過去 `FINMIND_TOKEN` 未設定期間造成的資料缺口，也能單純確認某股票近期真的沒有新股利事件 |
 | `dividend_fill_events` | `(stock_code, ex_date)` | 除權息事件 + 填息判斷，FinMind |
 | `director_holdings` | `(stock_code, year_month)` | 董監持股比例，TWSE/TPEX OpenAPI（非 FinMind） |
+| `etf_holdings` | `(etf_code, stock_code)` | 受益人數前5大ETF成份股（集保 OpenData 排名＋MoneyDJ 月底持股），每次整表覆蓋，`etf_down_stroke_hold` 用，見 `docs/chanlun.md` |
 | `broker_trades` | `(stock_code, date, broker_id)` | 券商分點單日買賣超（股），FinMind `TaiwanStockTradingDailyReport`，見 `docs/chips.md`「券商分點進出」 |
 | `expert_scores` | `(stock_code, expert_key)` | 達人選股每套規則最新一次計分快取；`entered_at`/`transition` 是唯二跨執行延續（不覆寫）的欄位，見 `docs/experts.md`「達人選股」 |
 | `users` | `id` | 會員帳號，`password_hash` 用 werkzeug |
@@ -275,7 +276,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 **本機 `app.run()` 沒開 `threaded=True` 曾經導致「網站看起來當機」（2026-08-05 修復）**：Werkzeug 開發伺服器預設單執行緒，同一時間只能處理一個 HTTP 請求。若背景同時有 `quarterly`（逐檔迴圈）+ `finmind_data`（5個 FinMind 任務 + `compute_expert_scores()` 這種吃 CPU 的純 Python 全市場計分）在跑，會把僅有的請求處理能力整個佔滿，使用者端首頁／`/api/market/summary` 會直接卡到逾時，看起來像伺服器當機，但其實 process 沒死、資料也沒事，只是排隊排不到。已在 `app.py` 的 `app.run(...)` 加上 `threaded=True` 解決；雲端 gunicorn（`--workers 1 --threads 4`）本來就沒有這個問題，只有本機直接執行才會踩到。
 
-手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `broker_trades` / `director_holdings` / `expert_scores` / `taifex_data`（等同依序呼叫 `_taifex_job()` + `_taifex_institutional_job()`）/ `market_index`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
+手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `broker_trades` / `director_holdings` / `etf_holdings` / `expert_scores` / `taifex_data`（等同依序呼叫 `_taifex_job()` + `_taifex_institutional_job()`）/ `market_index`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 前5大ETF成份股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
 
 **新增一個爬蟲任務要同步的地方**：①`crawler.py`（或 `crawler_*.py`）的 `_log('<task>', ...)` task 名稱 → ②`app.py` `_HEALTH_TASKS`（同名，後台健康面板才看得到） → ③`app.py` `POST /api/crawler/run/<task>` 加分支 → ④`scheduler.py` job + `start()` 註冊 → ⑤本檔排程表與上方手動觸發 task 清單。新資料表另外要在 `database.py` 加 model（`init_db()` 的 `create_all` 會自動建表，之後加欄位才需要 ALTER migration）。
 

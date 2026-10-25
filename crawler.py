@@ -23,7 +23,7 @@ from database import (
     QuarterlyFinancial, CrawlerLog, Announcement, StockAiAnalysis,
     InstitutionalTrade, HoldingConcentration, FinancialExtra,
     DividendPolicy, DividendFillEvent, DirectorHolding,
-    BrokerTrade, WatchlistStock, MarginTrade, MarketIndex,
+    BrokerTrade, WatchlistStock, MarginTrade, MarketIndex, EtfHolding,
 )
 import finmind_client
 
@@ -2161,6 +2161,85 @@ def crawl_director_holdings():
         db.rollback()
         _log('director_holdings', 'failed', str(e))
         logger.exception('crawl_director_holdings failed')
+        raise
+    finally:
+        db.close()
+
+
+_TDCC_DIST_URL = 'https://opendata.tdcc.com.tw/getOD.ashx?id=1-5'
+_MONEYDJ_HOLDINGS_URL = 'https://www.moneydj.com/ETF/X/Basic/Basic0007a.xdjhtm?etfid={code}.TW'
+_ETF_CODE_RE = re.compile(r'^00(?!0)\d{2,4}[A-Z]?$')  # 0050/00878/00981A; excludes 000xxx non-ETF codes
+
+
+def _top_etfs_by_holders(top_n):
+    """集保股權分散表（每週更新、全市場一個CSV約2MB），持股分級17＝合計，
+    「人數」即受益人數。證券代號欄位右側補空白，要 strip。"""
+    resp = _get(_TDCC_DIST_URL, timeout=90)
+    resp.encoding = 'utf-8-sig'
+    holders = {}
+    for line in resp.text.splitlines()[1:]:
+        parts = line.split(',')
+        if len(parts) < 4 or parts[2].strip() != '17':
+            continue
+        code = parts[1].strip()
+        if _ETF_CODE_RE.match(code):
+            holders[code] = int(parts[3])
+    return sorted(holders.items(), key=lambda kv: -kv[1])[:top_n]
+
+
+def _parse_moneydj_holdings(html):
+    """MoneyDJ 持股明細頁的全持股表（id=Repeater1）：名稱 col05、比例 col07。
+    回傳 (資料日期, [(名稱, 比例%)])。"""
+    i = html.find('id="Repeater1"')
+    if i < 0:
+        return None, []
+    m = re.search(r'資料日期：([\d/]+)', html[max(0, i - 300):i])
+    rows = re.findall(r'col05">([^<]+)</td>\s*<td class="col06">[^<]*</td>\s*<td class="col07">([\d.]+)</td>',
+                      html[i:])
+    return (m.group(1) if m else None), [(n.strip(), float(w)) for n, w in rows]
+
+
+def crawl_etf_holdings(top_n=5):
+    """受益人數前 top_n 大 ETF 的成份股，整表覆蓋 etf_holdings。ETF 排名來自
+    集保 OpenData，成份股來自 MoneyDJ（只有名稱，用 stocks.name 對回代號，
+    對不到的（海外股/現金等）略過）。"""
+    _log('etf_holdings', 'running')
+    db = SessionLocal()
+    try:
+        top = _top_etfs_by_holders(top_n)
+        if not top:
+            _log('etf_holdings', 'success', '0 ETFs (empty TDCC response)')
+            return 0
+        name_to_code = {name: code for code, name in db.query(Stock.code, Stock.name).all()}
+        records, unmapped = [], 0
+        for rank, (etf, holders) in enumerate(top, 1):
+            resp = _get(_MONEYDJ_HOLDINGS_URL.format(code=etf), timeout=60)
+            resp.encoding = 'utf-8'  # no charset in Content-Type, requests falls back to ISO-8859-1
+            data_date, rows = _parse_moneydj_holdings(resp.text)
+            for name, weight in rows:
+                code = name_to_code.get(name)
+                if not code:
+                    unmapped += 1
+                    continue
+                records.append({'etf_code': etf, 'etf_rank': rank, 'etf_holders': holders,
+                                'stock_code': code, 'weight': weight, 'data_date': data_date,
+                                'updated_at': datetime.now(_TZ)})
+            _jitter(0.8)
+
+        # Keep the previous snapshot if every holdings page came back empty
+        if not records:
+            _log('etf_holdings', 'failed', f'0 holdings parsed for {[e for e, _ in top]}')
+            return 0
+        db.execute(text('DELETE FROM etf_holdings'))
+        db.execute(EtfHolding.__table__.insert(), records)
+        db.commit()
+        _log('etf_holdings', 'success',
+             f'{",".join(e for e, _ in top)}: {len(records)} holdings, {unmapped} unmapped')
+        return len(records)
+    except Exception as e:
+        db.rollback()
+        _log('etf_holdings', 'failed', str(e))
+        logger.exception('crawl_etf_holdings failed')
         raise
     finally:
         db.close()

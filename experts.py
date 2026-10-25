@@ -65,6 +65,7 @@ EXPERT_LABELS = {
     'chanlun_sell': '纏論賣點',
     'chanlun_star': '纏論買點+營收飆股',
     'chanlun_down_stroke': '纏論向下筆完成',
+    'etf_down_stroke_hold': 'ETF成份股 向下筆第4天守低',
     'flag888_guyu': '888標準3+股魚',
     'wl823_pullback': '自選8/23 拉回5日線',
     'accumulation': '主力吸貨',
@@ -76,7 +77,7 @@ EXPERT_LABELS = {
 # chanlun_buy/sell 是 2026-08-22 新增的第二個實驗性項目，見 _score_chanlun()。
 # wl823_pullback 是 2026-09-22 新增，見 score_wl823_pullback()。
 EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlun_star', 'flag888_guyu', 'wl823_pullback',
-                        'accumulation', 'trust_buy', 'chanlun_down_stroke'}
+                        'accumulation', 'trust_buy', 'chanlun_down_stroke', 'etf_down_stroke_hold'}
 
 # 只有管理員能看到的規則（2026-08-30 新增，chanlun_star 是第一個，
 # flag888_guyu 是同一天稍後新增的第二個，wl823_pullback 是 2026-09-22 新增
@@ -84,7 +85,8 @@ EXPERIMENTAL_EXPERTS = {'momentum_guard', 'chanlun_buy', 'chanlun_sell', 'chanlu
 # 不同層級，這裡是真正的存取控制：/api/experts（列表）跟 /api/experts/<key>
 # （明細）都要擋，不是只藏前端分頁，比照 taifex/AI分析等既有的 admin-only
 # 慣例。
-ADMIN_ONLY_EXPERTS = {'chanlun_star', 'flag888_guyu', 'wl823_pullback', 'chanlun_down_stroke'}
+ADMIN_ONLY_EXPERTS = {'chanlun_star', 'flag888_guyu', 'wl823_pullback', 'chanlun_down_stroke',
+                      'etf_down_stroke_hold'}
 
 # wl823_pullback 資料來源是管理員自己的自選股清單「8/23」（不是全市場），
 # 跟其餘規則性質不同——直接寫死清單擁有者帳號（跟 app.py 的 ADMIN_USERNAME
@@ -322,6 +324,7 @@ def _build_context(db):
             'revenue': None, 'revenue_yoy': None, 'rev_yoy_recent': [], 'rev3m_avg': None, 'rev12m_avg': None,
             'q': [], 'inst': [], 'hold': [], 'div_by_year': {}, 'div_fill_events': [],
             'tech': {}, 'chanlun': {}, 'director_holding_pct': None, 'in_wl823': False,
+            'etf_weights': {}, 'down_stroke_hold': {},
             'inst20': None, 'hold_weekly': [], 'margin': [], 'pv': {}, 'trust_cost': {},
         }
         for code, name, market, industry in
@@ -341,6 +344,13 @@ def _build_context(db):
         c = ctx.get(r['stock_code'])
         if c:
             c['in_wl823'] = True
+
+    # etf_down_stroke_hold 的資料來源範圍——受益人數前5大ETF的成份股
+    # （crawler.crawl_etf_holdings() 每天整表覆蓋），{etf_code: 權重%}。
+    for r in db.execute(text('SELECT etf_code, stock_code, weight FROM etf_holdings ORDER BY etf_rank')).mappings():
+        c = ctx.get(r['stock_code'])
+        if c:
+            c['etf_weights'][r['etf_code']] = r['weight']
 
     for r in db.execute(text('''
         SELECT dp.stock_code, dp.close, dp.volume
@@ -555,6 +565,10 @@ def _build_context(db):
                 c['chanlun'] = chanlun.compute_chanlun(rows)
             except Exception:
                 logger.exception('chanlun.compute_chanlun failed for %s', code)
+            try:
+                c['down_stroke_hold'] = _down_stroke_hold_snapshot(rows, c['chanlun'])
+            except Exception:
+                logger.exception('_down_stroke_hold_snapshot failed for %s', code)
             try:
                 c['pv'] = _price_volume_snapshot(rows)
             except Exception:
@@ -1328,6 +1342,52 @@ def score_chanlun_down_stroke(ctx):
     return s.result()
 
 
+_DOWN_STROKE_HOLD_DAY = 4  # 筆最低價那根K棒算第1天，最新K棒要剛好是第幾天
+
+
+def _down_stroke_hold_snapshot(rows, cl):
+    """最後一筆是向下筆時，找出真正印出筆最低價的那根原始K棒（合併K線的日期
+    是最後被併入的那根，可能比低點晚），回傳它到最新K棒是第幾天（低點當天＝
+    第1天）以及之後的盤中最低價。最後一筆不是向下筆回傳 {}。"""
+    strokes = (cl or {}).get('strokes') or []
+    if not strokes or strokes[-1]['direction'] != 'down':
+        return {}
+    last = strokes[-1]
+    window = rows[-cl['raw_count']:]
+    low = last['end_price']
+    low_idx = next((i for i in range(last['end_orig_idx'], -1, -1) if window[i]['low'] == low), None)
+    if low_idx is None:
+        return {}
+    after = window[low_idx + 1:]
+    return {
+        'start_price': last['start_price'], 'start_date': last['start_date'],
+        'low_price': low, 'low_date': str(window[low_idx]['date']),
+        'day_n': len(window) - low_idx,
+        'min_low_after': min(r['low'] for r in after) if after else None,
+    }
+
+
+def score_etf_down_stroke_hold(ctx):
+    """受益人數前5大ETF成份股 × 纏論向下筆完成後第4天守住筆低點（2026-10-25
+    新增，**admin-only**）：最後一筆是由左上往右下的向下筆（底分型已成立），
+    筆最低價那根K棒＝第1天、最新K棒＝第4天，且第2～4天的盤中最低價都沒有
+    低於筆最低價（等於不算跌破）。成份股範圍見 crawler.crawl_etf_holdings()。"""
+    s = ScoreCard()
+    etfs = ctx.get('etf_weights') or {}
+    h = ctx.get('down_stroke_hold') or {}
+    s.require('前5大ETF成份股' + (f'（{"/".join(etfs)}）' if etfs else ''), bool(etfs))
+    on_day = h.get('day_n') == _DOWN_STROKE_HOLD_DAY
+    s.require(f'向下筆完成，今天是筆低點後第{_DOWN_STROKE_HOLD_DAY}天'
+              + (f'（目前第{h["day_n"]}天）' if h and not on_day else ''), on_day)
+    held = on_day and h.get('min_low_after') is not None and h['min_low_after'] >= h['low_price']
+    s.require('第2～4天盤中最低未跌破筆低點' + (f'（低點{h["low_price"]}，之後最低{h["min_low_after"]}）'
+                                         if on_day else ''), held)
+    if held:
+        s.award(f'{h["start_price"]}（{h["start_date"]}）→ {h["low_price"]}（{h["low_date"]}）守低',
+                True, 100, approx=True)
+    return s.result()
+
+
 SCORERS = {
     'gutai_bull': score_gutai_bull,
     'gutai_bear': score_gutai_bear,
@@ -1343,6 +1403,7 @@ SCORERS = {
     'chanlun_sell': score_chanlun_sell,
     'chanlun_star': score_chanlun_star,
     'chanlun_down_stroke': score_chanlun_down_stroke,
+    'etf_down_stroke_hold': score_etf_down_stroke_hold,
     'flag888_guyu': score_flag888_guyu,
     'wl823_pullback': score_wl823_pullback,
     'accumulation': score_accumulation,

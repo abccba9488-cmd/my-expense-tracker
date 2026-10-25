@@ -220,6 +220,11 @@ def _finmind_job():
     except Exception as e:
         logger.error('crawl_director_holdings failed: %s', e)
     try:
+        # TDCC (weekly) + MoneyDJ (monthly) — 6 HTTP calls, refreshed daily for simplicity.
+        crawler.crawl_etf_holdings()
+    except Exception as e:
+        logger.error('crawl_etf_holdings failed: %s', e)
+    try:
         experts.compute_expert_scores()
     except Exception as e:
         logger.error('compute_expert_scores failed: %s', e)

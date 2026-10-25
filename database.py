@@ -330,6 +330,23 @@ class DirectorHolding(Base):
     updated_at         = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
 
 
+class EtfHolding(Base):
+    """受益人數前N大ETF的成份股（2026-10-25 新增，etf_down_stroke_hold 規則用）。
+    哪幾檔ETF由集保 OpenData 股權分散表（id=1-5，持股分級17＝合計人數）當週
+    排名決定，成份股抓 MoneyDJ 持股明細（月底全持股，只有名稱沒有代號，用
+    stocks.name 對回代號）。每次爬取整表覆蓋，只留最新一份，不存歷史。"""
+    __tablename__ = 'etf_holdings'
+    __table_args__ = (UniqueConstraint('etf_code', 'stock_code'),)
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    etf_code      = Column(String(10), nullable=False)
+    etf_rank      = Column(Integer)          # 受益人數排名（1起算）
+    etf_holders   = Column(Integer)          # 受益人數
+    stock_code    = Column(String(10), nullable=False)
+    weight        = Column(Float)            # 持股比例 %
+    data_date     = Column(String(10))       # MoneyDJ 持股資料日期，如 "2026/09/30"
+    updated_at    = Column(DateTime, default=lambda: datetime.now(_TZ), onupdate=lambda: datetime.now(_TZ))
+
+
 class User(Base):
     __tablename__ = 'users'
     id            = Column(Integer, primary_key=True, autoincrement=True)

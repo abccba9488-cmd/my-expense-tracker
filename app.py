@@ -1908,6 +1908,9 @@ def api_run_crawler(task):
     elif task == 'director_holdings':
         _run_bg(crawler.crawl_director_holdings)
 
+    elif task == 'etf_holdings':
+        _run_bg(crawler.crawl_etf_holdings)
+
     elif task == 'expert_scores':
         _run_bg(experts.compute_expert_scores)
 
@@ -2234,6 +2237,7 @@ _HEALTH_TASKS = [
     ('finmind_dividend_result',  '除權息填息'),
     ('finmind_financials',       '財報補充(資產負債/現金流)'),
     ('director_holdings',        '董監持股'),
+    ('etf_holdings',             '前5大ETF成份股'),
     ('broker_trades',            '券商分點進出'),
     ('stock_ai_analysis',        'AI個股分析'),
 ]
