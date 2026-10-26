@@ -65,7 +65,7 @@ EXPERT_LABELS = {
     'chanlun_sell': '纏論賣點',
     'chanlun_star': '纏論買點+營收飆股',
     'chanlun_down_stroke': '纏論向下筆完成',
-    'etf_down_stroke_hold': 'ETF成份股 向下筆第4天守低',
+    'etf_down_stroke_hold': 'ETF成份股+8/23 向下筆第4天守低',
     'flag888_guyu': '888標準3+股魚',
     'wl823_pullback': '自選8/23 拉回5日線',
     'accumulation': '主力吸貨',
@@ -1371,18 +1371,27 @@ def score_etf_down_stroke_hold(ctx):
     """受益人數前5大ETF成份股 × 纏論向下筆完成後第4天守住筆低點（2026-10-25
     新增，**admin-only**）：最後一筆是由左上往右下的向下筆（底分型已成立），
     筆最低價那根K棒＝第1天、最新K棒＝第4天，且第2～4天的盤中最低價都沒有
-    低於筆最低價（等於不算跌破）。成份股範圍見 crawler.crawl_etf_holdings()。"""
+    低於筆最低價（等於不算跌破），且最新收盤站上5日線（SMA5，2026-10-26 追加）。
+    股票範圍＝前5大ETF成份股（見 crawler.crawl_etf_holdings()）聯集管理員自選股
+    「8/23」（同 wl823_pullback 的 in_wl823，2026-10-26 追加）。"""
     s = ScoreCard()
     etfs = ctx.get('etf_weights') or {}
+    in_wl823 = ctx.get('in_wl823') is True
     h = ctx.get('down_stroke_hold') or {}
-    s.require('前5大ETF成份股' + (f'（{"/".join(etfs)}）' if etfs else ''), bool(etfs))
+    scope = ([f'ETF {"/".join(etfs)}'] if etfs else []) + ([f'自選股「{_WL823_NAME}」'] if in_wl823 else [])
+    s.require('前5大ETF成份股或自選股「8/23」' + (f'（{"、".join(scope)}）' if scope else ''), bool(scope))
     on_day = h.get('day_n') == _DOWN_STROKE_HOLD_DAY
     s.require(f'向下筆完成，今天是筆低點後第{_DOWN_STROKE_HOLD_DAY}天'
               + (f'（目前第{h["day_n"]}天）' if h and not on_day else ''), on_day)
     held = on_day and h.get('min_low_after') is not None and h['min_low_after'] >= h['low_price']
     s.require('第2～4天盤中最低未跌破筆低點' + (f'（低點{h["low_price"]}，之後最低{h["min_low_after"]}）'
                                          if on_day else ''), held)
-    if held:
+    close, sma5 = ctx.get('close'), (ctx.get('tech') or {}).get('sma5')
+    # Round to cents: prices are stored as float32-ish values (72.80000305), equal-to-MA5 isn't a breakout
+    above_sma5 = close is not None and sma5 is not None and round(close, 2) > round(sma5, 2)
+    s.require('收盤站上5日線' + (f'（收盤{close:g}，5日線{sma5:.2f}）' if close is not None and sma5 else ''),
+              above_sma5)
+    if held and above_sma5:
         s.award(f'{h["start_price"]}（{h["start_date"]}）→ {h["low_price"]}（{h["low_date"]}）守低',
                 True, 100, approx=True)
     return s.result()

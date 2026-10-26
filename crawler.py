@@ -2230,11 +2230,19 @@ def crawl_etf_holdings(top_n=5):
         if not records:
             _log('etf_holdings', 'failed', f'0 holdings parsed for {[e for e, _ in top]}')
             return 0
+        # Diff against the previous snapshot so ETF rebalances (or a new top-5 ETF) show up in the log
+        prev = {(e, c) for e, c in db.execute(text('SELECT etf_code, stock_code FROM etf_holdings')).fetchall()}
+        cur = {(r['etf_code'], r['stock_code']) for r in records}
+        added = sorted(f'{e}+{c}' for e, c in cur - prev)
+        removed = sorted(f'{e}-{c}' for e, c in prev - cur)
         db.execute(text('DELETE FROM etf_holdings'))
         db.execute(EtfHolding.__table__.insert(), records)
         db.commit()
+        changes = ''
+        if prev and (added or removed):
+            changes = f'; changes: {" ".join(added + removed)}'
         _log('etf_holdings', 'success',
-             f'{",".join(e for e, _ in top)}: {len(records)} holdings, {unmapped} unmapped')
+             f'{",".join(e for e, _ in top)}: {len(records)} holdings, {unmapped} unmapped{changes}')
         return len(records)
     except Exception as e:
         db.rollback()
