@@ -95,3 +95,29 @@
 - **股票搜尋**沿用自選股搜尋框（`#wl-search`）的既有模式：`state.allData` 前端過濾＋下拉選單，Enter 選第一筆。選定股票後（`selectMacroStock()`）自動帶入目前股價（`state.allData` 裡的 `close`），並額外呼叫 `/api/stocks/<code>/financials` + `/api/stocks/<code>/revenue` + `/api/stocks/<code>/prices?days=182` + `/api/stocks/<code>/broker-trades?days=90`（後兩者 2026-09-23 新增）組成「附加資訊」欄位（開頭註明未還原股價／千元／單季EPS，成交量換算成張；提示詞並要求 AI 與官方來源不一致時以官方為準並列出差異；近 8 季財報、近 12 個月營收年增率、近半年日線 OHLC＋漲跌%＋量、近90交易日主力分點買超/賣超前十大＋前5大分點集中度），2026-10-01 再加 `/api/stocks/<code>/institutional-trades`：三大法人近5/20/60日買賣超合計＋連續買/賣超天數＋近半年逐日外資/投信/自營商買賣超（張），以及 `_trustCostSeries()` 算的投信推估成本與現價乖離（股價/法人多抓 `_CHART_WARMUP_DAYS` 暖機，只印近半年）；同日再補齊資料庫其餘可用資料：`/api/stocks/<code>/fundamentals`（近8季毛利率/營益率/ROE/ROA/流動/速動/負債比/週轉天數、近5年股利與配發率、PBR、填息機率）、新端點 `/api/stocks/<code>/macro-extra`（`financial_extra` 近8季現金流＋資產負債表原始值〔現金流已去累計為單季、capex 為負值＝流出，FCF＝OCF＋capex〕、股權分散近12週、董監持股近6個月、近5年除權息填息事件）、`/chip-peak`（POC/VAL/VAH/集中度）、`/chanlun`（最新訊號＋最近中樞）。整份補充資料約 1.5 萬字，使用者可自行編輯或補充 K 線重點。分點彙整重用 `renderBrokerTrades()`／`_brokerLots()` 同一套「依 broker_id 加總 net/activity、取前N大」邏輯，未曾查詢過分點資料的股票會回傳空陣列、直接略過這段。
 - `buildMacroPrompt()`（`app.js`）把固定的高盛研究員角色提示詞模板＋使用者填的表單欄位（目前股價／持股成本／持有數量／現金股利／股票股利／預計投資週期／最大可承受虧損比例；持股成本（元／股，平均買進價）為數字輸入（成本與目前股價相差超過3倍時，提示詞會加「⚠️ 成本檢查」要求 AI 先提醒可能輸入錯誤並並列兩種情境——2026-10-04 因使用者把 92.54 打成 9.254 算出 +898.8% 報酬而加）、持有數量是「數字＋張/股下拉選單」，數字留空＝尚未持有；「現金股利（元，累計已領總額）」`#macro-cash-dividend`、「股票股利（元／股）」`#macro-stock-dividend`（2026-10-04 新增；股票股利照公告慣例填元數，提示詞以面額10元換算配股股數＝持股股數×元÷10，1.0元＝每張配100股，假設持有數量為配股前股數），任一有填時提示詞會多一行要求 AI 計算含權息報酬與平均成本，留空＝無；2026-10-01 起移除美股市場選單與提示詞中所有美股字樣，本站只針對台股（產業龍頭對照仍要求台股＋國際龍頭，國際同業比較是分析需要，不算支援美股））＋上述自動帶入的附加資訊組成完整提示詞，模板內含「產業龍頭股對照」（第六層競爭優勢之後，2026-09-26 新增：要求 AI 聯網搜尋台股＋美股／國際龍頭並比較營收、毛利率、估值、股價連動），結尾固定加一段「輸出檔案格式要求」，要求 AI 額外把報告整理成可下載的獨立 HTML 檔（供列印或另存 PDF）。
 - 三個 AI 連結按鈕（`openMacroAi(target)`）呼叫 `navigator.clipboard.writeText()` 但不 `await` 它、緊接著同步呼叫 `window.open()`——沿用既有 `copyAnnRatingPrompt()` 的既有寫法，讓 `window.open()` 留在使用者點擊的呼叫堆疊內，不要包進 `.then()` 回呼裡。
+
+## 表格欄位細節與前端 gotcha（2026-10-26 從 CLAUDE.md 移入）
+
+### `dividend_yield` 欄（2026-07-16 新增）
+
+跟 `per`/`pbr` 一樣來自 FinMind、存在 `daily_prices`，`_SUMMARY_SQL` 用「最近一筆這個欄位實際有值的日期」而非嚴格最新日期 JOIN（`ldy` CTE），避開估值爬蟲落後股價爬蟲時的空值問題（同 `experts.py` `_build_context()` 的處理方式）。前端只在達人選股 7 個基本面規則分頁（`flag888_1`–`4`／`guyu`／`laoniu`／`momentum_guard`）顯示，`gutai_bull`/`gutai_bear`（技術面）不顯示。
+
+### 「甜蜜點」欄（`ma20`/`ma60`/`ma120`/`ma240`）
+
+各自以相關子查詢取該股最近 20／60／120／240 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT N`，吃 `ix_dp_code_date` 索引）算出的簡單移動平均。四個表格（主表格／飆股清單／自選股／達人選股列表）最後一欄「**甜蜜點**」皆呼叫 `app.js` 的 `sweetSpotCell(s)`——**紅＝接近 `ma20`、黃＝接近 `ma60`、綠＝接近 `ma120`**：股價距離這三條均線 ±3% 內時儲存格變色＋🔔（`_SWEET_SPOT_TIERS` 依序 20→60→120 檢查，同時接近多條時優先顯示短天期），這三條是「支撐/壓力測試」語意。**紫＝ `ma240`，判定刻意不對稱**：`(close - ma240) / ma240 <= 0.03`，在 `ma240` 之下（不論低多少）或高於但漲幅不超過 3% 就顯示紫色——把 240 日線當「長期價值區」，只有「跌破或剛站上」才算。四條都不符合但有 `ma20` 時顯示樸素數值，完全沒均線資料顯示「—」。沿革：原本只看 `ma20`（`ma20Cell()`），2026-07-12 加入 `ma60`/`ma120` 並更名 `sweetSpotCell()`；2026-07-13 加入 `ma240` 並確立「20/60/120 對稱±3%、240 不對稱」最終版（中途曾短暫四條都用不對稱，隨即改回）。
+
+### 「虧轉盈」欄（`turnaround_signal`）
+
+**不是即時計算**，是 `crawl_monthly_revenue()` 每次爬到新月營收時算好存進 `monthly_revenue`：該股最新一季 `quarterly_financials.eps < 0` **且**本月 `revenue_yoy >= 20` → 1，否則 0；每次爬蟲都重算覆寫。`app.js` 的 `turnaroundCell(s)` 為真顯示 🔥、否則「—」，**純圖示不塗底色**。四個表格都有這欄；**飆股清單（`#star-table`）這欄永遠是「—」**——`calcEst()` 要求 `eps > 0`，飆股清單本來就排除虧損股，使用者要求三表一致才加上，不是漏洞。主/飆股/自選三表這欄用 `columnDefs` 的 `width: '64px'` 固定寬度，避免 DataTables 自動欄寬把標題擠出欄位。
+
+### jQuery `.data()` 型別轉換
+
+`.data('code')` 會把純數字字串（`"1218"`）轉成 `number`，導致 `state.allData.find(s => s.code === code)` 嚴格比對失敗。`loadStockDetail(code)` 入口已做 `code = String(code)`，呼叫端不必轉型；但新增其他用 `.data()` 取 code 再 find 的邏輯要注意。
+
+### DataTables 橫向捲動不能用自訂 wrapper div
+
+`<div class="table-scroll">`（`overflow-x:auto`）對**一般 HTML 表格**（`#ann-table`、`#expert-table`）有效，但對 **`.DataTable()` 初始化的表格**（`#stocks-table`/`#star-table`/`#wl-table`/detail view 三個表）沒用——DataTables 會丟掉自訂 wrapper、換成 `.dataTables_wrapper`，寬表格直接撐爆 `.card`／`.container`，整頁橫向捲動（手機尤其明顯）。正確做法是初始化參數加 **`scrollX: true`**。現有 DataTables 都已加；新表格比照辦理。
+
+### `.filter-btn` class 不能隨便重用（2026-07-28 踩過）
+
+`app.js` 開頭的市場篩選（全部/上市/上櫃）用 `document.querySelectorAll('.filter-btn').forEach(btn => btn.addEventListener('click', ...))` 對載入當下所有 `.filter-btn` 逐一掛事件——handler 會清掉全頁所有 `.filter-btn` 的 active、讀 `this.dataset.market` 設 `state.currentMarket`、再呼叫 `renderStockTable()`。所以**任何新按鈕只要借用 `.filter-btn` 且載入當下在 DOM 裡（即使外層 `.hidden`）**，點擊時就會清空其他分頁的 active、把 `state.currentMarket` 汙染成 `undefined`、多觸發一次 `renderStockTable()`。「甜蜜點訊號回測」天期分頁（`#stock-backtest-tier-tabs`）就踩過。要做分頁按鈕外觀用獨立的 **`.bt-tab`**（`style.css`）或另開新 class。

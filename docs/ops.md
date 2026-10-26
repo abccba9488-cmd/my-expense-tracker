@@ -76,3 +76,41 @@ python backfill_finmind.py --financials --from-year 2013   # financial_extra 只
 | `open / high / low / volume` | `daily_prices` | 完整 OHLCV |
 
 新增分析功能時可直接從這些欄位取值，不需重新爬蟲。
+
+## 事故紀錄（2026-10-26 從 CLAUDE.md 移入）
+
+CLAUDE.md 只留一行重點，完整經過與修法在這裡。
+
+### `_SUMMARY_SQL` 冷查詢在大型 DB 上可能耗時數分鐘、甚至逾時（2026-07-16 發現並修復）
+
+`daily_prices` 成長到 622 萬筆後，`ma20`/`ma60`/`ma120`/`ma240` 這四個「每檔股票各自關聯子查詢」的寫法等於每次冷查詢要跑約 8,000 次獨立查詢；問題在本機被 `database.py` 原本統一套用的極小 SQLite `cache_size`（2MB）+ `temp_store=FILE` 放大到誇張的程度（temp b-tree 落地磁碟，大量小額 I/O）——同一份查詢在本機曾實測「15 分鐘沒跑完直接被中止」，改成本機用大快取後降到約 25 秒。兩處修復：
+1. **`app.py`**：`_summary_rebuild_lock`（`threading.Lock`）包住快取重建區塊，做成 single-flight——快取過期時若同時有多個請求進來，只有一個真的觸發昂貴查詢，其餘等鎖釋放後直接吃剛寫好的快取（避免 cache stampede）。
+2. **`database.py`**：SQLite PRAGMA 依 `sys.platform` 分流（`_IS_CLOUD = sys.platform != 'win32'`）——非 Windows 分支（原 Zeabur 容器用，雲端已停用）維持 `mmap_size=0`／`cache_size=-2000`／`temp_store=FILE`（避免容器 OOM）；本機（Windows）用 `cache_size=-131072`（~128MB）+ `temp_store=MEMORY`。
+
+頻繁重啟本機伺服器每次都會清空記憶體內的 `_summary_cache`，下一個請求就會撞到冷查詢——日常開發改動非資料庫相關程式碼時，能不重啟就不重啟。
+
+### `FINMIND_TOKEN` 沒設定的靜默失敗（2026-07-16）
+
+本機常駐服務（`autostart_server.bat`）從某次重啟後就沒帶到這個環境變數，導致 5 個 `finmind_*` 任務**每天** 17:00 都準時觸發、但每次都馬上失敗（`crawler_logs` 訊息一模一樣：`FINMIND_TOKEN environment variable not set`），`institutional_trades`/`holding_concentration` 因此在沒人發現的情況下卡在舊資料整整 11 天——`director_holdings`（TWSE/TPEX OpenAPI，不需要金鑰）仍然每天成功，容易誤以為「排程有在跑就是正常」。
+
+修法：`app.py` 模組層級啟動時檢查 `os.environ.get('FINMIND_TOKEN')`，沒設定就寫一筆 `finmind_token_check` / `failed` 的 `crawler_logs`，讓 ⚙ 爬蟲狀態面板一開就看得到。本機修復：`setx FINMIND_TOKEN "your-token"`（永久使用者環境變數，`set` 只在當次終端機有效）之後**重啟**本機服務——環境變數只在程序啟動當下被讀取；已經開著的終端機/PowerShell session 也不會自動拿到新值，要嘛開新 session，要嘛在該 session 內 `$env:FINMIND_TOKEN = [Environment]::GetEnvironmentVariable("FINMIND_TOKEN","User")` 後再啟動。
+
+### `crawl_finmind_*` 沒有回填缺口的機制，`_finmind_watchdog` 也補不了
+
+這幾個函式每次只抓「傳入的那一天」（`start_date=end_date=iso`），`_finmind_watchdog` 的邏輯是「今天還沒成功就補跑今天」，不會回頭補過去缺的日子。上面那次 token 斷線 11 天修好後，`institutional_trades` 仍停在斷線前最後一天（watchdog 只補當天，且當天常因 T+1 delay 還是 0 筆）——實際造成 `gutai_bull`/`gutai_bear` 全市場 0 檔通過（近5日窗口只剩1筆舊資料，不可能滿足「至少2日」門檻）。當時手動逐日呼叫 `crawler.crawl_finmind_institutional(date_str)` 補齊 7 個交易日才修復。再發生多日斷線一樣要手動回填。
+
+### watchdog 只檢查「有沒有成功 log」，不檢查資料完不完整（2026-08-15）
+
+08-14 17:00 的 `finmind_institutional` 準時觸發且回報 `success`，但當下 FinMind 資料還沒補齊，bulk 回應只有 784 檔（正常約 1870~1890 檔），watchdog 看到 success 就不再補跑。修法：`POST /api/stocks/<code>/institutional-trades/refresh`（任何登入使用者可觸發，個股詳情頁「三大法人進出與持股」卡片右上角按鈕），重新呼叫近 5 個曆日的 `crawl_finmind_institutional()`——`INSERT OR REPLACE` 冪等，非交易日也安全拿到 0 筆。這是手動補救，不是自動化機制。
+
+### `crawl_monthly_revenue()`/`crawl_quarterly_financials()` 卡在 `running` 永遠不結束（2026-08-05 診斷＋修復）
+
+這兩個任務逐檔迴圈跑約 2000 檔、正常約 10 分鐘。中途若 process 被凍結（實例：電腦半夜睡眠，Flask 背景執行緒整個凍結；醒來卡在爛掉的 socket 上，`_post()` 的 `timeout=15` 沒觸發，因為計時器也一起停了），迴圈就停在某一檔不動、不丟例外——`crawler_logs` 只留一筆 `running`，直到重啟伺服器才清掉。曾連續三晚（08/01–08/03）卡住，月營收 3 天沒更新才被發現。修法：`_monthly_revenue_watchdog`/`_quarterly_watchdog`——「今天沒有 success」且「沒有 40 分鐘內剛啟動的 running」兩者都成立才補跑（避免誤殺真的還在跑的那 10 分鐘）。
+
+### 本機 `app.run()` 沒開 `threaded=True` 讓網站看起來當機（2026-08-05 修復）
+
+Werkzeug 開發伺服器預設單執行緒。背景同時跑 `quarterly`（逐檔迴圈）+ `finmind_data`（含吃 CPU 的 `compute_expert_scores()`）時，首頁／`/api/market/summary` 直接卡到逾時，看起來像當機，其實 process 沒死、只是排不到。已在 `app.run(...)` 加 `threaded=True`。（原 Zeabur 的 gunicorn `--workers 1 --threads 4` 沒這問題；雲端已停用。）
+
+### 本機開機自動啟動的做法
+
+`autostart_server.bat` 是 `start.bat` 的背景版（只確保 Flask＋APScheduler 在跑，不開瀏覽器），透過 Windows「啟動」資料夾（`shell:startup`）的捷徑在登入時啟動；捷徑不在 git 內，換機器要重建。原本想用 `schtasks`/`Register-ScheduledTask`，但兩者都要系統管理員權限，改用免提權的啟動資料夾捷徑。

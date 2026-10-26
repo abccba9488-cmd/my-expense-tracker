@@ -81,7 +81,7 @@ GET  /api/admin/visits             訪客紀錄：今日不重複IP數/今日進
 獨立頁面（`templates/admin.html` + `static/js/admin.js`），取代原本散落在首頁浮動面板裡的管理功能（👥 會員管理浮動面板、⚙ 爬蟲狀態面板裡的一排 admin-only 按鈕），整合成一個頁面方便之後擴充。`GET /admin`（`app.py`）伺服器端用 `_is_admin()` 檔非管理員（`redirect('/')`），`admin.js` 的 `initAuth()` 再做一次前端檢查（處理頁面已載入後 session 過期的情況）。首頁 nav 的 👥 按鈕已移除，改成 🛠 連結（`.admin-only.hidden`，指向 `/admin`）；首頁 ⚙ 爬蟲狀態浮動面板只保留公開的「更新股票清單」按鈕與一個「更多爬蟲控制 →」連結，其餘 admin-only 爬蟲按鈕全部移到這個新頁面。
 
 四個區塊（各自一個 `.card`）：
-1. **系統健康**：`/api/admin/health` 回傳的 DB 筆數統計（股票/股價/月營收/季財報/會員/留言）+ 最新股價日期，以及 `FINMIND_TOKEN` 是否設定的醒目 badge（對齊 CLAUDE.md「`FINMIND_TOKEN` 沒設定是一個容易忽略的靜默失敗陷阱」那段描述的問題，讓管理員不用等到手動比對各表 `MAX(date)` 才發現）。
+1. **系統健康**：`/api/admin/health` 回傳的 DB 筆數統計（股票/股價/月營收/季財報/會員/留言）+ 最新股價日期，以及 `FINMIND_TOKEN` 是否設定的醒目 badge（對齊 `docs/ops.md`「`FINMIND_TOKEN` 沒設定的靜默失敗」那段描述的問題，讓管理員不用等到手動比對各表 `MAX(date)` 才發現）。
 2. **爬蟲控制與排程狀態**：全部 9 個手動觸發按鈕（沿用既有 `runCrawler()`/`/api/crawler/run/<task>`）+ 一張「任務健康表」（`_HEALTH_TASKS` 常數，`app.py`，對齊 `crawler.py` 裡實際出現的 `_log()` task 名稱）顯示每個任務最後執行時間/狀態/近20次成功率/最後訊息，下方是既有的「最近30筆執行紀錄」（沿用 `/api/crawler/status`）。
 3. **會員管理**：沿用原本浮動面板的邏輯與 CSS 類別（`.admin-user-list`/`.admin-user-item` 等），只是不再用 `position:fixed` 的面板，改放在一般 `.card` 裡。
 4. **留言板管理**：`/api/admin/messages` 一次取全部（上限500則，本站留言量還小，暫不做分頁）+ 依使用者留言數排行；表格支援複選（`.admin-chk`）+ 全選 + 批次刪除（`/api/admin/messages/bulk-delete`），也保留單則刪除（沿用既有 `DELETE /api/messages/<id>`，該端點本來就允許本人或 ADMIN_USERNAME 刪除）。

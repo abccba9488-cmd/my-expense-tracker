@@ -17,15 +17,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `docs/backtests.md` | 纏論買點×籌碼峰、達人選股訊號組合（`flag888_guyu`/`wl823_pullback` 也在這）、籌碼峰匯聚訊號回測 |
 | `docs/taifex.md` | 期權籌碼分析（`crawler_taifex.py`/`taifex_analysis.py`/Fear & Greed） |
 | `docs/announcements-ai.md` | 自結公告（爬蟲＋解析＋評級）、AI 個股分析（OpenRouter 付費）、個股筆記 |
-| `docs/frontend.md` | PWA、八個視圖、主表格欄位、手機版、通知、抽屜、K線圖、上下一檔導覽、總體分析 |
+| `docs/frontend.md` | PWA、八個視圖、主表格欄位、手機版、通知、抽屜、K線圖、上下一檔導覽、總體分析、甜蜜點/虧轉盈/殖利率欄位細節、前端 gotcha 完整說明 |
 | `docs/api.md` | REST API 端點清單、`/admin` 後台 |
-| `docs/ops.md` | Zeabur 部署（已停用）、backfill 歷史補齊、個人輔助腳本、分析與驗證、已存未呈現的 DB 欄位 |
+| `docs/ops.md` | Zeabur 部署（已停用）、backfill 歷史補齊、個人輔助腳本、分析與驗證、已存未呈現的 DB 欄位、**事故紀錄**（token 斷線、watchdog、running 卡住、threaded、冷查詢） |
+
+**雲端已停用**：2026-07-22 起不再部署 Zeabur，本機是唯一執行環境。程式與文件中殘留的 Zeabur／gunicorn／`_IS_CLOUD` 分支都是歷史遺跡，不必為它們做驗證。
 
 ## 環境變數
 
 | 變數 | 必要性 | 用途 |
 |------|--------|------|
-| `FINMIND_TOKEN` | 達人選股/三大法人/期權籌碼等 FinMind 相關功能必要 | 沒設定會靜默失敗，踩雷細節見下方排程章節「`FINMIND_TOKEN` 沒設定是一個容易忽略的靜默失敗陷阱」 |
+| `FINMIND_TOKEN` | 達人選股/三大法人/期權籌碼等 FinMind 相關功能必要 | 沒設定會靜默失敗，見下方「排程」章節 |
 | `OPENROUTER_API_KEY` | 「AI 個股分析」功能才需要 | 見 `docs/announcements-ai.md`「AI 個股分析」，未設定則該功能無法使用（其餘功能不受影響） |
 | `OPENROUTER_MODEL` | 選用，預設 `perplexity/sonar` | 同上，覆寫 AI 個股分析用的模型 |
 
@@ -65,18 +67,22 @@ C:\Users\user\anaconda3\python.exe -m py_compile app.py crawler.py   # Python �
 
 **Claude Code 內重啟伺服器**一律用 PowerShell 工具（不要用 Bash 跑 `start.bat`／`_server.bat`——`start` 分離出去的子行程會在工具呼叫結束時被回收），且同一個指令內先載入 `FINMIND_TOKEN`（原因見下方「排程」章節踩雷）：
 ```powershell
-$pids = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
-foreach ($p in $pids) { Stop-Process -Id $p -Force -Confirm:$false }
+$old = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+foreach ($p in $old) { Stop-Process -Id $p -Force -Confirm:$false -ErrorAction Stop }
+Start-Sleep -Seconds 2
 $env:FINMIND_TOKEN = [Environment]::GetEnvironmentVariable("FINMIND_TOKEN","User")
 Start-Process -FilePath "C:\Users\user\anaconda3\python.exe" -ArgumentList "app.py" -WorkingDirectory "C:\Users\user\Documents\claude\VSCode\stock-analysis" -WindowStyle Minimized
+$new = $null
+for ($i = 0; $i -lt 15 -and -not $new; $i++) { Start-Sleep -Seconds 2; $new = (Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue).OwningProcess }
+"old=$old new=$new"
 ```
-重啟前確認沒有正在跑、會呼叫本站 API 的背景工作（例如 `/rate-announcements`）。**重啟後再跑一次 `Get-NetTCPConnection -LocalPort 5000 -State Listen` 確認 PID 是新的**——2026-10-25 實測上面那段 `Stop-Process` 沒把舊行程殺掉（無錯誤訊息），新行程照樣啟動但 5000 port 仍由舊行程服務，API 回的是舊程式碼的結果；再對舊 PID 單獨 `Stop-Process -ErrorAction Stop` 才生效。
+重啟前確認沒有正在跑、會呼叫本站 API 的背景工作（例如 `/rate-announcements`）。**最後印出的 new PID 必須存在且跟 old 不同**——2026-10-25 曾發生舊版指令的 `Stop-Process`（沒加 `-ErrorAction Stop`）沒殺掉舊行程又沒報錯，新行程照樣啟動但 5000 port 仍由舊行程服務、API 回的是舊程式碼結果；現在改成殺不掉就直接報錯，並輪詢等新行程真的開始監聽（冷啟動常超過 8 秒）才印 PID。
 
 **改了 `experts.py`／`chanlun.py` 等計分邏輯，一定要重啟伺服器**：在跑的 Flask 行程還是舊程式碼，`POST /api/crawler/run/expert_scores` 會用舊邏輯重算，而且每天 17:00 排程也會用舊邏輯把結果蓋回去。想不經伺服器直接重算（約 2 分鐘）：`C:\Users\user\anaconda3\python.exe -c "import experts; experts.compute_expert_scores()"`。
 
-**本機開機自動啟動**：`autostart_server.bat` 是 `start.bat` 的背景版——只確保 Flask（含內建 APScheduler 排程）在跑，不會跳出瀏覽器分頁。透過在 Windows「啟動」資料夾（`shell:startup`，使用者層級、不需要系統管理員權限）放一個指向它的捷徑，登入時自動背景啟動；這個捷徑本身不在 git 版控內，換一台機器要重設的話再重建一次即可。原本想用 `schtasks`/`Register-ScheduledTask` 註冊工作排程器，但兩者都需要系統管理員權限，改用啟動資料夾捷徑這個免提權做法。
+**本機開機自動啟動**：`autostart_server.bat`（`start.bat` 的背景版，不開瀏覽器）由 `shell:startup` 資料夾的捷徑在登入時啟動；捷徑不在 git 內，為何不用工作排程器見 `docs/ops.md`。
 
-**`.bat` 檔案裡不要放中文註解**：Windows `cmd.exe` 解析批次檔時對多位元組字元（中文）處理不可靠，中文 `rem` 註解可能被錯誤斷行、導致後面的文字被當成指令執行、噴出「找不到指令」的錯誤（親身踩過一次）。這個專案既有的 `.bat` 檔案本來就沒有中文註解，新增 `.bat` 檔案時延續這個慣例，需要說明就用英文或直接寫在 CLAUDE.md 裡。
+**`.bat` 檔案裡不要放中文註解**：`cmd.exe` 對多位元組字元處理不可靠，中文 `rem` 可能被錯誤斷行、後半段被當指令執行（踩過）。需要說明就用英文。
 
 ## 外部連線（ngrok）
 
@@ -92,7 +98,7 @@ Start-Process -FilePath "C:\Users\user\anaconda3\python.exe" -ArgumentList "app.
 
 ```
 app.py          Flask app + REST API endpoints + 初始化入口
-crawler.py      所有爬蟲函式（TWSE / TPEX / MOPS / FinMind / 董監持股 OpenAPI）
+crawler.py      所有爬蟲函式（TWSE / TPEX / MOPS / FinMind / 董監持股 OpenAPI / 集保 OpenData＋MoneyDJ ETF成份股）
 finmind_client.py  FinMind API 薄封裝（crawler.py 的 crawl_finmind_* 函式呼叫）
 technical.py    純 Python 技術指標（EMA/MACD/RSI/KD），達人選股股泰規則用
 chip_peak.py    純 Python 籌碼峰計算（POC/VAH/VAL，時間衰減＋法人品質加權），見「籌碼峰」章節
@@ -133,15 +139,11 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 ### 效能快取
 
-- **Server side**：`_summary_cache`（`app.py`）快取 JSON 字串，TTL 30 分鐘（2026-07-16 從 5 分鐘拉長，原因見下方）。`_run_bg()` 在背景任務完成後自動呼叫 `_invalidate_summary_cache()`。
+- **Server side**：`_summary_cache`（`app.py`）快取 JSON 字串，TTL 30 分鐘（2026-07-16 從 5 分鐘拉長，因為冷查詢很貴，見下方）。`_run_bg()` 在背景任務完成後自動呼叫 `_invalidate_summary_cache()`。
 - **Gzip**：`compress_response` after_request handler 自動壓縮 JSON / HTML / CSS / JS 回應。
 - **Client side**：`app.js` 以 `localStorage`（key `bao_sum_v1`，TTL 5 分鐘）做 stale-while-revalidate；頁面重載時先渲染快取，背景靜默更新。
 
-**`_SUMMARY_SQL` 冷查詢在大型 DB 上可能耗時數分鐘、甚至逾時（2026-07-16 發現並修復）**：`daily_prices` 成長到 622 萬筆後，`ma20`/`ma60`/`ma120`/`ma240` 這四個「每檔股票各自關聯子查詢」的寫法（見下方欄位索引說明）等於每次冷查詢要跑約 8,000 次獨立查詢；問題在本機被 `database.py` 原本統一套用的極小 SQLite `cache_size`（2MB）+ `temp_store=FILE` 放大到誇張的程度（temp b-tree 落地磁碟，大量小額 I/O）——同一份查詢在本機曾實測「15 分鐘沒跑完直接被中止」，改成本機用大快取後降到約 25 秒。兩處修復：
-1. **`app.py`**：`_summary_rebuild_lock`（`threading.Lock`）包住快取重建區塊，做成 single-flight——快取過期時若同時有多個請求進來，只有一個真的觸發昂貴查詢，其餘等鎖釋放後直接吃剛寫好的快取，不會每個請求各自重跑一次（cache stampede）。
-2. **`database.py`**：SQLite PRAGMA 依 `sys.platform` 分流（`_IS_CLOUD = sys.platform != 'win32'`）——雲端（Zeabur/Linux）維持原本 `mmap_size=0`／`cache_size=-2000`／`temp_store=FILE` 不變（避免容器 OOM，這組設定本來就是為了解決那個問題）；本機（Windows）改用 `cache_size=-131072`（~128MB）+ `temp_store=MEMORY`。
-
-**重點**：頻繁重啟本機伺服器（改 code 後重啟）每次都會清空記憶體內的 `_summary_cache`，下一個請求就會撞到冷查詢——這是這個問題在本機格外容易被踩到的原因，日常開發改動非資料庫相關程式碼時，能不重啟就不重啟。
+**`_SUMMARY_SQL` 冷查詢約 25 秒**（四條均線是每檔各自的關聯子查詢）：已用 `_summary_rebuild_lock` 做 single-flight，`database.py` 在 Windows 用大 SQLite 快取。每次重啟伺服器都會清空 `_summary_cache`，改非 DB 相關程式碼時能不重啟就不重啟。完整經過見 `docs/ops.md`「事故紀錄」。
 
 ## 資料庫 Schema
 
@@ -209,11 +211,11 @@ data/stocks.db         SQLite 資料庫（自動建立）
 19=ma60, 20=ma120, 21=ma240, 22=dividend_yield
 ```
 
-`dividend_yield`（2026-07-16 新增）：跟 `per`/`pbr` 一樣來自 FinMind、存在 `daily_prices`，用「抓最近一筆這個欄位實際有值的日期」而非嚴格最新日期 JOIN（`ldy` CTE），避開估值爬蟲落後股價爬蟲時的空值問題（同 `experts.py` `_build_context()` 既有的處理方式）。前端只在達人選股 7 個基本面規則分頁（`flag888_1`–`4`／`guyu`／`laoniu`／`momentum_guard`）顯示這個欄位，`gutai_bull`/`gutai_bear`（技術面訊號、跟股利無關）不顯示。
+- `dividend_yield`：用 `ldy` CTE 取「最近一筆有值的日期」，不是嚴格最新日期（估值爬蟲常落後股價爬蟲）。
+- `ma20`/`ma60`/`ma120`/`ma240`：前端「甜蜜點」欄（`sweetSpotCell()`）。20/60/120 是對稱 ±3%，240 刻意不對稱（在線下或剛站上 3% 內才算）。
+- `turnaround_signal`：由 `crawl_monthly_revenue()` 寫入，不是即時計算（最新季 EPS<0 且營收年增 ≥20%）。飆股清單這欄永遠是「—」是預期行為。
 
-`ma20`/`ma60`/`ma120`/`ma240`：各自以相關子查詢取該股最近 20／60／120／240 筆 `daily_prices.close`（`ORDER BY date DESC LIMIT N`，吃 `ix_dp_code_date` 索引，不用整表掃描）算出的簡單移動平均。前端四個表格（主表格／飆股清單／自選股／達人選股列表）最後一欄「**甜蜜點**」皆呼叫 `app.js` 的 `sweetSpotCell(s)` 顯示此值——**紅＝接近 `ma20`、黃＝接近 `ma60`、綠＝接近 `ma120`**：股價距離這三條均線正負 3% 內時儲存格變色＋🔔 圖示提示（`_SWEET_SPOT_TIERS` 陣列依序 20→60→120 檢查，同時接近多條時優先顯示天期較短的那條），這三條是「支撐/壓力測試」語意。**紫＝ `ma240`，判定規則刻意不對稱**（不是 ±3%）：`(close - ma240) / ma240 <= 0.03`，股價只要在 `ma240` 之下（不論低多少都算）、或高於 `ma240` 但漲幅不超過 3%，就顯示紫色；漲超過 3% 以上就不顯示——把 240 日均線當成「長期價值區」而非單純的支撐/壓力測試，只有「跌破或剛站上」才算，漲多了就不算。四條均線都不符合但至少有 `ma20` 時顯示樸素數值，完全沒有均線資料才顯示「—」。這欄原本只看 `ma20`（單色黃底），2026-07-12 改版加入 `ma60`/`ma120` 並更名「甜蜜點」，`ma20Cell()` 已重新命名為 `sweetSpotCell()`；2026-07-13 加入 `ma240` 並確立「20/60/120 對稱±3%、240 不對稱」這個最終版本（中途曾短暫改成四條都用不對稱規則，隨即依需求改回）。
-
-`turnaround_signal`：**不是即時計算，是 `crawl_monthly_revenue()`（`crawler.py`）每次爬到新月營收時直接算好存進 `monthly_revenue` 表的**。邏輯：該股最新一季 `quarterly_financials.eps < 0`（還在虧損）**且**本月 `revenue_yoy >= 20`（跟營收飆股用同一個門檻）→ 寫入 1，否則 0；每次爬蟲都重算覆寫（不像 `start_price` 只在新增時寫一次）。前端 `app.js` 的 `turnaroundCell(s)` 為真時顯示 🔥 圖示、假則顯示「—」，**純圖示不塗滿底色**（跟 `sweetSpotCell` 的變色不同）。四個表格（主表格／飆股清單／自選股／達人選股列表）都有這欄；**飆股清單表格（`#star-table`）這欄會永遠顯示「—」**——`calcEst()` 要求 `eps > 0` 才會回傳值，飆股清單本身的篩選邏輯已排除所有虧損股，使用者要求三表一致才加上，不是邏輯漏洞。內容只有「—」/🔥 太窄，三個表格（主/飆股/自選）的這一欄都用 `columnDefs` 的 `width: '64px'` 固定寬度，避免 DataTables 自動欄寬把標題擠出欄位（曾經發生過對不齊的問題）。
+完整規則與沿革見 `docs/frontend.md`「表格欄位細節與前端 gotcha」。
 
 ## 爬蟲資料來源
 
@@ -225,6 +227,8 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 月營收 | `mops.twse.com.tw/mops/api/t05st10_ifrs` | POST JSON；per-company；`data[0][1]`=當月營收，`data[3][1]`=年增率 |
 | 季財報 EPS | `mops.twse.com.tw/mops/api/t164sb04` | POST JSON；`reportList` 陣列，關鍵字比對列標籤取值 |
 | 自結公告 | `mopsov.twse.com.tw/mops/web/ajax_t05st02` | POST form（TYPEK=all, year/month/day ROC）→ HTML；單次回應即含當天全部公告的完整主旨/說明（藏在隱藏 `<input>` 欄位裡），**不需要、也不要額外發詳情頁請求**（細節見「自結公告」章節） |
+| ETF 受益人數排名 | `opendata.tdcc.com.tw/getOD.ashx?id=1-5` | 集保股權分散表 CSV（全市場、每週），持股分級 17＝合計人數；證券代號右側補空白要 strip |
+| ETF 成份股 | `moneydj.com/ETF/X/Basic/Basic0007a.xdjhtm?etfid=<code>.TW` | HTML 全持股表 `id=Repeater1`（月底資料，只有名稱沒代號）；回應無 charset，要手動 `resp.encoding='utf-8'` |
 
 **SSL 注意**：TWSE/TPEX/MOPS 憑證有問題，`crawler.py` 用 `_session.verify = False` 統一處理。所有請求必須走 `_get()` / `_post()` 包裝函式，不可直接呼叫 `_session.get/post` 或裸的 `requests`。
 
@@ -233,8 +237,8 @@ data/stocks.db         SQLite 資料庫（自動建立）
 - UA 池含 Chrome 136、Firefox 138、Safari 17、Edge 136 共 9 組，定期輪替
 - `_jitter(base)`：`time.sleep(base × random(0.7, 1.6))`，消除固定間隔特徵
 - 每 80 次請求清除一次 session cookie
-- **`Accept-Encoding` 不可加 `br`**：執行環境不保證有裝 `brotli`（當初是在 Zeabur 容器踩到），若伺服器回傳 Brotli 壓縮內容會導致 `resp.json()` 解析失敗，整批資料變成 0 筆但 task 仍顯示 success。只用 `gzip, deflate`
-- TWSE/TPEX JSON 解析失敗或 `stat != 'OK'` 時會記錄 `logger.warning`（含狀態碼與回應大小），方便從 Zeabur Runtime Logs 排查
+- **`Accept-Encoding` 不可加 `br`**：執行環境不保證有裝 `brotli`（當初在已停用的 Zeabur 容器踩到），若伺服器回傳 Brotli 壓縮內容會導致 `resp.json()` 解析失敗，整批資料變成 0 筆但 task 仍顯示 success。只用 `gzip, deflate`
+- TWSE/TPEX JSON 解析失敗或 `stat != 'OK'` 時會記錄 `logger.warning`（含狀態碼與回應大小），看本機伺服器 log 排查
 
 月營收爬蟲在新增記錄時，會查 `daily_prices` 最新收盤價寫入 `start_price`；更新既有記錄時不修改 `start_price`。`turnaround_signal`（虧轉盈候選旗標）則相反，新增與更新都會重算覆寫，見上方「_SUMMARY_SQL 欄位索引」說明。
 
@@ -249,7 +253,7 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 每日股價（watchdog） | 週一〜五 14:00–17:00 每 30 分鐘檢查一次，若當天還沒有成功的 `daily_price` log 就補爬一次（`_daily_price_watchdog`，啟動時也會立即跑一次） |
 | 加權指數（2026-10-21 新增） | 週一〜五 14:40、15:40，啟動時也跑一次；表內少於 250 筆（纏論分析窗）或有缺開高低的列時自動回補 15 個月（`_market_index_job`） |
 | 月營收 | 每天 23:00（爬上個月；部分公司公布較晚，每天重抓直到有資料） |
-| 月營收（watchdog，2026-08-05 新增） | 每天 23:00–06:00 每 30 分鐘檢查一次，若今天還沒有成功的 `monthly_revenue` log、且沒有一個「40 分鐘內剛啟動」的 `running` log 就補跑（`_monthly_revenue_watchdog`，啟動時也會立即跑一次），見下方「卡住 'running' 永遠不結束」說明 |
+| 月營收（watchdog，2026-08-05 新增） | 每天 23:00–06:00 每 30 分鐘檢查一次，若今天還沒有成功的 `monthly_revenue` log、且沒有一個「40 分鐘內剛啟動」的 `running` log 就補跑（`_monthly_revenue_watchdog`，啟動時也會立即跑一次），見下方排程踩雷重點 |
 | 自結公告 | 週一〜五 05:00（非尖峰，爬前一交易日的 MOPS 重大公告） |
 | 自結公告（測試用，**暫時性**） | 每 30 分鐘重爬「今天」的公告（`_announcements_test_job`），讓當日新公告不用等隔天 05:00。改成從清單頁直接解析（無需逐筆詳情頁請求）後單次執行只需數秒，不再有效能負擔；要調整頻率或正式移除這個 job 前先問使用者 |
 | Q1 | 5 月每天 23:00（公告期限 5/15） |
@@ -264,17 +268,14 @@ data/stocks.db         SQLite 資料庫（自動建立）
 | 期權籌碼（期貨/選擇權每日行情＋十大交易人，2026-08-20 新增） | 週一〜五 17:00（`_taifex_job`，跟達人選股 FinMind 同批次，資料約16:30更新），見「期權籌碼分析」章節 |
 | 期權籌碼（三大法人期貨/選擇權買賣，含小台/微台） | 週一〜五 18:30（`_taifex_institutional_job`，獨立排程晚一點跑，因為這幾個 FinMind dataset 約16:00/18:00才更新） |
 
-**注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如 worker 因重新部署在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
+**注意**：APScheduler 的「下次執行時間」在 `sched.start()` 當下計算，若當天排程時間已過（例如伺服器在 14:00 後重啟），當天的每日股價排程會被跳過、不會補跑。`app.py` 模組層級已加入**啟動時自動補跑**機制：若當天（平日且時間 ≥14:00）尚無成功的 `daily_price` log，啟動時自動觸發一次 `crawler.crawl_daily_prices`。
 
-**`FINMIND_TOKEN` 沒設定是一個容易忽略的靜默失敗陷阱**：2026-07-16 發生過本機常駐服務（`autostart_server.bat`）從某次重啟後就沒帶到這個環境變數，導致 5 個 `finmind_*` 任務**每天** 17:00 都準時觸發、但每次都馬上失敗（`crawler_logs` 裡訊息一模一樣：`FINMIND_TOKEN environment variable not set`），`institutional_trades`/`holding_concentration` 因此在使用者沒發現的情況下卡在舊資料整整 11 天——`director_holdings`（TWSE/TPEX OpenAPI，不需要金鑰）仍然每天成功，容易誤以為「排程本身有在跑就是正常」而沒注意到部分子任務其實都在失敗。修法：`app.py` 模組層級啟動時檢查 `os.environ.get('FINMIND_TOKEN')`，沒設定就寫一筆 `finmind_token_check` / `failed` 的 `crawler_logs`，讓 ⚙ 爬蟲狀態面板一開就看得到，不用等到手動比對各表 `MAX(date)` 才發現。本機修復方式：`setx FINMIND_TOKEN "your-token"`（永久使用者環境變數，`set` 只在當次終端機有效）之後**重啟**本機服務（環境變數只在程序啟動當下被讀取，已經在跑的舊程序不會生效；已經開著的終端機/PowerShell session 也不會自動拿到新值，要嘛開一個全新的 session，要嘛在該 session 內手動 `$env:FINMIND_TOKEN = [Environment]::GetEnvironmentVariable("FINMIND_TOKEN","User")` 後再啟動）。
-
-**`crawl_finmind_institutional()`（以及其餘 4 個 `crawl_finmind_*`）沒有回填缺口的機制，`_finmind_watchdog` 也補不了**：這幾個函式每次只抓「傳入的那一天」（`start_date=end_date=iso`，見上方「Bulk 模式」說明），`_finmind_watchdog` 的邏輯是「今天還沒成功就補跑今天」，並不會回頭補「過去缺的那幾天」。2026-07-16 那次 token 斷線 11 天的事故修好 token 後，`institutional_trades` 仍然停在斷線前最後一天，因為 watchdog 觸發的補跑只補了「當天」（且股價公布通常有 T+1 delay，當天往往還是 0 筆）——實際造成 `gutai_bull`/`gutai_bear` 全市場 0 檔通過（近5日窗口只剩1筆舊資料，天生不可能滿足「至少2日」門檻）。當時是手動逐日呼叫 `crawler.crawl_finmind_institutional(date_str)` 補齊缺的 7 個交易日才修復。若未來又發生多日斷線，同樣需要手動回填，不會自動復原。
-
-**watchdog 只檢查「有沒有成功 log」，不檢查「資料完不完整」——2026-08-15 發生過「跑了但資料殘缺」的變種**：08-14 17:00 的 `finmind_institutional` 排程準時觸發且回報 `success`，但當下 FinMind 那天的資料還沒補齊，bulk 回應只有 784 檔股票（正常約 1870~1890 檔），watchdog 看到有 success log 就不會再補跑，這種「有跑、有成功、但資料量異常少」的情況完全不在 watchdog 的偵測範圍內。修法：`app.py` 新增 `POST /api/stocks/<code>/institutional-trades/refresh`（任何登入使用者可觸發，個股詳情頁「三大法人進出與持股」卡片右上角有對應按鈕），重新呼叫近 5 個曆日的 `crawl_finmind_institutional()`——`INSERT OR REPLACE` 天生冪等，重跑不會產生重複資料，非交易日呼叫也會安全拿到 0 筆。這是使用者發現手動補救、不是自動化機制，之後若又出現同樣的「資料量異常偏少」情況，一樣需要手動點這個按鈕。
-
-**`crawl_monthly_revenue()`/`crawl_quarterly_financials()` 可能卡在 `running` 永遠不結束，且不會寫 `failed`（2026-08-05 診斷+修復）**：這兩個任務逐檔迴圈跑約 2000 檔股票、單次正常耗時 ~10 分鐘，中途若整個 process 被中斷（實測案例：電腦半夜進入睡眠模式，把 Flask 背景執行緒整個凍結；醒來後卡在一個已經爛掉的 socket 上，`_post()` 的 `timeout=15` 沒有真的觸發，因為執行緒被系統層級凍結時計時器也一起停了），這個迴圈就會停在某一檔股票的請求上不動，不丟例外、也不會被任何機制發現——`crawler_logs` 只留一筆 `running`，看起來像是「還在跑」，但其實已經死掉，直到手動重啟伺服器才會清掉。曾經連續三晚（08/01–08/03）都這樣卡住，導致月營收整整 3 天沒更新才被發現。修法：`_monthly_revenue_watchdog`/`_quarterly_watchdog`（見上方排程表）——判斷依據是「今天沒有 success」且「沒有一個 40 分鐘內剛啟動的 running」（避免誤殺真的還在正常跑的那 10 分鐘），兩者都成立才觸發補跑。
-
-**本機 `app.run()` 沒開 `threaded=True` 曾經導致「網站看起來當機」（2026-08-05 修復）**：Werkzeug 開發伺服器預設單執行緒，同一時間只能處理一個 HTTP 請求。若背景同時有 `quarterly`（逐檔迴圈）+ `finmind_data`（5個 FinMind 任務 + `compute_expert_scores()` 這種吃 CPU 的純 Python 全市場計分）在跑，會把僅有的請求處理能力整個佔滿，使用者端首頁／`/api/market/summary` 會直接卡到逾時，看起來像伺服器當機，但其實 process 沒死、資料也沒事，只是排隊排不到。已在 `app.py` 的 `app.run(...)` 加上 `threaded=True` 解決；雲端 gunicorn（`--workers 1 --threads 4`）本來就沒有這個問題，只有本機直接執行才會踩到。
+**排程相關踩雷重點**（完整經過見 `docs/ops.md`「事故紀錄」）：
+- **`FINMIND_TOKEN` 沒設定會靜默失敗**：`finmind_*` 每天照樣觸發，但每次都馬上 failed，`director_holdings` 不需金鑰，仍然照常成功，容易誤判「排程正常」。啟動時若沒設定，會寫入一筆 `finmind_token_check` failed log。修法：`setx` 之後**重啟**伺服器，已開著的 session 拿不到新值。
+- **`crawl_finmind_*` 不會回填缺口**：每次只抓單日。watchdog 只會補「今天」，多日斷線要手動逐日呼叫回填。
+- **watchdog 只看有沒有 success log，不看資料量**：資料殘缺時，要用個股頁的 `POST /api/stocks/<code>/institutional-trades/refresh` 手動補。
+- **月營收／季報可能卡在 `running`**（例如電腦睡眠凍結執行緒）：由 `_monthly_revenue_watchdog`/`_quarterly_watchdog` 處理，條件是今天沒有 success，且沒有 40 分鐘內啟動的 running。
+- **`app.run(..., threaded=True)` 不可拿掉**：單執行緒時，背景跑重任務會讓網站看起來當機。
 
 手動觸發：`POST /api/crawler/run/<task>`（僅限 localhost 或 admin 登入）；task 值：`stock_list` / `daily_price` / `monthly_revenue` / `quarterly` / `announcements` / `init` / `finmind_data` / `broker_trades` / `director_holdings` / `etf_holdings` / `expert_scores` / `taifex_data`（等同依序呼叫 `_taifex_job()` + `_taifex_institutional_job()`）/ `market_index`。季報觸發自動判斷「最近已公告季度」，可用 `?year=&quarter=` 覆蓋；公告可用 `?date=YYYYMMDD` 覆蓋日期，`?limit=N` 只處理清單前 N 筆做小規模測試（**測試專用，正式排程不要帶這個參數**，否則當天只會處理一部分公告；現在整個流程只需一次 HTTP 請求，正常情況下不需要這個參數來省時間，純粹是想看少量範例輸出時用）。`finmind_data` 等同 `_finmind_job()`（5 個 FinMind 增量函式 + 董監持股 + 前5大ETF成份股 + 重算 `expert_scores`）；`expert_scores` 只重算分數不重新爬資料，改規則邏輯後想立即看結果時用。
 
@@ -282,14 +283,6 @@ data/stocks.db         SQLite 資料庫（自動建立）
 
 ## 前端重要 gotcha（其餘前端細節見 `docs/frontend.md`）
 
-### 重要 gotcha：jQuery `.data()` 型別轉換
-
-jQuery 的 `.data('code')` 會把純數字字串（如 `"1218"`）自動轉為 `number`（`1218`），導致 `state.allData.find(s => s.code === code)` 嚴格比對失敗（API 回傳的 `code` 是 `string`）。`loadStockDetail(code)` 入口第一行已做 `code = String(code)` 正規化，**所有呼叫 `loadStockDetail` 的地方不必再轉型**，但若未來新增其他用 `.data()` 取得 code 再做 find 的邏輯，需注意同樣問題。
-
-### 重要 gotcha：DataTables 的橫向捲動不能用自訂 wrapper div
-
-用 `<div class="table-scroll">`（`overflow-x:auto`）包住 `<table>` 對**一般 HTML 表格**（`#ann-table`、`#expert-table`，見上方各自章節的 `.ann-table-wrap`）有效，但對**用 `.DataTable()` 初始化的表格**（`#stocks-table`/`#star-table`/`#wl-table`/detail view 的三個表）完全沒用——DataTables 初始化時會把這個自訂 wrapper div 整個丟棄、換成它自己的 `.dataTables_wrapper`，導致寬表格直接撐爆 `.card`／`.container`，讓整個頁面（而不是表格本身）橫向捲動，在手機上尤其明顯。正確做法是在 `.DataTable({...})` 的初始化參數加上 **`scrollX: true`**，DataTables 會自動處理表頭/表身同步捲動且欄位對齊正確。所有用 DataTables 的表格都已加上這個選項；新增任何用 `.DataTable()` 初始化的新表格時要記得比照辦理，不要再用 `.table-scroll` 這種 wrapper div 的做法。
-
-### 重要 gotcha：`.filter-btn` class 不能隨便重用（2026-07-28 踩過）
-
-`app.js` 開頭有一段「市場篩選」（全部/上市/上櫃）的初始化，用 `document.querySelectorAll('.filter-btn').forEach(btn => btn.addEventListener('click', ...))` 對頁面載入當下所有 `.filter-btn` 元素**逐一直接掛上**點擊事件——這個 handler 點擊時會無差別 `document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'))`（清掉全頁所有 `.filter-btn` 的 active 樣式，不只自己這組）、再讀 `this.dataset.market` 設定 `state.currentMarket`、最後呼叫 `renderStockTable()`。這代表**任何新按鈕只要外觀想借用 `.filter-btn` 這個 class，只要它在頁面載入當下就存在於 DOM（即使外層是 `.hidden`），就會被這段迴圈一併掛上這個全域監聽器**，點擊時除了自己預期的邏輯外，還會意外清空其他分頁的 active 狀態、把 `state.currentMarket` 汙染成 `undefined`、並觸發一次不必要的 `renderStockTable()`。「甜蜜點訊號回測」卡片的天期分頁（`#stock-backtest-tier-tabs`）最初就是直接借用 `.filter-btn` 才踩到這個雷（切換分頁後彼此的 active 樣式互相清空）——修法是另外定義一個外觀相同但獨立的 class **`.bt-tab`**（`style.css`），不要再共用 `.filter-btn`。之後如果要做「看起來像分頁按鈕」的新 UI，**用 `.bt-tab`（或再開一個新 class）**，不要圖方便直接套 `.filter-btn`，除非真的就是要接到市場篩選那組邏輯。
+- **jQuery `.data('code')` 會把 `"1218"` 轉成 number**：`loadStockDetail()` 入口已用 `String()` 正規化。其他地方用 `.data()` 取 code 再 `find` 時，要自己轉型。
+- **`.DataTable()` 表格要橫向捲動，請用 `scrollX: true`**：不要用 `.table-scroll` 包 wrapper div，DataTables 會把它丟掉，整頁就會被撐爆。
+- **不要重用 `.filter-btn` class**：`app.js` 市場篩選會對所有 `.filter-btn` 掛全域 handler。分頁按鈕外觀請用 `.bt-tab`。
